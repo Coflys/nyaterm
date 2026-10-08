@@ -541,6 +541,7 @@ fn serial_session_thread(
                 };
                 let _ = result_tx.send(result);
             }
+            SessionCommand::TmuxCommand { .. } | SessionCommand::TmuxDetach => {}
             SessionCommand::Close => {
                 break;
             }

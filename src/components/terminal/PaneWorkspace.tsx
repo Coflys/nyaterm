@@ -18,7 +18,9 @@ import {
   removeSessionFromGroup,
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
+import { findTmuxControlSessionId } from "@/lib/tmux/tree";
 import {
+  collectSessionPanes,
   findPaneById,
   findPaneBySessionId,
   findTabBySessionId,
@@ -33,6 +35,7 @@ import type {
   Tab,
   TerminalSessionPane,
 } from "@/types/global";
+import TmuxBar from "./TmuxBar";
 import XTerminal from "./XTerminal";
 
 interface PaneWorkspaceProps {
@@ -86,6 +89,24 @@ function SplitView({
   const isHorizontalSplit = split.direction === "horizontal";
   const firstContainsActivePane = !!findPaneById(split.first, tab.activePaneId);
   const secondContainsActivePane = !!findPaneById(split.second, tab.activePaneId);
+  // tmux-driven splits mirror a remote layout; dragging a divider would fight
+  // the cell-based geometry, so the divider is fixed and non-interactive.
+  // Only splits entirely inside one control session's projection are locked —
+  // a user-created boundary between the tmux subtree and native panes stays
+  // draggable (resizing it re-syncs pane dims through the renderer reports).
+  const isTmuxSplit = useMemo(() => {
+    const panes = collectSessionPanes(split);
+    const controlIds = new Set(
+      panes
+        .map((pane) => pane.tmux?.controlSessionId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    return (
+      panes.length > 0 &&
+      panes.every((pane) => pane.tmux) &&
+      controlIds.size === 1
+    );
+  }, [split]);
 
   const handleResize = (delta: number) => {
     const size = isHorizontalSplit
@@ -129,12 +150,18 @@ function SplitView({
           onSaveSessionTranscript={onSaveSessionTranscript}
         />
       </div>
-      {!paneFocusMode && (
-        <ResizeHandle
-          direction={isHorizontalSplit ? "vertical" : "horizontal"}
-          onResize={handleResize}
-        />
-      )}
+      {!paneFocusMode &&
+        (isTmuxSplit ? (
+          <div
+            className={`shrink-0 ${isHorizontalSplit ? "h-px" : "w-px"}`}
+            style={{ background: "var(--df-border)" }}
+          />
+        ) : (
+          <ResizeHandle
+            direction={isHorizontalSplit ? "vertical" : "horizontal"}
+            onResize={handleResize}
+          />
+        ))}
       <div
         className="min-h-0 min-w-0 flex-1 relative"
         style={{
@@ -609,28 +636,37 @@ function PaneWorkspace({
   onToggleSessionRecording,
   onSaveSessionTranscript,
 }: PaneWorkspaceProps) {
+  const tmuxControlSessionId = useMemo(
+    () => findTmuxControlSessionId(tab),
+    [tab],
+  );
   return (
     <div
-      className="absolute inset-0"
-      style={{ display: visible ? "block" : "none" }}
+      className="absolute inset-0 flex flex-col"
+      style={{ display: visible ? "flex" : "none" }}
     >
-      <PaneNodeView
-        node={tab.root}
-        tab={tab}
-        visible={visible}
-        paneFocusMode={paneFocusMode}
-        sessionInfoById={sessionInfoById}
-        showChrome={!paneFocusMode && isSplitPane(tab.root)}
-        onActivatePane={onActivatePane}
-        onUpdateSplitRatio={onUpdateSplitRatio}
-        onReconnectPane={onReconnectPane}
-        onReconnected={onReconnected}
-        onDisconnectedCloseRequested={onDisconnectedCloseRequested}
-        onConnectionError={onConnectionError}
-        recordingStatuses={recordingStatuses}
-        onToggleSessionRecording={onToggleSessionRecording}
-        onSaveSessionTranscript={onSaveSessionTranscript}
-      />
+      {tmuxControlSessionId ? (
+        <TmuxBar controlSessionId={tmuxControlSessionId} />
+      ) : null}
+      <div className="relative min-h-0 flex-1">
+        <PaneNodeView
+          node={tab.root}
+          tab={tab}
+          visible={visible}
+          paneFocusMode={paneFocusMode}
+          sessionInfoById={sessionInfoById}
+          showChrome={!paneFocusMode && isSplitPane(tab.root)}
+          onActivatePane={onActivatePane}
+          onUpdateSplitRatio={onUpdateSplitRatio}
+          onReconnectPane={onReconnectPane}
+          onReconnected={onReconnected}
+          onDisconnectedCloseRequested={onDisconnectedCloseRequested}
+          onConnectionError={onConnectionError}
+          recordingStatuses={recordingStatuses}
+          onToggleSessionRecording={onToggleSessionRecording}
+          onSaveSessionTranscript={onSaveSessionTranscript}
+        />
+      </div>
     </div>
   );
 }

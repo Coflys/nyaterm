@@ -28,12 +28,20 @@ import {
   normalizeQuickCommandUiConfig,
 } from "@/lib/quickCommandSettings";
 import {
+  buildTmuxPaneTree,
+  findTmuxTab,
+  replaceTmuxAnchor,
+  tmuxFallbackLeaf,
+} from "@/lib/tmux/tree";
+import type { TmuxSessionState } from "@/lib/tmux/types";
+import {
   collectSessionPanes,
   createFileDocumentPane,
   createSessionPane,
   createWorkspaceTab,
   ensureActivePane,
   findOpenFileDocument,
+  findPaneById,
   findSessionPaneById,
   getFirstSessionPane,
   getNextPersistOrder,
@@ -1031,6 +1039,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [closeTabs],
   );
 
+  const applyTmuxState = useCallback(
+    (state: TmuxSessionState) => {
+      const currentTabs = tabsRef.current;
+      const tab = findTmuxTab(currentTabs, state.controlSessionId);
+      if (!tab) return;
+
+      if (state.exited) {
+        // Control client detached: collapse the projection back into a
+        // plain shell leaf at its anchor, so native splits that coexisted
+        // with the tmux panes are preserved.
+        const leaf = tmuxFallbackLeaf(state, tab);
+        const root = replaceTmuxAnchor(
+          tab.root,
+          state.controlSessionId,
+          leaf,
+        );
+        const activePaneId = findPaneById(root, tab.activePaneId)
+          ? tab.activePaneId
+          : leaf.id;
+        const nextTabs = currentTabs.map((item) =>
+          item.id === tab.id ? { ...item, root, activePaneId } : item,
+        );
+        void commitTabs(nextTabs);
+        return;
+      }
+
+      const built = buildTmuxPaneTree(state, tab);
+      if (!built) return;
+      // Swap only the leaf/subtree anchoring this control session — the
+      // user's own splits around it are not tmux's to restructure.
+      const root = replaceTmuxAnchor(
+        tab.root,
+        state.controlSessionId,
+        built.root,
+      );
+      const activePaneId = findPaneById(root, tab.activePaneId)
+        ? tab.activePaneId
+        : built.activePaneId;
+      const nextTabs = currentTabs.map((item) =>
+        item.id === tab.id
+          ? ensureActivePane({ ...item, root, activePaneId })
+          : item,
+      );
+      void commitTabs(nextTabs);
+    },
+    [commitTabs],
+  );
+
   const reorderTabs = useCallback(
     (fromTabId: string, toIndex: number) => {
       const nextTabs = moveTab(tabsRef.current, fromTabId, toIndex);
@@ -1327,6 +1383,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTab,
       closeTabs,
       closeTab,
+      applyTmuxState,
       persistTabsNow,
       appSettings,
       updateAppSettings,
@@ -1376,6 +1433,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTab,
       closeTabs,
       closeTab,
+      applyTmuxState,
       persistTabsNow,
       appSettings,
       updateAppSettings,
