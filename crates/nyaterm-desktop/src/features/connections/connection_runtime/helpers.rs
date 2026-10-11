@@ -81,6 +81,14 @@ pub(super) fn connection_editor_from_saved(
     } else {
         ConnectionEditorPasswordSource::Ask
     };
+    let password = if auth.mode == "password"
+        && password_source == ConnectionEditorPasswordSource::Direct
+        && !auth.has_password
+    {
+        auth.password.clone().unwrap_or_default()
+    } else {
+        nyaterm_core::SecretString::default()
+    };
     let icon_auto_detect = connection.icon_auto_detect_enabled();
     let mut editor = ConnectionEditorState {
         id: Some(connection.id),
@@ -118,7 +126,7 @@ pub(super) fn connection_editor_from_saved(
             auth.account_id.clone()
         },
         password_id: auth.password_id,
-        password: nyaterm_core::SecretString::default(),
+        password,
         existing_password: auth.password.filter(|value| !value.is_empty()),
         existing_password_locked: auth.has_password,
         key_id: auth.key_id,
@@ -993,7 +1001,7 @@ mod tests {
                 assert!(!auth.has_password);
 
                 let reopened = connection_editor_from_saved(saved, false);
-                assert!(reopened.password.is_empty());
+                assert_eq!(reopened.password.expose_secret(), password);
                 assert_eq!(reopened.existing_password.as_deref(), Some(password));
                 let saved =
                     build_saved_connection_from_editor(&reopened).expect("unchanged password");
@@ -1002,6 +1010,23 @@ mod tests {
                     Some(password)
                 );
             }
+        }
+    }
+
+    #[test]
+    fn connection_editor_only_prefills_password_for_direct_password_authentication() {
+        for auth in [
+            serde_json::json!({"mode": "password", "password_source": "account", "account_id": "account", "password": "fixture-secret"}),
+            serde_json::json!({"mode": "key", "password": "fixture-secret"}),
+            serde_json::json!({"mode": "none", "password": "fixture-secret"}),
+        ] {
+            let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+                "id": "password-prefill", "name": "Password prefill", "type": "ssh",
+                "host": "example.com", "username": "non-root", "auth": auth
+            }))
+            .expect("connection");
+            let editor = connection_editor_from_saved(connection, false);
+            assert!(editor.password.is_empty());
         }
     }
 
@@ -1015,6 +1040,7 @@ mod tests {
         .expect("connection");
         let editor = connection_editor_from_saved(connection.clone(), false);
         assert!(editor.existing_password_locked);
+        assert!(editor.password.is_empty());
         let saved = build_saved_connection_from_editor(&editor).expect("unchanged password");
         let auth = saved.auth.expect("auth");
         assert_eq!(auth.password.as_deref(), Some("locked-ciphertext"));
