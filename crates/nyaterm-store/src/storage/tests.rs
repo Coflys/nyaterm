@@ -5989,6 +5989,39 @@ fn connection_inline_password_is_encrypted_at_rest_and_roundtrips() {
 }
 
 #[test]
+fn connection_inline_password_whitespace_survives_storage_reopen_and_auth_resolution() {
+    let dir = unique_temp_dir("connection-password-whitespace");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let mut connection = ssh_connection_for_asset("password-whitespace");
+    let password = " \tfixture-password\u{2003} ";
+    connection.auth = Some(ConnectionAuth {
+        mode: "password".to_string(),
+        password: Some(password.into()),
+        ..ConnectionAuth::default()
+    });
+    store.save_connection(&connection).expect("save connection");
+    let record = connection_password_record(&store, &connection.id);
+    assert_ne!(record.password.expose_secret(), password);
+    drop(store);
+
+    let store = ConnectionStore::open(&dir).expect("reopen store");
+    let loaded = store
+        .get_connection(&connection.id)
+        .expect("load connection")
+        .expect("connection");
+    let auth = loaded.auth.expect("auth");
+    assert!(!auth.has_password);
+    let (username, resolved) = auth
+        .resolve_account_auth("non-root", None)
+        .expect("resolve inline password");
+    assert_eq!(username, "non-root");
+    assert_eq!(resolved.as_deref(), Some(password));
+
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn save_group_and_connection_encrypts_inline_password() {
     let dir = unique_temp_dir("group-connection-inline-password");
     let store = ConnectionStore::open(&dir).expect("store");
