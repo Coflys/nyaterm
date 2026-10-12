@@ -21,6 +21,7 @@ mod graphics;
 mod kitty_payload;
 pub mod navigation;
 pub mod recording_sanitizer;
+mod reflow_timestamps;
 mod sixel;
 pub use cells::{
     TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,
@@ -807,6 +808,8 @@ impl TerminalCore {
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let old_cols = self.cols;
+        let timestamps = (old_cols != usize::from(cols).max(1) && !self.alternate_screen())
+            .then(|| reflow_timestamps::capture(&self.term, self.active_line_state()));
         if self.cols != usize::from(cols).max(1) || self.rows != usize::from(rows).max(1) {
             self.primary_lines.input_anchor = None;
             self.alternate_lines.input_anchor = None;
@@ -837,6 +840,22 @@ impl TerminalCore {
             self.graphics.clear_screen(GraphicsScreenKind::Primary);
             self.graphics.clear_screen(GraphicsScreenKind::Alternate);
             self.clear_snapshot_row_cache();
+        }
+        if let Some(timestamps) = timestamps {
+            for (line, timestamp_ms) in reflow_timestamps::restore(&self.term, timestamps) {
+                let signature = line_signature(&self.term, line, self.cols);
+                let revision = self.allocate_line_revision();
+                let logical_line = self.active_line_state().logical_line(line);
+                self.active_line_state_mut().metadata.insert(
+                    logical_line,
+                    LineMetadata {
+                        timestamp_ms: Some(timestamp_ms),
+                        signature: Some(signature),
+                        revision: Some(revision),
+                        ..LineMetadata::default()
+                    },
+                );
+            }
         }
         self.stamp_changed_lines();
     }

@@ -1057,6 +1057,99 @@ fn scrolled_lines_keep_timestamps_in_history_viewport() {
 }
 
 #[test]
+fn output_burst_keeps_timestamps_above_the_final_screen() {
+    for chunk_size in [1, 37, 4096] {
+        let mut screen = TerminalScreen::new(40, 5);
+        let output = (0..100)
+            .map(|line| format!("line-{line:03}\r\n"))
+            .collect::<String>();
+        for chunk in output.as_bytes().chunks(chunk_size) {
+            screen.advance(chunk);
+        }
+        let snapshot = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+        assert_eq!(
+            snapshot
+                .rows()
+                .iter()
+                .filter(|row| !row.text.is_empty())
+                .count(),
+            100
+        );
+        for row in snapshot.rows().iter().filter(|row| !row.text.is_empty()) {
+            assert!(
+                row.timestamp_ms.is_some(),
+                "missing timestamp for {} with chunk size {chunk_size}",
+                row.text
+            );
+        }
+    }
+}
+
+#[test]
+fn long_output_keeps_history_timestamps_after_width_change() {
+    let mut screen = TerminalScreen::new(40, 5);
+    let output = (0..100)
+        .map(|line| format!("line-{line:03}\r\n"))
+        .collect::<String>();
+    screen.advance(output.as_bytes());
+    let before = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+
+    screen.resize(30, 5);
+    let after = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    for (old, new) in before.rows().iter().zip(after.rows()) {
+        assert_eq!(new.text, old.text);
+        assert_eq!(
+            new.timestamp_ms, old.timestamp_ms,
+            "timestamp changed for {}",
+            old.text
+        );
+    }
+}
+
+#[test]
+fn width_reflow_preserves_wrapped_output_times_and_wide_characters() {
+    let mut screen = TerminalScreen::new(12, 3);
+    screen.advance("abcdef   中文e\u{301}ghijklmnopqrstuvwxyz\r\nnext\r\n".as_bytes());
+    for metadata in screen.primary_lines.metadata.values_mut() {
+        metadata.timestamp_ms = Some(123);
+    }
+    for cols in [7, 18, 5, 12] {
+        screen.resize(cols, 3);
+        let snapshot = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+        for row in snapshot.rows().iter().filter(|row| !row.text.is_empty()) {
+            assert_eq!(
+                row.timestamp_ms,
+                Some(123),
+                "timestamp changed for {} at width {cols}",
+                row.text
+            );
+        }
+    }
+}
+
+#[test]
+fn width_reflow_keeps_distinct_times_for_repeated_lines_after_history_eviction() {
+    let mut screen = TerminalScreen::new(12, 3);
+    screen.set_scrollback_limit(5);
+    screen.advance(b"repeated-line\r\nrepeated-line\r\nrepeated-line\r\n");
+    for (index, metadata) in screen.primary_lines.metadata.values_mut().enumerate() {
+        metadata.timestamp_ms = Some(100 + index as u64);
+    }
+    let before = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    screen.resize(6, 3);
+    let after = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    // The last two complete repeated lines survive, even when the oldest is
+    // partially evicted. Each new row inherits its source row's time.
+    let last_complete = &after.rows()[after.row_count() - 7..after.row_count() - 1];
+    for (index, row) in last_complete.iter().enumerate() {
+        let source =
+            &before.rows()[before.row_count() - 5 + index / 3 * 2 + usize::from(index % 3 == 2)];
+        assert_eq!(row.timestamp_ms, source.timestamp_ms);
+    }
+    assert!(after.rows().iter().all(|row| row.timestamp_ms.is_some()));
+}
+
+#[test]
 fn full_scrollback_rotation_keeps_metadata_and_cache_attached_to_original_line() {
     let mut screen = TerminalScreen::new(20, 2);
     screen.set_scrollback_limit(1);
