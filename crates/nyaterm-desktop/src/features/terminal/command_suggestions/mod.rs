@@ -32,7 +32,7 @@ pub(in crate::features) const SUGGESTION_OVERLAY_HEADER_HEIGHT: f32 = 24.0;
 pub(in crate::features) const SUGGESTION_OVERLAY_FOOTER_HEIGHT: f32 = 24.0;
 const SUGGESTION_OVERLAY_CHROME_HEIGHT: f32 =
     SUGGESTION_OVERLAY_HEADER_HEIGHT + SUGGESTION_OVERLAY_FOOTER_HEIGHT;
-const SUGGESTION_OVERLAY_MAX_HEIGHT: f32 = 320.0;
+const SUGGESTION_OVERLAY_MAX_HEIGHT: f32 = 272.0;
 const SUGGESTION_OVERLAY_CURSOR_GAP: f32 = 4.0;
 const SUGGESTION_OVERLAY_VIEWPORT_MARGIN: f32 = 8.0;
 
@@ -1548,9 +1548,9 @@ mod overlay_position_tests {
     #[test]
     fn suggestion_overlay_height_is_content_sized_and_capped() {
         assert_eq!(suggestion_overlay_desired_height(1, 28.0), 76.0);
-        assert_eq!(suggestion_overlay_desired_height(10, 28.0), 320.0);
+        assert_eq!(suggestion_overlay_desired_height(10, 28.0), 272.0);
         assert_eq!(suggestion_overlay_desired_height(1, 36.0), 84.0);
-        assert_eq!(suggestion_overlay_desired_height(8, 36.0), 320.0);
+        assert_eq!(suggestion_overlay_desired_height(8, 36.0), 272.0);
     }
 }
 
