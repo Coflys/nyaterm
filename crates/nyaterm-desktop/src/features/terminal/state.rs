@@ -21,8 +21,8 @@ use super::window_state::TerminalWindowState;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
 use crate::models::{
     ActionLinkMenuState, ActionLinkTooltipState, RecordingHistorySearchEvent,
-    RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
-    TerminalSelection, TerminalViewState,
+    RecordingHistorySearchKey, TerminalBufferCellPos, TerminalFrameEvent, TerminalFramePipeline,
+    TerminalSearchMode, TerminalSelection, TerminalViewState,
 };
 use crate::theme::ThemePalette;
 
@@ -97,6 +97,9 @@ pub(super) struct TerminalPasteReviewState {
 /// Text selection and mouse reporting.
 pub(super) struct TerminalSelectionState {
     pub(super) selection: Option<TerminalSelection>,
+    /// A released empty selection retains only its anchor for a later Shift+click.
+    /// It shares `session_id` with selection and is never painted or copied.
+    pub(super) click_anchor: Option<TerminalBufferCellPos>,
     pub(super) session_id: Option<String>,
     /// Derived once from the worker's authoritative buffer for each Select All.
     pub(super) all_buffer_text: Option<String>,
@@ -257,6 +260,7 @@ impl TerminalFeatureState {
             editing: TerminalEditingState::default(),
             selection: TerminalSelectionState {
                 selection: None,
+                click_anchor: None,
                 session_id: None,
                 all_buffer_text: None,
                 all_buffer_text_task: None,
@@ -416,6 +420,7 @@ impl TerminalFeatureState {
     }
 
     pub(in crate::features) fn clear_activation_interaction(&mut self) -> bool {
+        self.selection.click_anchor = None;
         let had_interaction = self.selection.selection.take().is_some()
             || self.selection.dragging
             || self.menus.action_link_menu.is_some()
@@ -449,6 +454,7 @@ impl TerminalFeatureState {
             .is_none_or(TerminalSelection::is_empty)
         {
             self.selection.selection = None;
+            self.selection.click_anchor = None;
             self.selection.session_id = None;
             LostTerminalSelectionRecovery::ClearedEmpty
         } else {
@@ -657,6 +663,7 @@ mod tests {
     #[test]
     fn terminal_owner_clears_activation_interaction_as_one_transition() {
         let mut state = terminal_state();
+        state.selection.click_anchor = Some(crate::models::TerminalBufferCellPos::new(4, 2));
         state.selection.dragging = true;
         state.menus.action_link_hover_pending = Some((
             "https://example.com".to_string(),
@@ -674,6 +681,7 @@ mod tests {
         ));
 
         assert!(state.clear_activation_interaction());
+        assert!(state.selection.click_anchor.is_none());
         assert!(!state.selection.dragging);
         assert!(!state.action_link_hover_is_pending());
         assert!(!state.clear_activation_interaction());

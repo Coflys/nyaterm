@@ -101,6 +101,7 @@ impl TerminalFeatureState {
                     .remove(&session_id);
                 let selection = if self.selection.session_id.as_deref() == Some(&session_id) {
                     self.selection.session_id = None;
+                    self.selection.click_anchor = None;
                     self.selection.dragging = false;
                     self.selection.drag_pointer_position = None;
                     self.selection.autoscroll = None;
@@ -205,6 +206,7 @@ impl TerminalFeatureState {
                 && self.selection.selection.is_none()
             {
                 self.selection.session_id = Some(entry.session_id.clone());
+                self.selection.click_anchor = None;
                 self.selection.selection = Some(selection);
             }
             if let Some(view) = entry.view {

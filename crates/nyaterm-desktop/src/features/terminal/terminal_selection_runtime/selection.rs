@@ -47,6 +47,7 @@ impl NyaTermApp {
             return;
         }
         self.terminal.selection.selection = None;
+        self.terminal.selection.click_anchor = None;
         self.terminal.selection.session_id = None;
         self.terminal.selection.all_buffer_text = None;
         self.terminal.selection.all_buffer_text_task = None;
@@ -77,8 +78,12 @@ impl NyaTermApp {
             .session_id
             .clone()
             .or_else(|| self.session.active_id_owned());
-        if self.terminal.selection.selection.is_some() || self.terminal.selection.dragging {
+        if self.terminal.selection.selection.is_some()
+            || self.terminal.selection.click_anchor.is_some()
+            || self.terminal.selection.dragging
+        {
             self.terminal.selection.selection = None;
+            self.terminal.selection.click_anchor = None;
             self.terminal.selection.session_id = None;
             self.terminal.selection.all_buffer_text = None;
             self.terminal.selection.all_buffer_text_task = None;
@@ -97,6 +102,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn select_all_terminal(&mut self, cx: &mut Context<Self>) {
         let (_, cols) = self.active_terminal_grid_size();
+        self.terminal.selection.click_anchor = None;
         self.terminal.selection.all_buffer_text = None;
         self.terminal.selection.all_buffer_text_task = None;
         self.terminal.selection.all_buffer_text_generation = self
@@ -233,10 +239,12 @@ impl NyaTermApp {
             return;
         };
         let previous_selection_session_id = self.terminal.selection.session_id.clone();
-        if self.terminal.selection.selection.is_some()
+        if (self.terminal.selection.selection.is_some()
+            || self.terminal.selection.click_anchor.is_some())
             && previous_selection_session_id.as_deref() != selection_session_id.as_deref()
         {
             self.terminal.selection.selection = None;
+            self.terminal.selection.click_anchor = None;
             self.terminal.selection.session_id = None;
             self.terminal.selection.dragging = false;
             if let Some(previous_selection_session_id) =
@@ -295,6 +303,13 @@ impl NyaTermApp {
         self.terminal.selection.all_buffer_text = None;
         self.terminal.selection.all_buffer_text_task = None;
         self.begin_smart_input_selection();
+        let click_anchor = self.terminal.selection.click_anchor.take();
+        if event.modifiers.shift
+            && event.click_count <= 1
+            && self.terminal.selection.selection.is_none()
+        {
+            self.terminal.selection.selection = click_anchor.map(TerminalSelection::with_anchor);
+        }
         // Shift+click extends the existing selection from its anchor (xterm-style).
         if event.modifiers.shift
             && event.click_count <= 1
@@ -560,10 +575,21 @@ impl NyaTermApp {
             .as_ref()
             .is_some_and(|selection| selection.is_empty())
         {
-            self.terminal.selection.selection = None;
+            let click_anchor = self
+                .terminal
+                .selection
+                .selection
+                .take()
+                .map(|selection| selection.anchor);
+            let session_id = self.terminal.selection.session_id.clone();
             self.clear_terminal_selected_occurrence(cx);
             // Empty selection after click: try smart input cursor move.
             self.handle_smart_input_click(event, cx);
+            // Smart cursor movement may clear selection state. Restore only the
+            // click anchor afterwards so Shift+click can extend without exposing
+            // an empty selection to editing, context-menu or copy operations.
+            self.terminal.selection.click_anchor = click_anchor;
+            self.terminal.selection.session_id = session_id;
         } else if self.settings.summary().interaction_copy_on_select {
             let _ = self.copy_terminal_selection(cx);
         } else if self.terminal.selection.selection.is_some() {
@@ -1198,7 +1224,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use gpui::{Point, Size, px};
+    use gpui::{
+        AppContext as _, Bounds, Context, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
+        Point, Size, TestAppContext, px,
+    };
     use nyaterm_terminal::TerminalScreen;
 
     use super::super::metrics::TerminalHitTestGeometry;
@@ -1206,8 +1235,10 @@ mod tests {
     use crate::features::terminal::terminal_surface::{
         terminal_absolute_line_for_snapshot_row, terminal_snapshot_absolute_range,
     };
+    use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{TerminalBufferCellPos, TerminalSelection, TerminalViewState};
     use crate::terminal::{TerminalTextCell, terminal_text_cell_slice, terminal_text_cells};
+    use crate::test_support::TestConfigDir;
 
     use super::{
         TERMINAL_SELECTED_OCCURRENCE_MAX_CHARS, TERMINAL_SELECTION_DRAG_NOTIFY_DELAY,
@@ -1216,6 +1247,142 @@ mod tests {
         terminal_selection_line_after_scroll, terminal_snapshot_covering_selection,
         terminal_text_cell_is_word, terminal_word_bounds_for_visual_geometry,
     };
+
+    fn click_terminal_cell(
+        app: &mut NyaTermApp,
+        session_id: &str,
+        row: usize,
+        col: usize,
+        shift: bool,
+        cx: &mut Context<NyaTermApp>,
+    ) {
+        let geometry = app
+            .terminal_hit_test_geometry_for_session(Some(session_id), cx)
+            .unwrap();
+        let position = Point {
+            x: geometry.bounds.origin.x
+                + px(geometry.padding_left
+                    + geometry.gutter
+                    + (col as f32 + 0.5) * geometry.cell_w),
+            y: geometry.bounds.origin.y
+                + px(geometry.padding_top
+                    + geometry.visual_y_offset
+                    + (row as f32 + 0.5) * geometry.cell_h),
+        };
+        let modifiers = Modifiers {
+            shift,
+            ..Modifiers::default()
+        };
+        app.start_terminal_selection_for_session(
+            Some(session_id),
+            &MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers,
+                click_count: 1,
+                ..MouseDownEvent::default()
+            },
+            cx,
+        );
+        app.finish_terminal_selection(
+            &MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers,
+                ..MouseUpEvent::default()
+            },
+            cx,
+        );
+    }
+
+    fn seed_click_selection_fixture(app: &mut NyaTermApp) {
+        app.terminal.layout.surface_bounds = Some(Bounds {
+            origin: Point::default(),
+            size: Size {
+                width: px(800.0),
+                height: px(600.0),
+            },
+        });
+        app.terminal
+            .seed_session_view("s1".into(), "first\r\nsecond\r\nthird".into(), "UTF-8");
+    }
+
+    #[test]
+    fn shift_click_after_stationary_click_selects_multiple_lines_and_keeps_anchor() {
+        let dir = TestConfigDir::new("nyaterm-shift-click-selection");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            seed_click_selection_fixture(app);
+            click_terminal_cell(app, "s1", 1, 1, false, cx);
+            assert!(app.terminal.selection.selection.is_none());
+            assert!(app.selected_terminal_text().is_none());
+            assert!(!app.terminal.selection.dragging);
+
+            click_terminal_cell(app, "s1", 2, 2, true, cx);
+            assert_eq!(
+                app.terminal.selection.selection,
+                Some(TerminalSelection::from_range(
+                    TerminalBufferCellPos::new(1, 1),
+                    TerminalBufferCellPos::new(2, 2),
+                )),
+            );
+            assert_eq!(app.selected_terminal_text().as_deref(), Some("econd\nthi"));
+
+            click_terminal_cell(app, "s1", 0, 0, true, cx);
+            assert_eq!(
+                app.terminal.selection.selection,
+                Some(TerminalSelection::from_range(
+                    TerminalBufferCellPos::new(1, 1),
+                    TerminalBufferCellPos::new(0, 0),
+                )),
+            );
+            assert_eq!(app.selected_terminal_text().as_deref(), Some("first\nse"));
+        });
+    }
+
+    #[test]
+    fn shift_click_uses_latest_ordinary_click_anchor_and_respects_explicit_clear() {
+        let dir = TestConfigDir::new("nyaterm-shift-click-reset");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            seed_click_selection_fixture(app);
+            click_terminal_cell(app, "s1", 0, 0, false, cx);
+            click_terminal_cell(app, "s1", 1, 1, false, cx);
+            click_terminal_cell(app, "s1", 2, 2, true, cx);
+            assert_eq!(
+                app.terminal.selection.selection.unwrap().anchor,
+                TerminalBufferCellPos::new(1, 1)
+            );
+
+            click_terminal_cell(app, "s1", 0, 0, false, cx);
+            app.clear_terminal_selection(cx);
+            click_terminal_cell(app, "s1", 2, 2, true, cx);
+            assert!(app.terminal.selection.selection.is_none());
+            assert!(app.selected_terminal_text().is_none());
+        });
+    }
+
+    #[test]
+    fn shift_click_does_not_reuse_another_sessions_click_anchor() {
+        let dir = TestConfigDir::new("nyaterm-shift-click-session");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            seed_click_selection_fixture(app);
+            app.terminal
+                .seed_session_view("s2".into(), "other\r\nsession".into(), "UTF-8");
+            click_terminal_cell(app, "s1", 0, 0, false, cx);
+            click_terminal_cell(app, "s2", 1, 1, true, cx);
+            assert!(app.terminal.selection.selection.is_none());
+            assert_eq!(app.terminal.selection.session_id.as_deref(), Some("s2"));
+            assert_eq!(
+                app.terminal.selection.click_anchor,
+                Some(TerminalBufferCellPos::new(1, 1))
+            );
+        });
+    }
 
     #[test]
     fn terminal_selection_drag_notify_delay_is_frame_coalesced() {
