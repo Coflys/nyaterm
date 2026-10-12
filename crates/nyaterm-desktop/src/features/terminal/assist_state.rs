@@ -92,6 +92,7 @@ impl TerminalAssistState {
     pub(super) fn cancel_credential_autofill(&mut self) -> bool {
         let had_panel = self.dismiss_credential_suggestions();
         self.credential_autofill_pending = None;
+        self.credential_prompt_input_until_ms = 0;
         self.credential_prompt_awaiting_output = false;
         self.credential_autofill_sending = false;
         self.credential_autofill_recent = None;
@@ -213,6 +214,8 @@ mod tests {
         });
         state.credential_autofill_detection_pending = true;
         state.credential_autofill_buffer = "Password:".into();
+        state.credential_prompt_input_until_ms = u64::MAX;
+        assert!(state.credential_prompt_input_mode(1));
         let generation = state.credential_autofill_generation;
         assert!(state.credential_fill_is_current(true, generation));
         assert!(!state.credential_fill_is_current(false, generation));
@@ -221,6 +224,7 @@ mod tests {
         assert!(state.credential_autofill_pending_request.is_none());
         assert!(!state.credential_autofill_detection_pending);
         assert!(state.credential_autofill_buffer.is_empty());
+        assert!(!state.credential_prompt_input_mode(1));
         // Re-enabling cannot authorize a password read started before cancellation.
         assert!(!state.credential_fill_is_current(true, generation));
         assert!(state.credential_fill_is_current(true, state.credential_autofill_generation));

@@ -1562,6 +1562,35 @@ mod tests {
     };
 
     #[test]
+    fn disabling_credential_autofill_releases_command_suggestions_and_smart_input() {
+        let dir = TestConfigDir::new("nyaterm-credential-mode-cancel");
+        let mut cx = TestAppContext::single();
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"echo abc", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ echo abc".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.prepare_command_suggestion_search(1, cx).is_some());
+            assert!(app.can_use_smart_cursor_selection());
+            app.terminal.assist.credential_prompt_input_until_ms = u64::MAX;
+            assert!(app.is_credential_prompt_input_mode());
+            assert!(app.prepare_command_suggestion_search(1, cx).is_none());
+            assert!(!app.can_use_smart_cursor_selection());
+
+            // The toggle must release these gates without waiting for output or a timeout.
+            app.toggle_credential_autofill(cx);
+            assert!(!app.is_credential_prompt_input_mode());
+            assert!(app.prepare_command_suggestion_search(1, cx).is_some());
+            assert!(app.can_use_smart_cursor_selection());
+        });
+    }
+
+    #[test]
     fn uncertain_input_cannot_start_or_publish_a_suggestion_search() {
         let dir = TestConfigDir::new("nyaterm-suggestions-confidence");
         let mut cx = TestAppContext::single();

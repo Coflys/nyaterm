@@ -586,6 +586,16 @@ impl NyaTermApp {
         }
     }
 
+    fn send_credential_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) -> bool {
+        // Credential fills must never enter sync fanout, history, or recording,
+        // even when terminal output has not identified a sensitive prompt.
+        if !self.send_sensitive_input_to_active_session(bytes, cx) {
+            return false;
+        }
+        self.terminal.assist.credential_prompt_awaiting_output = true;
+        true
+    }
+
     fn send_credential_value(
         &mut self,
         target: &CredentialAutofillTarget,
@@ -612,9 +622,10 @@ impl NyaTermApp {
             (CredentialPromptKind::Username, CredentialAutofillTarget::Vault(credential)) => {
                 let mut payload = credential.username.clone();
                 payload.push('\r');
-                self.send_terminal_input_without_suggestion_track(payload.into_bytes(), cx);
-                self.shell
-                    .set_status(format!("filled username from '{credential_name}'"));
+                if self.send_credential_input(payload.into_bytes(), cx) {
+                    self.shell
+                        .set_status(format!("filled username from '{credential_name}'"));
+                }
             }
             // Username prompts never offer the connection password.
             (CredentialPromptKind::Username, CredentialAutofillTarget::ConnectionPassword(_)) => {}
@@ -656,12 +667,13 @@ impl NyaTermApp {
                         match event.outcome {
                             Ok(ConnectionPasswordResolve::Resolved(mut password)) => {
                                 password.expose_secret_mut().push('\r');
-                                this.send_terminal_input_without_suggestion_track(
-                                    password.into_secret().into_bytes(),
-                                    cx,
-                                );
-                                this.shell
-                                    .set_status(format!("filled password from '{closure_name}'"));
+                                if this
+                                    .send_credential_input(password.into_secret().into_bytes(), cx)
+                                {
+                                    this.shell.set_status(format!(
+                                        "filled password from '{closure_name}'"
+                                    ));
+                                }
                             }
                             Ok(ConnectionPasswordResolve::MissingConnection) => {
                                 this.shell.set_status(format!(
@@ -730,12 +742,13 @@ impl NyaTermApp {
                                     return;
                                 };
                                 password.expose_secret_mut().push('\r');
-                                this.send_terminal_input_without_suggestion_track(
-                                    password.into_secret().into_bytes(),
-                                    cx,
-                                );
-                                this.shell
-                                    .set_status(format!("filled password from '{closure_name}'"));
+                                if this
+                                    .send_credential_input(password.into_secret().into_bytes(), cx)
+                                {
+                                    this.shell.set_status(format!(
+                                        "filled password from '{closure_name}'"
+                                    ));
+                                }
                             }
                             Ok(None) => this
                                 .shell
@@ -2379,5 +2392,192 @@ mod tests {
             ));
             assert!(app.terminal.assist.credential_suggestions.is_none());
         });
+    }
+    #[test]
+    fn credential_fills_skip_sync_peers_history_and_recording_without_prompt_detection() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+        use nyaterm_transport::{
+            ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
+            RecordingRotationPolicy, TelnetSessionConfig,
+        };
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let root = TestConfigDir::new("nyaterm-credential-sensitive-wire");
+        let store = ConnectionStore::open(root.path().join("config")).unwrap();
+        let mut vault = match test_credential_target("vault") {
+            CredentialAutofillTarget::Vault(credential) => credential,
+            CredentialAutofillTarget::ConnectionPassword(_) => unreachable!(),
+        };
+        vault.username = "fixture-user".into();
+        vault.password = Some(SecretString::from("vault-fixture"));
+        store.save_credential(vault.clone()).unwrap();
+        let connection = ssh_connection(
+            "fixture-user",
+            Some(ConnectionAuth {
+                mode: "password".into(),
+                password: Some(SecretString::from("connection-fixture")),
+                ..Default::default()
+            }),
+        );
+        store.save_connection(&connection).unwrap();
+        drop(store);
+
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (manager, ids) = cx.update_entity(&app, |app, cx| {
+            app.start_command_persistence_event_drain(cx);
+            let manager = app.session.manager_handle();
+            let metadata = app.session.metadata("fixture").unwrap().clone();
+            let mut ids = Vec::new();
+            app.sync_input.create_group();
+            for index in 0..2 {
+                let config = TelnetSessionConfig {
+                    host: "127.0.0.1".into(),
+                    port,
+                    raw_tcp: true,
+                    encoding: "UTF-8".into(),
+                    ..Default::default()
+                };
+                let info = manager.create_telnet_session(config.clone()).unwrap();
+                let mut metadata = metadata.clone();
+                metadata.launch_config = SessionLaunchConfig::Telnet(config);
+                app.session.register_session_metadata(&info.id, metadata);
+                app.terminal
+                    .seed_session_view(info.id.clone(), "$ ".into(), "UTF-8");
+                app.sync_input.toggle_selected_session(info.id.clone());
+                app.recording
+                    .writer()
+                    .start(
+                        info.id.clone(),
+                        RecordingContext {
+                            session_id: info.id.clone(),
+                            session_name: "synthetic".into(),
+                            connection_id: None,
+                            connection_name: None,
+                            group_path: None,
+                            protocol: "telnet".into(),
+                            host: None,
+                            port: None,
+                            username: None,
+                            started_at: time::OffsetDateTime::now_utc(),
+                        },
+                        RecordingProfile {
+                            mode: RecordingMode::Raw,
+                            base_path: root.path().into(),
+                            path_template: "unused.log".into(),
+                            include_timestamps: false,
+                            include_io_labels: false,
+                            include_session_metadata: false,
+                            rotation: RecordingRotationPolicy::Session,
+                            existing_file_behavior: ExistingFileBehavior::Unique,
+                            include_binary_transfer_payloads: false,
+                            include_input: true,
+                        },
+                        Some(root.path().join(format!("{index}.bin"))),
+                        4096,
+                    )
+                    .unwrap();
+                ids.push(info.id);
+            }
+            app.session.select_active_session(&ids[0]);
+            (manager, ids)
+        });
+        let mut streams = (0..2)
+            .map(|_| listener.accept().unwrap().0)
+            .collect::<Vec<_>>();
+        for stream in &streams {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+        }
+        let vault_target = CredentialAutofillTarget::Vault(vault);
+        let connection_target =
+            CredentialAutofillTarget::ConnectionPassword(ConnectionPasswordTarget {
+                connection_id: connection.id,
+                connection_name: connection.name,
+                username: "fixture-user".into(),
+            });
+        for (kind, target) in [
+            (CredentialPromptKind::Username, &vault_target),
+            (CredentialPromptKind::Password, &vault_target),
+            (CredentialPromptKind::Password, &connection_target),
+        ] {
+            let expected_status = format!(
+                "filled {} from '{}'",
+                if kind == CredentialPromptKind::Username {
+                    "username"
+                } else {
+                    "password"
+                },
+                target.display_name()
+            );
+            cx.update_entity(&app, |app, cx| {
+                assert_eq!(app.sync_peer_session_ids(&ids[0]), vec![ids[1].clone()]);
+                assert!(!app.recording_input_is_sensitive(&ids[0]));
+                app.terminal.assist.credential_prompt_awaiting_output = false;
+                app.shell.set_status(String::new());
+                app.send_credential_value(target, kind, &ids[0], cx);
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                cx.run_until_parked();
+                if cx.update_entity(&app, |app, _| app.shell.status() == expected_status) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "credential fill callback did not complete"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            cx.update_entity(&app, |app, _| {
+                assert!(app.terminal.assist.credential_prompt_awaiting_output);
+                app.terminal.assist.observe_credential_prompt_output();
+                assert!(!app.terminal.assist.credential_prompt_awaiting_output);
+            });
+        }
+        cx.update_entity(&app, |app, _| {
+            for id in &ids {
+                assert!(
+                    app.session
+                        .command_history_for(id)
+                        .is_none_or(|history| history.is_empty())
+                );
+                let completion = app.recording.writer().stop_complete(id.clone()).unwrap();
+                assert!(completion.error.is_none());
+                assert!(
+                    std::fs::read(completion.input_file_path.unwrap())
+                        .unwrap()
+                        .is_empty()
+                );
+                app.write_session_protocol_response(id, b"END").unwrap();
+            }
+            assert!(app.commands.command_history().is_empty());
+            assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
+        let store_client = cx.update_entity(&app, |app, _| app.store_blocking_client());
+        assert!(
+            store_client
+                .request_fn(nyaterm_store::StoreDomain::Commands, |store| store
+                    .list_command_history(64))
+                .unwrap()
+                .is_empty()
+        );
+        for (stream, expected) in streams.iter_mut().zip([
+            b"fixture-user\rvault-fixture\rconnection-fixture\rEND".as_slice(),
+            b"END".as_slice(),
+        ]) {
+            let mut received = vec![0; expected.len()];
+            stream.read_exact(&mut received).unwrap();
+            assert_eq!(received, expected);
+        }
+        for id in ids {
+            manager.close(&id).unwrap();
+        }
     }
 }
