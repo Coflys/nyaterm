@@ -480,6 +480,12 @@ impl SettingsFeatureState {
         self.summary.interaction_command_suggestions_enabled
     }
 
+    pub(in crate::features) fn toggle_credential_autofill(&mut self) -> bool {
+        self.summary.interaction_credential_autofill_enabled =
+            !self.summary.interaction_credential_autofill_enabled;
+        self.summary.interaction_credential_autofill_enabled
+    }
+
     pub(in crate::features) fn set_command_suggestion_min_chars(&mut self, value: u32) {
         let max_chars = self.summary.interaction_command_suggestion_max_chars;
         self.summary.interaction_command_suggestion_min_chars = value.clamp(1, max_chars);
@@ -1717,6 +1723,8 @@ mod tests {
         );
         let suggestions_enabled = state.summary().interaction_command_suggestions_enabled;
         assert_eq!(state.toggle_command_suggestions(), !suggestions_enabled);
+        let autofill_enabled = state.summary().interaction_credential_autofill_enabled;
+        assert_eq!(state.toggle_credential_autofill(), !autofill_enabled);
     }
 
     #[test]

@@ -76,7 +76,10 @@ impl TerminalAssistState {
     pub(super) fn dismiss_credential_suggestions(&mut self) -> bool {
         let had_panel = self.credential_suggestions.take().is_some();
         self.credential_autofill_buffer.clear();
-        self.credential_autofill_recent.clear();
+        // `credential_autofill_recent` is deliberately kept: the prompt that
+        // opened the panel is unchanged on screen (mysql and friends disable
+        // echo, so the current line stays `Enter password:`), and forgetting it
+        // made the panel reopen on the next tick and swallow the user's Enter.
         self.credential_autofill_detection_pending = false;
         self.credential_autofill_pending_request = None;
         had_panel

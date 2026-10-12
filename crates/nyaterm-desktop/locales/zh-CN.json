@@ -2236,6 +2236,8 @@
     "viewPrivateKey": "查看私钥",
     "commandSuggestions": "联想补全",
     "commandSuggestionsDesc": "输入命令时显示基于历史记录和内置命令的联想补全建议。",
+    "credentialAutofill": "凭据联想",
+    "credentialAutofillDesc": "当终端提示输入凭据时，提供已保存的凭据建议。",
     "commandSuggestionsMaxChars": "历史记录最大字数限制",
     "commandSuggestionsMaxCharsDesc": "仅将命令长度不超过该字数的历史记录纳入联想补全候选，快捷命令不受影响。",
     "commandSuggestionsMinChars": "历史记录最小字数限制",

@@ -365,6 +365,11 @@ pub struct AppSettingsSummary {
     #[serde(default = "default_true")]
     pub interaction_terminal_zoom_enabled: bool,
     pub interaction_command_suggestions_enabled: bool,
+    /// Gates the terminal credential suggestion panel, the sibling of the
+    /// command-suggestion panel. Defaults on for existing data that predates
+    /// the field.
+    #[serde(default = "default_true")]
+    pub interaction_credential_autofill_enabled: bool,
     pub interaction_command_suggestion_min_chars: u32,
     pub interaction_command_suggestion_max_chars: u32,
     pub interaction_word_separators: String,
@@ -574,6 +579,7 @@ impl Default for AppSettingsSummary {
             interaction_mouse_events_require_alt: false,
             interaction_terminal_zoom_enabled: true,
             interaction_command_suggestions_enabled: true,
+            interaction_credential_autofill_enabled: true,
             interaction_command_suggestion_min_chars: 2,
             interaction_command_suggestion_max_chars: 64,
             interaction_word_separators: " \t\r\n()[]{}\"':=,;|&<>".to_string(),
@@ -946,6 +952,9 @@ mod tests {
         assert!(summary.ui_asset_sort_direction.is_none());
         assert!(!summary.terminal_reconnect_restore_cwd);
         assert_eq!(summary.transfer_internal_editor_font_size, 13);
+        // The credential autofill switch joins the command-suggestion switch in
+        // defaulting on, so legacy documents keep the panel enabled.
+        assert!(summary.interaction_credential_autofill_enabled);
     }
 
     #[test]

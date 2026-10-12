@@ -154,6 +154,26 @@ impl SettingsPanel {
             ))
             .child(settings_form_section(
                 palette,
+                Some(t!("settings.credentialAutofill")),
+                Some(t!("settings.credentialAutofillDesc")),
+                settings_form_row(
+                    palette,
+                    t!("settings.credentialAutofill"),
+                    Some(SharedString::from(t!("settings.credentialAutofillDesc"))),
+                    settings_switch(
+                        palette,
+                        "interaction-credential-autofill",
+                        self.settings
+                            .summary()
+                            .interaction_credential_autofill_enabled,
+                        cx.listener(|this, _, _, cx| {
+                            this.toggle_credential_autofill(cx);
+                        }),
+                    ),
+                ),
+            ))
+            .child(settings_form_section(
+                palette,
                 Some(t!("settings.interactionCommandInput")),
                 Some(t!("settings.interactionCommandInputDesc")),
                 div()

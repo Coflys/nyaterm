@@ -239,6 +239,14 @@ impl NyaTermApp {
         self.save_interaction_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_credential_autofill(&mut self, cx: &mut Context<Self>) {
+        let autofill_enabled = self.settings.toggle_credential_autofill();
+        if !autofill_enabled && !self.shell.has_settings_draft() {
+            self.dismiss_credential_suggestions(cx);
+        }
+        self.save_interaction_settings(cx);
+    }
+
     pub(in crate::features) fn set_command_suggestion_min_chars(
         &mut self,
         value: u32,

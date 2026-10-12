@@ -583,7 +583,10 @@ pub(crate) struct CredentialSuggestionState {
     pub(crate) kind: CredentialPromptKind,
     pub(crate) matches: Vec<CredentialAutofillTarget>,
     pub(crate) prompt_text: String,
-    pub(crate) selected_index: usize,
+    /// `None` when the list is the unfiltered "every credential" fallback: a
+    /// prompt that matched nothing specific gets no default, so Enter cannot
+    /// submit a password the user never picked.
+    pub(crate) selected_index: Option<usize>,
     pub(crate) cursor_row: usize,
     pub(crate) cursor_col: usize,
 }
@@ -672,6 +675,10 @@ pub(crate) enum CredentialAutofillMatchOutcome {
         kind: CredentialPromptKind,
         matches: Vec<CredentialAutofillTarget>,
         clear_pending: bool,
+        /// True when the prompt pattern selected these credentials. False for
+        /// the "every enabled credential" fallback, which is a list to pick
+        /// from rather than a match worth defaulting to.
+        precise: bool,
     },
     AutoFill {
         credential: CredentialAutofillTarget,
@@ -699,6 +706,7 @@ pub(crate) enum CredentialAutofillAction {
         kind: CredentialPromptKind,
         matches: Vec<CredentialAutofillTarget>,
         clear_pending: bool,
+        precise: bool,
     },
     None {
         clear_pending: bool,
@@ -718,10 +726,12 @@ pub(crate) fn credential_autofill_action(
             kind,
             matches,
             clear_pending,
+            precise,
         } => CredentialAutofillAction::Suggest {
             kind: *kind,
             matches: matches.clone(),
             clear_pending: *clear_pending,
+            precise: *precise,
         },
         CredentialAutofillMatchOutcome::AutoFill { credential, kind }
             if !credential.is_connection_password() =>
@@ -741,6 +751,7 @@ pub(crate) fn credential_autofill_action(
                 kind: *kind,
                 matches: vec![credential.clone()],
                 clear_pending: true,
+                precise: true,
             }
         }
     }
@@ -930,6 +941,7 @@ fn credential_autofill_match_outcome(
                     kind: CredentialPromptKind::Password,
                     matches,
                     clear_pending: true,
+                    precise: true,
                 };
             }
             let fallback = find_password_only_fallback_targets(&request.credentials);
@@ -938,6 +950,7 @@ fn credential_autofill_match_outcome(
                     kind: CredentialPromptKind::Password,
                     matches: fallback,
                     clear_pending: true,
+                    precise: false,
                 };
             }
             CredentialAutofillMatchOutcome::NoMatch {
@@ -960,6 +973,7 @@ fn credential_autofill_match_outcome(
                     kind: CredentialPromptKind::Username,
                     matches,
                     clear_pending: false,
+                    precise: true,
                 }
             }
         }
@@ -1239,6 +1253,7 @@ mod credential_autofill_match_tests {
                 kind,
                 matches,
                 clear_pending,
+                precise,
             } => {
                 assert_eq!(kind, CredentialPromptKind::Username);
                 assert_eq!(matches.len(), 1);
@@ -1247,6 +1262,7 @@ mod credential_autofill_match_tests {
                     CredentialAutofillTarget::Vault(credential) if credential.id == "c1"
                 ));
                 assert!(!clear_pending);
+                assert!(precise, "a username prompt match must be a precise match");
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
@@ -1270,6 +1286,7 @@ mod credential_autofill_match_tests {
                 kind,
                 matches,
                 clear_pending,
+                precise,
             } => {
                 assert_eq!(kind, CredentialPromptKind::Password);
                 assert_eq!(matches.len(), 1);
@@ -1278,6 +1295,10 @@ mod credential_autofill_match_tests {
                     CredentialAutofillTarget::Vault(credential) if credential.id == "c1"
                 ));
                 assert!(clear_pending);
+                assert!(
+                    !precise,
+                    "the every-credential fallback is not a precise match"
+                );
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
@@ -1346,6 +1367,7 @@ mod credential_autofill_match_tests {
                 kind,
                 matches,
                 clear_pending,
+                precise,
             } => {
                 assert_eq!(kind, CredentialPromptKind::Password);
                 assert_eq!(matches.len(), 2);
@@ -1355,6 +1377,10 @@ mod credential_autofill_match_tests {
                     CredentialAutofillTarget::Vault(credential) if credential.id == "c1"
                 ));
                 assert!(clear_pending);
+                assert!(
+                    !precise,
+                    "a bare password prompt reaches the fallback list, not a precise match"
+                );
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
@@ -1411,13 +1437,16 @@ mod credential_autofill_match_tests {
             &mut regex_cache,
         );
 
-        // The sole candidate does reach the user as a suggestion...
+        // The sole candidate does reach the user as a suggestion. It arrives
+        // through the every-credential fallback (the connection password has no
+        // vault prompt pattern), so it is not pre-selected...
         assert_eq!(
             credential_autofill_action(&outcome),
             super::CredentialAutofillAction::Suggest {
                 kind: CredentialPromptKind::Password,
                 matches: vec![candidate],
                 clear_pending: true,
+                precise: false,
             }
         );
         assert!(
@@ -1445,6 +1474,7 @@ mod credential_autofill_match_tests {
                 kind: CredentialPromptKind::Password,
                 matches: vec![candidate],
                 clear_pending: true,
+                precise: true,
             }
         );
     }

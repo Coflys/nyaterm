@@ -2236,6 +2236,8 @@
     "viewPrivateKey": "Afficher la clé privée",
     "commandSuggestions": "Suggestions",
     "commandSuggestionsDesc": "Afficher les suggestions issues de l'historique et des commandes intégrées.",
+    "credentialAutofill": "Suggestions d'identifiants",
+    "credentialAutofillDesc": "Proposer les identifiants enregistrés lorsqu'un terminal les demande.",
     "commandSuggestionsMaxChars": "Longueur maximale de l'historique",
     "commandSuggestionsMaxCharsDesc": "N'inclure que les entrées d'historique dont la longueur de commande ne dépasse pas cette limite. Les commandes rapides ne sont pas affectées.",
     "commandSuggestionsMinChars": "Longueur minimale de l'historique",

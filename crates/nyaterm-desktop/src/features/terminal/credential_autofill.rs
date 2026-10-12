@@ -11,8 +11,7 @@ use gpui::{
 };
 use nyaterm_core::{
     ConnectionAuth, CredentialPromptKind, SavedConnection, SecretString, TerminalInputState,
-    credential_password_prompt_target_user, credential_password_prompt_targets_user,
-    credential_prompt_requests_password, truncate_preview,
+    credential_password_prompt_targets_user, credential_prompt_requests_password, truncate_preview,
 };
 use nyaterm_store::{ConnectionStore, StorageError, StoreDomain, store_request};
 use nyaterm_terminal::TerminalSnapshot;
@@ -118,6 +117,7 @@ impl NyaTermApp {
         kind: CredentialPromptKind,
         matches: Vec<CredentialAutofillTarget>,
         prompt_text: String,
+        precise: bool,
         cx: &mut Context<Self>,
     ) {
         if matches.is_empty() {
@@ -133,7 +133,7 @@ impl NyaTermApp {
             kind,
             matches,
             prompt_text,
-            selected_index: 0,
+            selected_index: precise.then_some(0),
             cursor_row,
             cursor_col,
         });
@@ -377,6 +377,13 @@ impl NyaTermApp {
     /// from the security catalog, or the active session's saved connection
     /// password. Kept cheap because detection ticks call it on idle frames.
     fn has_credential_autofill_candidates(&self) -> bool {
+        if !self
+            .settings
+            .summary()
+            .interaction_credential_autofill_enabled
+        {
+            return false;
+        }
         if !self.security.credentials().is_empty() {
             return true;
         }
@@ -427,9 +434,13 @@ impl NyaTermApp {
         if !connection_has_resolvable_password(auth) {
             return None;
         }
-        if credential_password_prompt_target_user(prompt_text).is_some()
-            && !credential_password_prompt_targets_user(prompt_text, &username)
-        {
+        // A login secret is only offered to a prompt that names the account
+        // this session logs in as, such as `[sudo] password for root:`. A bare
+        // `Password:` or `Enter password:` belongs to whatever program printed
+        // it -- mysql, redis, `su -` -- and has no relation to the SSH login
+        // password, so offering the saved secret there is misleading and hands
+        // a remote process a way to phish it.
+        if !credential_password_prompt_targets_user(prompt_text, &username) {
             return None;
         }
         let connection = self.active_connection()?;
@@ -545,6 +556,7 @@ impl NyaTermApp {
                 kind,
                 matches,
                 clear_pending,
+                precise,
             } => {
                 if clear_pending {
                     self.terminal.assist.credential_autofill_pending = None;
@@ -554,7 +566,7 @@ impl NyaTermApp {
                 // output, so it is only ever offered: `show_credential_panel`
                 // puts it in the list and `select_credential_suggestion` is the
                 // single place that fills it, behind a user action.
-                self.show_credential_panel(kind, matches, event.key.prompt_text, cx);
+                self.show_credential_panel(kind, matches, event.key.prompt_text, precise, cx);
                 true
             }
             CredentialAutofillAction::None { clear_pending } => {
@@ -724,17 +736,24 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    /// Fills the highlighted suggestion. Returns false when the panel has no
+    /// selection (the unfiltered fallback list), so the caller can let Enter
+    /// reach the terminal instead of submitting an unchosen password.
     pub(in crate::features) fn apply_selected_credential_suggestion(
         &mut self,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(state) = self.terminal.assist.credential_suggestions.clone() else {
-            return;
+            return false;
         };
-        let Some(target) = state.matches.get(state.selected_index).cloned() else {
-            return;
+        let Some(index) = state.selected_index else {
+            return false;
+        };
+        let Some(target) = state.matches.get(index).cloned() else {
+            return false;
         };
         self.select_credential_suggestion(target, cx);
+        true
     }
 
     pub(in crate::features) fn select_credential_suggestion(
@@ -799,7 +818,10 @@ impl NyaTermApp {
         }
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
-            // Non-navigation keys dismiss the panel (Tauri: any other input dismisses).
+            // A chord such as Ctrl+V is input the panel cannot act on, so it
+            // dismisses like any other key. Leaving the panel open let the next
+            // Enter submit the highlighted password on top of the pasted one.
+            self.dismiss_credential_suggestions(cx);
             return false;
         }
         match keystroke.key.as_str() {
@@ -809,25 +831,33 @@ impl NyaTermApp {
             }
             "up" => {
                 if let Some(state) = self.terminal.assist.credential_suggestions.as_mut() {
-                    if state.selected_index == 0 {
-                        state.selected_index = state.matches.len().saturating_sub(1);
-                    } else {
-                        state.selected_index -= 1;
-                    }
+                    state.selected_index = credential_suggestion_step_selection(
+                        state.selected_index,
+                        state.matches.len(),
+                        -1,
+                    );
                     cx.notify();
                 }
                 true
             }
             "down" => {
                 if let Some(state) = self.terminal.assist.credential_suggestions.as_mut() {
-                    state.selected_index = (state.selected_index + 1) % state.matches.len().max(1);
+                    state.selected_index = credential_suggestion_step_selection(
+                        state.selected_index,
+                        state.matches.len(),
+                        1,
+                    );
                     cx.notify();
                 }
                 true
             }
             "enter" => {
-                self.apply_selected_credential_suggestion(cx);
-                true
+                if self.apply_selected_credential_suggestion(cx) {
+                    true
+                } else {
+                    self.dismiss_credential_suggestions(cx);
+                    false
+                }
             }
             _ => {
                 // Typing while the panel is open dismisses it (Tauri parity).
@@ -885,7 +915,7 @@ impl NyaTermApp {
             .overflow_y_scrollbar();
 
         for (index, credential) in state.matches.iter().enumerate() {
-            let selected = index == state.selected_index;
+            let selected = state.selected_index == Some(index);
             list = list.child(
                 div()
                     .id(SharedString::from(format!("credential-suggestion-{index}")))
@@ -909,7 +939,7 @@ impl NyaTermApp {
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(state) = this.terminal.assist.credential_suggestions.as_mut() {
-                            state.selected_index = index;
+                            state.selected_index = Some(index);
                         }
                         let Some(selected) = this
                             .terminal
@@ -1093,6 +1123,34 @@ fn resolve_connection_password_from_store(
     })
 }
 
+/// Move the panel highlight by one row, treating `None` as "no selection".
+/// Stepping past either end returns to no selection, so an unchosen list keeps
+/// requiring an explicit pick. Mirrors the command-suggestion panel.
+fn credential_suggestion_step_selection(
+    current: Option<usize>,
+    len: usize,
+    direction: i32,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    if direction > 0 {
+        return match current {
+            None => Some(0),
+            Some(index) if index + 1 < len => Some(index + 1),
+            Some(_) => None,
+        };
+    }
+    if direction < 0 {
+        return match current {
+            None => Some(len - 1),
+            Some(0) => None,
+            Some(index) => Some(index.min(len - 1).saturating_sub(1)),
+        };
+    }
+    current.map(|index| index.min(len - 1))
+}
+
 fn credential_autofill_snapshot_detection_can_run(
     active_session_id: Option<&str>,
     has_credentials_or_pending: bool,
@@ -1270,7 +1328,7 @@ mod tests {
         credential_autofill_prompt_line_from_viewport,
         credential_autofill_prompt_text_from_visible,
         credential_autofill_snapshot_detection_can_run, credential_autofill_visible_tail,
-        resolve_connection_password_from_store,
+        credential_suggestion_step_selection, resolve_connection_password_from_store,
     };
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
@@ -2047,8 +2105,47 @@ mod tests {
             );
         }
         assert!(
-            connection_password_candidate(&app, &mut cx, "Password:").is_some(),
-            "a real password prompt still offers the connection password"
+            connection_password_candidate(&app, &mut cx, "Password:").is_none(),
+            "a bare prompt belongs to whatever program printed it, not the login"
+        );
+        assert!(
+            connection_password_candidate(&app, &mut cx, "[sudo] password for dev:").is_some(),
+            "a prompt naming the session user still offers the connection password"
+        );
+    }
+
+    #[test]
+    fn connection_password_candidate_is_refused_for_bare_in_session_prompts() {
+        // mysql/redis print `Enter password:` and `su -` prints `Password:`;
+        // none of them name the SSH login user, so the saved secret is not an
+        // answer to them.
+        let root = TestConfigDir::new("nyaterm-credential-autofill-bare");
+        let mut cx = TestAppContext::single();
+        let app = app_with_account_backed_session(
+            &mut cx,
+            &root,
+            ssh_connection("dev", Some(account_password_auth())),
+            "root",
+        );
+
+        for prompt in [
+            "Password:",
+            "Enter password: ",
+            "su: Password: ",
+            "请输入密码：",
+        ] {
+            assert!(
+                connection_password_candidate(&app, &mut cx, prompt).is_none(),
+                "{prompt} must not offer the SSH connection password"
+            );
+        }
+        assert!(
+            connection_password_candidate(&app, &mut cx, "[sudo] password for root:").is_some(),
+            "the session's own login user is still offered"
+        );
+        assert!(
+            connection_password_candidate(&app, &mut cx, "[sudo] password for postgres:").is_none(),
+            "a different account is not the login user"
         );
     }
 
@@ -2071,8 +2168,26 @@ mod tests {
         );
 
         assert!(
-            connection_password_candidate(&app, &mut cx, "Password:").is_none(),
+            connection_password_candidate(&app, &mut cx, "[sudo] password for dev:").is_none(),
             "an account reference is not a password when the connection owns it"
         );
+    }
+
+    #[test]
+    fn credential_suggestion_selection_steps_out_at_the_ends() {
+        assert_eq!(credential_suggestion_step_selection(None, 3, 1), Some(0));
+        assert_eq!(credential_suggestion_step_selection(Some(0), 3, 1), Some(1));
+        assert_eq!(credential_suggestion_step_selection(Some(1), 3, 1), Some(2));
+        assert_eq!(credential_suggestion_step_selection(Some(2), 3, 1), None);
+        assert_eq!(credential_suggestion_step_selection(None, 3, -1), Some(2));
+        assert_eq!(
+            credential_suggestion_step_selection(Some(2), 3, -1),
+            Some(1)
+        );
+        assert_eq!(credential_suggestion_step_selection(Some(0), 3, -1), None);
+        assert_eq!(credential_suggestion_step_selection(None, 0, 1), None);
+        assert_eq!(credential_suggestion_step_selection(None, 0, -1), None);
+        assert_eq!(credential_suggestion_step_selection(Some(0), 1, 1), None);
+        assert_eq!(credential_suggestion_step_selection(Some(0), 1, -1), None);
     }
 }
