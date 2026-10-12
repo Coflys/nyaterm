@@ -365,6 +365,9 @@ impl SessionFeatureState {
                     .ssh_connections
                     .insert(session_id.clone(), connection);
             }
+            // Transferred UI events and detector-held bytes precede any output
+            // the destination bridge can receive after claiming this session.
+            self.event_bridge.hold_session_for_ui(&session_id);
             self.event_bridge.claim_session(&session_id);
         }
         ordered_ids.retain(|id| self.metadata.contains_key(id));
@@ -821,6 +824,24 @@ impl SessionFeatureState {
 
     pub(in crate::features) fn resume_session_direct_output(&self, session_id: &str) {
         self.event_bridge.resume_session_direct_output(session_id);
+    }
+
+    /// Release UI handoffs only after the caller has submitted its output batch.
+    pub(in crate::features) fn complete_event_bridge_ui_drain(&self) {
+        let pending_sessions = self
+            .events
+            .pending
+            .iter()
+            .map(|event| match event {
+                SessionEvent::Output { session_id, .. }
+                | SessionEvent::OutputDropped { session_id, .. }
+                | SessionEvent::CwdChanged { session_id, .. }
+                | SessionEvent::CommandAccepted { session_id, .. }
+                | SessionEvent::Exited { session_id, .. }
+                | SessionEvent::Error { session_id, .. } => session_id.clone(),
+            })
+            .collect();
+        self.event_bridge.complete_ui_drain(&pending_sessions);
     }
 
     pub(in crate::features) fn clear_event_bridge_session(&self, session_id: &str) {

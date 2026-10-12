@@ -341,6 +341,7 @@ impl NyaTermApp {
             }
         }
         self.flush_pending_session_frame_outputs(&mut pending_frame_outputs, &mut drain_timings);
+        self.session.complete_event_bridge_ui_drain();
 
         let queued_events =
             transport_queued_events.saturating_add(self.session.pending_event_count());
@@ -525,6 +526,8 @@ impl NyaTermApp {
             if let Some(data) = self.process_xymodem_output(&session_id, &data)
                 && data.is_empty()
             {
+                self.flush_pending_session_frame_outputs(pending_frame_outputs, drain_timings);
+                self.sync_session_event_bridge_session_policy(&session_id);
                 let chunk_duration = chunk_started_at.elapsed();
                 drain_timings.output_total += chunk_duration;
                 chunk_timings.output_total += chunk_duration;
@@ -541,6 +544,8 @@ impl NyaTermApp {
             drain_timings.zmodem += stage_duration;
             chunk_timings.zmodem += stage_duration;
             if data.is_empty() {
+                self.flush_pending_session_frame_outputs(pending_frame_outputs, drain_timings);
+                self.sync_session_event_bridge_session_policy(&session_id);
                 let chunk_duration = chunk_started_at.elapsed();
                 drain_timings.output_total += chunk_duration;
                 chunk_timings.output_total += chunk_duration;
@@ -563,6 +568,8 @@ impl NyaTermApp {
             drain_timings.trzsz += stage_duration;
             chunk_timings.trzsz += stage_duration;
             if data.is_empty() {
+                self.flush_pending_session_frame_outputs(pending_frame_outputs, drain_timings);
+                self.sync_session_event_bridge_session_policy(&session_id);
                 let chunk_duration = chunk_started_at.elapsed();
                 drain_timings.output_total += chunk_duration;
                 chunk_timings.output_total += chunk_duration;

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use gpui::TestAppContext;
+use gpui::{AppContext as _, TestAppContext};
 use nyaterm_core::AiExecutionProfile;
 use nyaterm_transport::{
     LocalSessionConfig, RemoteFileBackendPreference, RemoteFileBackendPreferenceStore,
@@ -13,6 +13,7 @@ use nyaterm_transport::{
 
 use crate::features::runtime_jobs::SessionStartResult;
 use crate::features::session::HostKeyPromptIssue;
+use crate::features::test_support::app_with_visible_local_session;
 use crate::models::{
     SessionEventBridge, SessionLaunchConfig, SessionRuntimeMetadata, StartupCommandAction,
     TabActionsSubmenu, TerminalFramePipeline, WorkspaceSplitDirection,
@@ -29,6 +30,32 @@ use super::{
     SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
     SessionStartFeatureState,
 };
+
+#[test]
+fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_completes() {
+    for prefix in [b":".as_slice(), b"*", b"::TRZ"] {
+        let root = TestConfigDir::new("nyaterm-sideband-prefix-routing");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), "prefix-session");
+        cx.update_entity(&app, |app, cx| {
+            app.session
+                .push_event_bridge_ui_event_for_test(SessionEvent::Output {
+                    session_id: "prefix-session".into(),
+                    data: prefix.to_vec(),
+                });
+            // This path consumes events without expiring detector prefixes.
+            app.drain_session_events_for_input_wake(cx);
+            assert!(app.session.pending_events_are_empty());
+            assert_eq!(app.session.event_bridge_queued_event_count(), 0);
+            assert!(app.session.has_protocol_runtime_sessions());
+            assert!(
+                app.session
+                    .event_bridge
+                    .session_requires_ui_for_test("prefix-session")
+            );
+        });
+    }
+}
 
 fn pending(name: &str) -> PendingSessionStart {
     PendingSessionStart {
