@@ -829,6 +829,12 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "input", &error);
             return Err(error);
         }
+        if self.session.active_id() == Some(session_id)
+            && bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
+        {
+            // Covers typed Enter, paste, and autofill through the shared write path.
+            self.terminal.assist.credential_prompt_awaiting_output = true;
+        }
         if disposition.record_logical_input
             && self
                 .recording

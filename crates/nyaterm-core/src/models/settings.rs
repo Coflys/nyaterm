@@ -365,9 +365,8 @@ pub struct AppSettingsSummary {
     #[serde(default = "default_true")]
     pub interaction_terminal_zoom_enabled: bool,
     pub interaction_command_suggestions_enabled: bool,
-    /// Gates the terminal credential suggestion panel, the sibling of the
-    /// command-suggestion panel. Defaults on for existing data that predates
-    /// the field.
+    /// Gates terminal credential suggestions and pending password autofill.
+    /// Defaults on for existing data that predates the field.
     #[serde(default = "default_true")]
     pub interaction_credential_autofill_enabled: bool,
     pub interaction_command_suggestion_min_chars: u32,

@@ -38,6 +38,13 @@ impl NyaTermApp {
         };
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
         self.settings.replace_summary(settings);
+        if !self
+            .settings
+            .summary()
+            .interaction_credential_autofill_enabled
+        {
+            self.cancel_credential_autofill(cx);
+        }
         let selected = self
             .settings
             .summary()

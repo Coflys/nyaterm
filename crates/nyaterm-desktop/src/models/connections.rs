@@ -583,9 +583,8 @@ pub(crate) struct CredentialSuggestionState {
     pub(crate) kind: CredentialPromptKind,
     pub(crate) matches: Vec<CredentialAutofillTarget>,
     pub(crate) prompt_text: String,
-    /// `None` when the list is the unfiltered "every credential" fallback: a
-    /// prompt that matched nothing specific gets no default, so Enter cannot
-    /// submit a password the user never picked.
+    /// Only a unique precise match is preselected. Ambiguous matches and the
+    /// unfiltered fallback require an explicit choice before Enter can fill.
     pub(crate) selected_index: Option<usize>,
     pub(crate) cursor_row: usize,
     pub(crate) cursor_col: usize,

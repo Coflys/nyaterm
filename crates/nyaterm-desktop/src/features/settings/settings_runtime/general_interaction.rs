@@ -241,8 +241,8 @@ impl NyaTermApp {
 
     pub(in crate::features) fn toggle_credential_autofill(&mut self, cx: &mut Context<Self>) {
         let autofill_enabled = self.settings.toggle_credential_autofill();
-        if !autofill_enabled && !self.shell.has_settings_draft() {
-            self.dismiss_credential_suggestions(cx);
+        if !autofill_enabled {
+            self.cancel_credential_autofill(cx);
         }
         self.save_interaction_settings(cx);
     }

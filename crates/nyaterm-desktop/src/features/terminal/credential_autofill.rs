@@ -29,7 +29,6 @@ use super::command_suggestions::{
 };
 
 const CREDENTIAL_AUTOFILL_INPUT_TAIL_LIMIT: usize = 4096;
-const RECENT_PROMPT_TTL_MS: u64 = 30_000;
 const PENDING_PASSWORD_TTL_MS: u64 = 60_000;
 const CREDENTIAL_PROMPT_INPUT_TTL_MS: u64 = 120_000;
 
@@ -85,31 +84,16 @@ impl NyaTermApp {
         self.terminal.assist.credential_prompt_input_mode(now)
     }
 
-    fn prune_recent_credential_prompts(&mut self, now: u64) {
-        self.terminal
-            .assist
-            .credential_autofill_recent
-            .retain(|_, ts| now.saturating_sub(*ts) <= RECENT_PROMPT_TTL_MS);
+    pub(in crate::features) fn cancel_credential_autofill(&mut self, cx: &mut Context<Self>) {
+        if self.terminal.assist.cancel_credential_autofill() {
+            cx.notify();
+        }
     }
 
-    fn remember_credential_prompt(
-        &mut self,
-        kind: CredentialPromptKind,
-        prompt_text: &str,
-        now: u64,
-    ) -> bool {
-        self.prune_recent_credential_prompts(now);
-        let key = format!("{kind:?}:{prompt_text}");
-        if let Some(last) = self.terminal.assist.credential_autofill_recent.get(&key)
-            && now.saturating_sub(*last) < RECENT_PROMPT_TTL_MS
-        {
-            return false;
-        }
-        self.terminal
-            .assist
-            .credential_autofill_recent
-            .insert(key, now);
-        true
+    fn credential_autofill_enabled(&self) -> bool {
+        self.settings
+            .summary()
+            .interaction_credential_autofill_enabled
     }
 
     fn show_credential_panel(
@@ -120,7 +104,7 @@ impl NyaTermApp {
         precise: bool,
         cx: &mut Context<Self>,
     ) {
-        if matches.is_empty() {
+        if !self.credential_autofill_enabled() || matches.is_empty() {
             return;
         }
         let Some(session_id) = self.session.active_id_owned() else {
@@ -128,12 +112,13 @@ impl NyaTermApp {
         };
         let (cursor_row, cursor_col) = self.active_terminal_cursor_cell_for_autofill();
         self.dismiss_command_suggestions(cx);
+        let selected_index = (precise && matches.len() == 1).then_some(0);
         self.terminal.assist.credential_suggestions = Some(CredentialSuggestionState {
             session_id,
             kind,
             matches,
             prompt_text,
-            selected_index: precise.then_some(0),
+            selected_index,
             cursor_row,
             cursor_col,
         });
@@ -155,6 +140,21 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.credential_autofill_enabled() {
+            let had_panel = self.terminal.assist.credential_suggestions.is_some();
+            if had_panel
+                || self.terminal.assist.credential_autofill_pending.is_some()
+                || self
+                    .terminal
+                    .assist
+                    .credential_autofill_pending_request
+                    .is_some()
+                || self.terminal.assist.credential_autofill_detection_pending
+            {
+                self.cancel_credential_autofill(cx);
+            }
+            return had_panel;
+        }
         // Common idle path: no credentials, no detection, no match pipeline reply.
         if self
             .terminal
@@ -216,17 +216,18 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return false;
         };
-        let Some(prompt_text) = self
-            .terminal
-            .view
-            .views
-            .get(&session_id)
-            .and_then(|view| view.frame_snapshot.as_deref())
+        let view = self.terminal.view.views.get(&session_id);
+        let snapshot = view.and_then(|view| view.frame_snapshot.as_deref());
+        let row = snapshot.and_then(credential_autofill_prompt_row_from_snapshot);
+        let instance = row.map(|row| (row.line_id, row.revision));
+        let prompt_text = snapshot
             .and_then(credential_autofill_prompt_text_from_snapshot)
-        else {
-            return self.sync_credential_autofill_prompt_text(&session_id, String::new(), cx);
-        };
-        self.sync_credential_autofill_prompt_text(&session_id, prompt_text, cx)
+            .unwrap_or_default();
+        let dirty = self
+            .terminal
+            .assist
+            .observe_credential_prompt_instance(instance);
+        self.sync_credential_autofill_prompt_text(&session_id, prompt_text, cx) || dirty
     }
 
     fn sync_credential_autofill_prompt_text(
@@ -294,7 +295,8 @@ impl NyaTermApp {
         &mut self,
         _cx: &mut Context<Self>,
     ) -> bool {
-        if self.session.active_id().is_none()
+        if !self.credential_autofill_enabled()
+            || self.session.active_id().is_none()
             || self.terminal.assist.credential_suggestions.is_some()
         {
             return false;
@@ -344,7 +346,10 @@ impl NyaTermApp {
         }
 
         if self.terminal.assist.credential_autofill_pending.is_none()
-            && !self.remember_credential_prompt(prompt_kind, &prompt_text, now)
+            && !self
+                .terminal
+                .assist
+                .remember_credential_prompt(prompt_kind, &prompt_text)
         {
             return false;
         }
@@ -524,12 +529,13 @@ impl NyaTermApp {
         event: CredentialAutofillMatchEvent,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self
-            .terminal
-            .assist
-            .credential_autofill_pending_request
-            .as_ref()
-            != Some(&event.key)
+        if !self.credential_autofill_enabled()
+            || self
+                .terminal
+                .assist
+                .credential_autofill_pending_request
+                .as_ref()
+                != Some(&event.key)
         {
             return false;
         }
@@ -548,7 +554,9 @@ impl NyaTermApp {
             CredentialAutofillAction::Send { target, kind } => {
                 self.terminal.assist.credential_autofill_pending = None;
                 self.terminal.assist.credential_autofill_buffer.clear();
-                self.terminal.assist.credential_autofill_recent.clear();
+                self.terminal
+                    .assist
+                    .remember_credential_prompt(kind, &event.key.prompt_text);
                 self.send_credential_value(&target, kind, &event.key.session_id, cx);
                 true
             }
@@ -585,7 +593,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
-        if session_id.is_empty() {
+        if !self.credential_autofill_enabled() || session_id.is_empty() {
             return;
         }
         if self.session.is_disconnected(session_id) {
@@ -598,6 +606,7 @@ impl NyaTermApp {
         if self.session.active_id() != Some(session_id) {
             self.activate_session_id_with_surface_sync(session_id, cx);
         }
+        let generation = self.terminal.assist.credential_autofill_generation;
         let credential_name = target.display_name();
         match (kind, target) {
             (CredentialPromptKind::Username, CredentialAutofillTarget::Vault(credential)) => {
@@ -622,6 +631,12 @@ impl NyaTermApp {
                         resolve_connection_password_from_store(store, &connection_id)
                     }),
                     move |this, event, cx| {
+                        if !this.terminal.assist.credential_fill_is_current(
+                            this.credential_autofill_enabled(),
+                            generation,
+                        ) {
+                            return;
+                        }
                         if this.session.active_id() != Some(session_id.as_str()) {
                             this.shell.set_status(
                                 "credential fill cancelled because the active session changed"
@@ -681,6 +696,12 @@ impl NyaTermApp {
                         store.load_decrypted_credential_by_id(&credential_id)
                     }),
                     move |this, event, cx| {
+                        if !this.terminal.assist.credential_fill_is_current(
+                            this.credential_autofill_enabled(),
+                            generation,
+                        ) {
+                            return;
+                        }
                         if this.session.active_id() != Some(session_id.as_str()) {
                             this.shell.set_status(
                                 "credential fill cancelled because the active session changed"
@@ -743,6 +764,9 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.credential_autofill_enabled() {
+            return false;
+        }
         let Some(state) = self.terminal.assist.credential_suggestions.clone() else {
             return false;
         };
@@ -761,6 +785,9 @@ impl NyaTermApp {
         target: CredentialAutofillTarget,
         cx: &mut Context<Self>,
     ) {
+        if !self.credential_autofill_enabled() {
+            return;
+        }
         let Some(state) = self.terminal.assist.credential_suggestions.clone() else {
             return;
         };
@@ -790,7 +817,9 @@ impl NyaTermApp {
         }
         self.terminal.assist.credential_autofill_sending = false;
         self.terminal.assist.credential_suggestions = None;
-        self.terminal.assist.credential_autofill_recent.clear();
+        self.terminal
+            .assist
+            .remember_credential_prompt(state.kind, &state.prompt_text);
 
         if was_username {
             // Keep buffer so a password prompt that arrived during selection can still be detected.
@@ -799,7 +828,6 @@ impl NyaTermApp {
             }
         } else {
             self.terminal.assist.credential_autofill_buffer.clear();
-            self.terminal.assist.credential_autofill_recent.clear();
         }
         cx.notify();
     }
@@ -1204,15 +1232,21 @@ fn credential_autofill_prompt_text_from_snapshot(snapshot: &TerminalSnapshot) ->
 }
 
 fn credential_autofill_prompt_line_from_snapshot(snapshot: &TerminalSnapshot) -> Option<&str> {
+    credential_autofill_prompt_row_from_snapshot(snapshot).map(|row| row.text.as_str())
+}
+
+fn credential_autofill_prompt_row_from_snapshot(
+    snapshot: &TerminalSnapshot,
+) -> Option<&nyaterm_terminal::TerminalSnapshotRow> {
     if snapshot.cursor.row != usize::MAX {
-        return snapshot.line(snapshot.cursor.row);
+        return snapshot.row(snapshot.cursor.row);
     }
     snapshot
         .rows()
         .iter()
         .rev()
         .find(|row| !row.text.trim().is_empty())
-        .map(|row| row.text.as_str())
+        .map(AsRef::as_ref)
 }
 
 #[cfg(test)]
@@ -2189,5 +2223,161 @@ mod tests {
         assert_eq!(credential_suggestion_step_selection(None, 0, -1), None);
         assert_eq!(credential_suggestion_step_selection(Some(0), 1, 1), None);
         assert_eq!(credential_suggestion_step_selection(Some(0), 1, -1), None);
+    }
+    fn test_credential_target(id: &str) -> CredentialAutofillTarget {
+        use nyaterm_core::models::credentials::SavedCredential;
+        CredentialAutofillTarget::Vault(SavedCredential {
+            id: id.into(),
+            name: id.into(),
+            sort_order: 0,
+            username: "user".into(),
+            password: None,
+            has_password: true,
+            username_prompt_regex: None,
+            password_prompt_regex: Some("Password:".into()),
+            enabled: true,
+        })
+    }
+
+    #[test]
+    fn only_a_unique_precise_match_is_preselected() {
+        let root = TestConfigDir::new("nyaterm-credential-selection");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
+        cx.update_entity(&app, |app, cx| {
+            for (precise, count, expected) in [
+                (true, 1, Some(0)),
+                (true, 2, None),
+                (false, 1, None),
+                (false, 2, None),
+            ] {
+                let targets = (0..count)
+                    .map(|index| test_credential_target(&format!("c{index}")))
+                    .collect();
+                app.show_credential_panel(
+                    CredentialPromptKind::Password,
+                    targets,
+                    "Password:".into(),
+                    precise,
+                    cx,
+                );
+                assert_eq!(
+                    app.terminal
+                        .assist
+                        .credential_suggestions
+                        .as_ref()
+                        .unwrap()
+                        .selected_index,
+                    expected
+                );
+                if expected.is_none() {
+                    assert!(!app.apply_selected_credential_suggestion(cx));
+                }
+                app.dismiss_credential_suggestions(cx);
+            }
+        });
+    }
+
+    #[test]
+    fn disabling_autofill_cancels_the_password_pending_after_username_selection() {
+        let root = TestConfigDir::new("nyaterm-credential-toggle-pending");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
+        cx.update_entity(&app, |app, cx| {
+            let target = test_credential_target("c1");
+            app.show_credential_panel(
+                CredentialPromptKind::Username,
+                vec![target.clone()],
+                "Username:".into(),
+                true,
+                cx,
+            );
+            app.select_credential_suggestion(target, cx);
+            assert!(app.terminal.assist.credential_autofill_pending.is_some());
+            let generation = app.terminal.assist.credential_autofill_generation;
+            app.toggle_credential_autofill(cx);
+            assert!(
+                !app.settings
+                    .summary()
+                    .interaction_credential_autofill_enabled
+            );
+            assert!(app.terminal.assist.credential_autofill_pending.is_none());
+            assert!(app.terminal.assist.credential_suggestions.is_none());
+            app.terminal.assist.credential_autofill_buffer = "Password:".into();
+            assert!(!app.detect_credential_prompt(cx));
+            app.toggle_credential_autofill(cx);
+            assert!(
+                !app.terminal
+                    .assist
+                    .credential_fill_is_current(true, generation)
+            );
+        });
+    }
+
+    #[test]
+    fn disabled_autofill_rejects_pending_detection_and_late_match_events() {
+        use crate::models::{
+            CredentialAutofillMatchEvent, CredentialAutofillMatchOutcome,
+            CredentialAutofillMatchRequestKey, PendingCredentialAutofill,
+        };
+        let root = TestConfigDir::new("nyaterm-credential-disabled");
+        let mut cx = TestAppContext::single();
+        let app = app_with_account_backed_session(
+            &mut cx,
+            &root,
+            ssh_connection("root", Some(account_password_auth())),
+            "root",
+        );
+        cx.update_entity(&app, |app, cx| {
+            let key = CredentialAutofillMatchRequestKey {
+                request_id: 1,
+                session_id: SESSION_ID.into(),
+                prompt_text: "Password:".into(),
+            };
+            app.terminal.assist.credential_autofill_pending = Some(PendingCredentialAutofill {
+                session_id: SESSION_ID.into(),
+                credential_id: "c1".into(),
+                expires_at_ms: u64::MAX,
+            });
+            app.terminal.assist.credential_autofill_pending_request = Some(key.clone());
+            app.terminal.assist.credential_autofill_buffer = key.prompt_text.clone();
+            app.terminal.assist.credential_autofill_detection_pending = true;
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_credential_autofill_enabled = false;
+            app.settings.replace_summary(settings);
+            assert!(!app.detect_credential_prompt(cx));
+            assert!(!app.apply_credential_autofill_match_event(
+                CredentialAutofillMatchEvent {
+                    key: key.clone(),
+                    outcome: CredentialAutofillMatchOutcome::AutoFill {
+                        credential: test_credential_target("c1"),
+                        kind: CredentialPromptKind::Password
+                    },
+                },
+                cx
+            ));
+            assert!(!app.drain_pending_credential_autofill_detection(cx));
+            assert!(app.terminal.assist.credential_autofill_pending.is_none());
+            assert!(
+                app.terminal
+                    .assist
+                    .credential_autofill_pending_request
+                    .is_none()
+            );
+            app.toggle_credential_autofill(cx);
+            assert!(!app.apply_credential_autofill_match_event(
+                CredentialAutofillMatchEvent {
+                    key,
+                    outcome: CredentialAutofillMatchOutcome::Suggest {
+                        kind: CredentialPromptKind::Password,
+                        matches: vec![test_credential_target("c1")],
+                        clear_pending: true,
+                        precise: true
+                    },
+                },
+                cx
+            ));
+            assert!(app.terminal.assist.credential_suggestions.is_none());
+        });
     }
 }

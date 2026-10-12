@@ -894,10 +894,10 @@ mod tests {
         state.assist.command_suggestions_suppressed = true;
         state.assist.pending_command_history_entry = Some("git status".to_string());
         state.assist.credential_autofill_buffer = "login:".to_string();
-        state
-            .assist
-            .credential_autofill_recent
-            .insert("username:login:".to_string(), 42);
+        state.assist.credential_autofill_recent = Some((
+            nyaterm_core::CredentialPromptKind::Username,
+            "login:".to_string(),
+        ));
         state.assist.credential_autofill_sending = true;
         state.assist.credential_prompt_input_until_ms = 99;
         let search_generation = state.assist.command_suggestion_search_gen;
@@ -908,7 +908,7 @@ mod tests {
         assert!(!state.assist.command_suggestions_suppressed);
         assert!(state.assist.pending_command_history_entry.is_none());
         assert!(state.assist.credential_autofill_buffer.is_empty());
-        assert!(state.assist.credential_autofill_recent.is_empty());
+        assert!(state.assist.credential_autofill_recent.is_none());
         assert!(!state.assist.credential_autofill_sending);
         assert_eq!(state.assist.credential_prompt_input_until_ms, 0);
         assert_eq!(

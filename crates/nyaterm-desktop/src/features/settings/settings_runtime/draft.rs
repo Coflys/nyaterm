@@ -500,7 +500,7 @@ impl NyaTermApp {
                         .summary()
                         .interaction_credential_autofill_enabled
                     {
-                        this.dismiss_credential_suggestions(cx);
+                        this.cancel_credential_autofill(cx);
                     }
                     this.invalidate_terminal_cell_metrics(cx);
                     this.refresh_visible_terminal_surfaces(cx);
