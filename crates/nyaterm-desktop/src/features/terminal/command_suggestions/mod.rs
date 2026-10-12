@@ -1366,21 +1366,21 @@ pub(in crate::features) fn suggestion_overlay_position(
     let (cell_w, cell_h) = cell_size;
     let bounds_x = f32::from(bounds.origin.x);
     let bounds_y = f32::from(bounds.origin.y);
-    let bounds_height = f32::from(bounds.size.height);
     let base_x = bounds_x + pad_left + gutter + cursor_col as f32 * cell_w;
     let cursor_top = bounds_y + pad_top + cursor_row as f32 * cell_h;
     let cursor_bottom = cursor_top + cell_h;
     let (viewport_w, viewport_h) = viewport_size;
     let surface_top = bounds_y.max(SUGGESTION_OVERLAY_VIEWPORT_MARGIN);
-    let surface_bottom =
-        (bounds_y + bounds_height).min(viewport_h - SUGGESTION_OVERLAY_VIEWPORT_MARGIN);
-    if surface_bottom <= surface_top || menu_h <= 0.0 {
+    // Suggestions live in the window overlay, so panels below the terminal do
+    // not limit the available space. Keep the terminal bounds only as the anchor.
+    let overlay_bottom = viewport_h - SUGGESTION_OVERLAY_VIEWPORT_MARGIN;
+    if overlay_bottom <= surface_top || menu_h <= 0.0 {
         return None;
     }
 
     let below_y = cursor_bottom + SUGGESTION_OVERLAY_CURSOR_GAP;
     let above_bottom = cursor_top - SUGGESTION_OVERLAY_CURSOR_GAP;
-    let space_below = (surface_bottom - below_y).max(0.0);
+    let space_below = (overlay_bottom - below_y).max(0.0);
     let space_above = (above_bottom - surface_top).max(0.0);
     let (y, height) = if menu_h <= space_below {
         (below_y, menu_h)
@@ -1488,7 +1488,7 @@ mod overlay_position_tests {
                 cell_size: (8.0, 16.0),
                 content_origin: (0.0, 0.0),
                 gutter: 0.0,
-                viewport_size: (1024.0, 768.0),
+                viewport_size: (1024.0, 280.0),
             },
             SuggestionOverlayTarget {
                 cursor: (6, 4),
@@ -1503,7 +1503,7 @@ mod overlay_position_tests {
     }
 
     #[test]
-    fn suggestion_overlay_position_uses_terminal_surface_bottom() {
+    fn suggestion_overlay_position_uses_space_below_terminal_surface() {
         let placement = suggestion_overlay_position(
             SuggestionOverlayGeometry {
                 bounds: Bounds::new(point(px(20.0), px(100.0)), size(px(600.0), px(200.0))),
@@ -1513,15 +1513,36 @@ mod overlay_position_tests {
                 viewport_size: (1024.0, 768.0),
             },
             SuggestionOverlayTarget {
-                cursor: (8, 4),
-                menu_size: (300.0, 120.0),
+                cursor: (11, 4),
+                menu_size: (380.0, 320.0),
             },
         )
-        .expect("surface has room above but not below the cursor");
+        .expect("window has room below the terminal over the bottom panel");
 
-        assert_eq!(placement.y, 104.0);
-        assert_eq!(placement.height, 120.0);
-        assert_eq!(placement.y + placement.height, 224.0);
+        assert_eq!(placement.y, 296.0);
+        assert_eq!(placement.height, 320.0);
+    }
+
+    #[test]
+    fn suggestion_overlay_position_limits_height_at_window_bottom() {
+        let placement = suggestion_overlay_position(
+            SuggestionOverlayGeometry {
+                bounds: Bounds::new(point(px(20.0), px(100.0)), size(px(600.0), px(120.0))),
+                cell_size: (8.0, 16.0),
+                content_origin: (0.0, 0.0),
+                gutter: 0.0,
+                viewport_size: (1024.0, 330.0),
+            },
+            SuggestionOverlayTarget {
+                cursor: (6, 4),
+                menu_size: (300.0, 140.0),
+            },
+        )
+        .expect("window has more room below the cursor than above");
+
+        assert_eq!(placement.y, 216.0);
+        assert_eq!(placement.height, 106.0);
+        assert_eq!(placement.y + placement.height, 322.0);
     }
 
     #[test]
