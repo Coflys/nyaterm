@@ -495,6 +495,13 @@ impl NyaTermApp {
                     {
                         this.terminal.clear_command_tracking();
                     }
+                    if !this
+                        .settings
+                        .summary()
+                        .interaction_credential_autofill_enabled
+                    {
+                        this.cancel_credential_autofill(cx);
+                    }
                     this.invalidate_terminal_cell_metrics(cx);
                     this.refresh_visible_terminal_surfaces(cx);
                     this.shell.clear_settings_draft_snapshot();

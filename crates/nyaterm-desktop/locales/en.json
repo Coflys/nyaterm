@@ -2236,6 +2236,8 @@
     "viewPrivateKey": "View private key",
     "commandSuggestions": "Suggestions",
     "commandSuggestionsDesc": "Show suggestions from history and built-in commands.",
+    "credentialAutofill": "Credential suggestions",
+    "credentialAutofillDesc": "Offer saved credentials when a terminal prompt asks for them.",
     "commandSuggestionsMaxChars": "Max History Length",
     "commandSuggestionsMaxCharsDesc": "Only include history entries whose command length does not exceed this limit. Quick commands are unaffected.",
     "commandSuggestionsMinChars": "Min History Length",

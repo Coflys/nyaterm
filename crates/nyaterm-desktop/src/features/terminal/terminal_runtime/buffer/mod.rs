@@ -974,6 +974,12 @@ impl NyaTermApp {
         }
         self.observe_recording_prompt_output(&session_id, &visible_text);
         let is_active = self.session.active_id() == Some(session_id.as_str());
+        if is_active
+            && accepted_bytes > 0
+            && self.terminal.assist.observe_credential_prompt_output()
+        {
+            cx.notify();
+        }
         let presentation = TerminalPresentation::resolve(
             is_active,
             self.terminal_session_has_visible_surface(&session_id),

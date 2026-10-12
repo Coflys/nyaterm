@@ -1902,6 +1902,7 @@ forward_app_action!(
     toggle_cloud_sync_enabled,
     toggle_command_suggestions,
     toggle_confirm_on_close,
+    toggle_credential_autofill,
     toggle_cursor_blink,
     toggle_bold_default_foreground,
     toggle_docker_manager_panel,

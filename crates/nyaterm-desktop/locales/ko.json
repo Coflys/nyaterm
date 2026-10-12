@@ -2236,6 +2236,8 @@
     "viewPrivateKey": "개인 키 보기",
     "commandSuggestions": "제안",
     "commandSuggestionsDesc": "기록 및 내장 명령의 제안을 표시합니다.",
+    "credentialAutofill": "자격 증명 제안",
+    "credentialAutofillDesc": "터미널이 자격 증명을 요청하면 저장된 자격 증명을 제안합니다.",
     "commandSuggestionsMaxChars": "최대 기록 길이",
     "commandSuggestionsMaxCharsDesc": "명령 길이가 이 한도를 넘지 않는 기록 항목만 포함합니다. 빠른 명령에는 영향이 없습니다.",
     "commandSuggestionsMinChars": "최소 기록 길이",

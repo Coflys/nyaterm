@@ -3232,6 +3232,8 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(summary.interaction_allow_osc52_clipboard_write);
     assert!(!summary.interaction_terminal_zoom_enabled);
     assert!(!summary.interaction_command_suggestions_enabled);
+    // The stored fixture predates the field, so it must default on.
+    assert!(summary.interaction_credential_autofill_enabled);
     assert_eq!(summary.interaction_command_suggestion_min_chars, 3);
     assert_eq!(summary.interaction_command_suggestion_max_chars, 80);
     assert_eq!(summary.interaction_word_separators, " .,:");
@@ -3665,6 +3667,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     interaction_update.interaction_duplicate_session_command_delay_ms = 2_500;
     interaction_update.interaction_allow_osc52_clipboard_write = false;
     interaction_update.interaction_terminal_zoom_enabled = true;
+    interaction_update.interaction_credential_autofill_enabled = false;
     interaction_update.interaction_alt_as_meta = false;
     interaction_update.interaction_tab_double_click_action = "reconnect_session".to_string();
     interaction_update.interaction_default_encoding = "utf-8".to_string();
@@ -3686,6 +3689,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     );
     assert!(!saved_interaction.interaction_allow_osc52_clipboard_write);
     assert!(saved_interaction.interaction_terminal_zoom_enabled);
+    assert!(!saved_interaction.interaction_credential_autofill_enabled);
     assert!(!saved_interaction.interaction_alt_as_meta);
     assert_eq!(
         saved_interaction.interaction_tab_double_click_action,

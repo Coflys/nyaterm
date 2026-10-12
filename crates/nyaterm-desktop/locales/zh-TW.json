@@ -2236,6 +2236,8 @@
     "viewPrivateKey": "檢視私鑰",
     "commandSuggestions": "聯想補全",
     "commandSuggestionsDesc": "輸入命令時顯示基於歷史記錄和內建命令的聯想補全建議。",
+    "credentialAutofill": "憑證聯想",
+    "credentialAutofillDesc": "當終端提示輸入憑證時，提供已儲存的憑證建議。",
     "commandSuggestionsMaxChars": "歷史記錄最大字數限制",
     "commandSuggestionsMaxCharsDesc": "僅將命令長度不超過該字數的歷史記錄納入聯想補全候選，快捷命令不受影響。",
     "commandSuggestionsMinChars": "歷史記錄最小字數限制",

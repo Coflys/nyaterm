@@ -385,6 +385,11 @@ impl ConnectionStore {
                 &["interaction", "command_suggestions_enabled"],
                 true,
             ),
+            interaction_credential_autofill_enabled: json_bool(
+                &value,
+                &["interaction", "credential_autofill_enabled"],
+                true,
+            ),
             interaction_command_suggestion_min_chars: json_u32(
                 &value,
                 &["interaction", "command_suggestion_min_chars"],
@@ -1372,6 +1377,11 @@ impl ConnectionStore {
             &mut value,
             &["interaction", "command_suggestions_enabled"],
             serde_json::Value::Bool(settings.interaction_command_suggestions_enabled),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["interaction", "credential_autofill_enabled"],
+            serde_json::Value::Bool(settings.interaction_credential_autofill_enabled),
         );
         set_nested_json_value(
             &mut value,
