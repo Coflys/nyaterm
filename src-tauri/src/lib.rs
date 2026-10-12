@@ -283,6 +283,8 @@ pub fn run() {
             cmd::session::list_serial_ports,
             cmd::session::write_to_session,
             cmd::session::write_bytes_to_session,
+            cmd::session::get_session_encoding,
+            cmd::session::set_session_encoding,
             cmd::session::set_session_output_paused,
             cmd::session::ack_session_output,
             cmd::session::resize_session,
