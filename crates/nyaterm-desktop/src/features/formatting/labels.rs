@@ -353,7 +353,7 @@ pub(in crate::features) fn terminal_gutter_labels(
     timestamp_formatter: &TerminalTimestampFormatter,
 ) -> TerminalGutterLabels {
     let wrapped = row.is_some_and(|row| row.wrapped);
-    let timestamp = if show_timestamps && !wrapped {
+    let timestamp = if show_timestamps {
         row.and_then(|row| row.timestamp_ms)
             .map(|timestamp| timestamp_formatter.format(timestamp))
             .unwrap_or_else(|| " ".repeat(timestamp_formatter.width_chars()))
@@ -644,16 +644,89 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_continuation_has_no_duplicate_gutter_labels() {
+    fn soft_wrapped_output_shows_timestamps_on_every_row_and_preserves_line_numbers() {
+        let formatter = TerminalTimestampFormatter::new("HH:mm:ss");
+
+        for output in [b"abcdefgh".as_slice(), b"abcdefghijkl".as_slice()] {
+            let row_count = output.len() / 4;
+            let mut terminal = TerminalScreen::new(4, row_count as u16);
+            terminal.advance(output);
+            let snapshot = terminal.snapshot();
+
+            for row_index in 0..row_count {
+                let row = snapshot.row(row_index).expect("output row");
+                assert_eq!(row.wrapped, row_index > 0);
+                let timestamp = row.timestamp_ms.expect("output timestamp");
+                let labels =
+                    terminal_gutter_labels(Some(row), 37 + row_index, true, true, 3, &formatter);
+
+                assert_eq!(labels.timestamp, formatter.format(timestamp));
+                assert_eq!(labels.line_number, if row_index == 0 { " 37" } else { "" });
+            }
+        }
+    }
+
+    #[test]
+    fn wrapped_gutter_labels_use_each_rows_existing_timestamp() {
+        let mut terminal = TerminalScreen::new(4, 3);
+        terminal.advance(b"abcdefghijkl");
+        let snapshot = terminal.snapshot();
+        let formatter = TerminalTimestampFormatter::new("HH:mm:ss.SSS");
+
+        for (row_index, timestamp) in [123, 123, 1_123].into_iter().enumerate() {
+            let mut row = snapshot.row(row_index).expect("output row").clone();
+            row.timestamp_ms = Some(timestamp);
+            let labels =
+                terminal_gutter_labels(Some(&row), row_index + 1, true, true, 1, &formatter);
+
+            assert_eq!(labels.timestamp, formatter.format(timestamp));
+            assert_eq!(labels.line_number, if row_index == 0 { "1" } else { "" });
+        }
+    }
+
+    #[test]
+    fn wrapped_gutter_labels_respect_independent_switches_and_missing_timestamps() {
         let mut terminal = TerminalScreen::new(4, 2);
         terminal.advance(b"abcdefgh");
         let snapshot = terminal.snapshot();
-        assert!(snapshot.row(1).is_some_and(|row| row.wrapped));
-        let formatter = TerminalTimestampFormatter::new("HH:mm:ss");
+        let mut row = snapshot.row(1).expect("wrapped row").clone();
+        assert!(row.wrapped);
+        let formatter = TerminalTimestampFormatter::new("HH:mm:ss.SSS");
 
-        let labels = terminal_gutter_labels(snapshot.row(1), 2, true, true, 1, &formatter);
+        for timestamp in [None, Some(123)] {
+            row.timestamp_ms = timestamp;
+            for show_timestamps in [false, true] {
+                for show_line_numbers in [false, true] {
+                    for snapshot_row in [None, snapshot.row(0), Some(&row)] {
+                        let labels = terminal_gutter_labels(
+                            snapshot_row,
+                            2,
+                            show_timestamps,
+                            show_line_numbers,
+                            3,
+                            &formatter,
+                        );
+                        let expected_timestamp = if show_timestamps {
+                            snapshot_row
+                                .and_then(|row| row.timestamp_ms)
+                                .map(|timestamp| formatter.format(timestamp))
+                                .unwrap_or_else(|| " ".repeat(formatter.width_chars()))
+                        } else {
+                            String::new()
+                        };
 
-        assert!(labels.timestamp.is_empty());
-        assert!(labels.line_number.is_empty());
+                        assert_eq!(labels.timestamp, expected_timestamp);
+                        assert_eq!(
+                            labels.line_number,
+                            if show_line_numbers && !snapshot_row.is_some_and(|row| row.wrapped) {
+                                "  2"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                }
+            }
+        }
     }
 }
