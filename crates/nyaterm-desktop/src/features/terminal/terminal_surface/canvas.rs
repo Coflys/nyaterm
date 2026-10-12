@@ -12,7 +12,8 @@ use nyaterm_ui::{NyaContextMenu, NyaCopy, NyaPaste, NyaSelectAll};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{
-    TerminalTimestampFormatter, terminal_gutter_labels, terminal_timestamp_format_width_chars,
+    TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
+    terminal_timestamp_format_width_chars,
 };
 use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
 use crate::features::terminal::terminal_selection_runtime::{
@@ -520,7 +521,8 @@ impl NyaTermApp {
                 .mr(px(10.))
                 .border_r_1()
                 .border_color(rgb(palette.border));
-            for line_index in 0..line_count {
+            let gutter_row_count = terminal_gutter_row_count(snapshot.as_ref());
+            for line_index in 0..line_count.min(gutter_row_count) {
                 let snapshot_row = snapshot.row(line_index);
                 let labels = terminal_gutter_labels(
                     snapshot_row,

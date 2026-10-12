@@ -344,6 +344,41 @@ pub(in crate::features) struct TerminalGutterLabels {
     pub line_number: String,
 }
 
+pub(in crate::features) fn terminal_gutter_row_count(
+    snapshot: &nyaterm_terminal::TerminalSnapshot,
+) -> usize {
+    let row_count = snapshot.row_count();
+    let absolute_start = snapshot
+        .total_rows
+        .saturating_sub(snapshot.display_offset)
+        .saturating_sub(row_count);
+    // Historical blank lines are output, not unused screen space. Skip them so
+    // this scan stays bounded by the live screen even in a large retained window.
+    let history_rows = snapshot
+        .scrollback_len
+        .saturating_sub(absolute_start)
+        .min(row_count);
+    let cursor_rows = snapshot
+        .cursor
+        .row
+        .checked_add(1)
+        .filter(|end| *end <= row_count)
+        .unwrap_or(0);
+    let retained_rows = history_rows.max(cursor_rows);
+    let content_rows = snapshot.rows()[retained_rows..]
+        .iter()
+        .rposition(|row| !row.text.is_empty() || row.wrapped)
+        .map_or(retained_rows, |row| retained_rows + row + 1);
+    let image_rows = snapshot
+        .images
+        .iter()
+        .filter(|image| image.height_cells > 0)
+        .map(|image| image.row.saturating_add(image.height_cells))
+        .max()
+        .unwrap_or(0);
+    content_rows.max(image_rows).min(row_count)
+}
+
 pub(in crate::features) fn terminal_gutter_labels(
     row: Option<&nyaterm_terminal::TerminalSnapshotRow>,
     absolute_line_number: usize,
@@ -592,8 +627,91 @@ mod tests {
 
     use super::{
         TerminalTimestampFormatter, format_history_timestamp_ms, terminal_gutter_labels,
-        terminal_timestamp_format_width_chars,
+        terminal_gutter_row_count, terminal_timestamp_format_width_chars,
     };
+
+    #[test]
+    fn gutter_omits_unused_screen_rows_even_when_they_have_timestamps() {
+        let mut terminal = TerminalScreen::new(10, 6);
+        terminal.advance(b"first\r\n\r\n# ");
+        let snapshot = terminal.snapshot();
+
+        assert!(snapshot.row(5).unwrap().text.is_empty());
+        assert!(snapshot.row(5).unwrap().timestamp_ms.is_some());
+        assert_eq!(snapshot.cursor.row, 2);
+        assert!(snapshot.row(1).unwrap().text.is_empty());
+        assert_eq!(terminal_gutter_row_count(&snapshot), 3);
+    }
+
+    #[test]
+    fn gutter_keeps_blank_cursor_row_even_when_cursor_paint_is_disabled() {
+        let mut terminal = TerminalScreen::new(10, 6);
+        terminal.advance(b"first\r\n\r\n\x1b[?25l");
+        let snapshot = terminal.snapshot();
+
+        assert!(!snapshot.cursor.visible);
+        assert!(snapshot.row(2).unwrap().text.is_empty());
+        assert_eq!(terminal_gutter_row_count(&snapshot), 3);
+    }
+
+    #[test]
+    fn gutter_keeps_output_below_cursor_and_trims_resized_or_cleared_screen_padding() {
+        let mut terminal = TerminalScreen::new(10, 6);
+        terminal.advance(b"first\r\n\r\n\x1b]133;A\x07last\x1b]133;B\x07\x1b[H");
+        let snapshot = terminal.snapshot();
+        assert_eq!(snapshot.cursor.row, 0);
+        assert_eq!(terminal_gutter_row_count(&snapshot), 3);
+
+        terminal.resize(10, 12);
+        assert_eq!(terminal_gutter_row_count(&terminal.snapshot()), 3);
+
+        terminal.advance(b"\x1b[2J\x1b[H");
+        assert_eq!(terminal_gutter_row_count(&terminal.snapshot()), 1);
+    }
+
+    #[test]
+    fn gutter_keeps_soft_wrapped_output_and_omits_rows_after_it() {
+        let mut terminal = TerminalScreen::new(4, 6);
+        terminal.advance(b"abcdefghijkl");
+        let snapshot = terminal.snapshot();
+
+        assert!(snapshot.row(2).unwrap().wrapped);
+        assert_eq!(terminal_gutter_row_count(&snapshot), 3);
+    }
+
+    #[test]
+    fn gutter_preserves_blank_history_in_large_prefetched_windows() {
+        let mut terminal = TerminalScreen::new(10, 6);
+        for _ in 0..1_000 {
+            terminal.advance(b"\r\n");
+        }
+        let history = terminal.viewport_snapshot(terminal.scrollback_len());
+        assert_eq!(history.cursor.row, usize::MAX);
+        assert!(history.rows().iter().all(|row| row.text.is_empty()));
+        assert_eq!(terminal_gutter_row_count(&history), history.row_count());
+
+        terminal.advance(b"\x1b[2J\x1b[H# ");
+        let prefetched = terminal.viewport_snapshot_with_window(0, terminal.scrollback_len(), 0);
+        assert!(prefetched.row_count() > 900);
+        assert_eq!(
+            terminal_gutter_row_count(&prefetched),
+            prefetched.cursor.row + 1
+        );
+        let scrolled = terminal.viewport_snapshot(1);
+        assert_eq!(scrolled.cursor.row, usize::MAX);
+        assert_eq!(terminal_gutter_row_count(&scrolled), 2);
+    }
+
+    #[test]
+    fn gutter_keeps_rows_occupied_by_inline_images_without_text() {
+        let mut terminal = TerminalScreen::new(10, 6);
+        terminal.advance(b"\x1b[4;1H\x1b_Ga=T,i=9,c=1,r=2;QUI=\x1b\\\x1b[H");
+        let snapshot = terminal.snapshot();
+
+        assert_eq!(snapshot.images.len(), 1);
+        assert!(snapshot.rows().iter().all(|row| row.text.is_empty()));
+        assert_eq!(terminal_gutter_row_count(&snapshot), 5);
+    }
 
     #[test]
     fn terminal_timestamp_milliseconds_follow_format_tokens_only() {

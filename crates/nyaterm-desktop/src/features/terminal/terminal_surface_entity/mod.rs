@@ -6,7 +6,8 @@ use nyaterm_terminal::{TerminalLineId, TerminalScreen, TerminalSnapshot};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{
-    TerminalTimestampFormatter, terminal_gutter_labels, terminal_timestamp_format_width_chars,
+    TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
+    terminal_timestamp_format_width_chars,
 };
 use crate::features::terminal::terminal_runtime::{
     TerminalScrollVisualState, TerminalScrollWheelStateResult, terminal_display_offset_from_state,
@@ -2658,7 +2659,8 @@ impl Render for TerminalSurface {
                 .top(px(gutter_y_offset))
                 .flex()
                 .flex_col();
-            for line_index in visible_gutter_rows {
+            let gutter_row_count = terminal_gutter_row_count(snapshot.as_ref());
+            for line_index in visible_gutter_rows.take_while(|row| *row < gutter_row_count) {
                 let snapshot_row = snapshot.row(line_index);
                 let zebra_color = zebra_stripes_visible
                     .then(|| {
