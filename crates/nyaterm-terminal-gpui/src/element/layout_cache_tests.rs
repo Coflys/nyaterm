@@ -23,8 +23,9 @@ use super::{
 use crate::glyphs::CellGlyph;
 use crate::keywords::{
     TerminalKeywordHighlightLookup, compile_terminal_keyword_highlighter,
-    precompute_terminal_input_highlights, precompute_terminal_keyword_highlights,
-    terminal_keyword_row_reuse_keys, terminal_keyword_rules_key,
+    precompute_terminal_input_highlights, precompute_terminal_input_highlights_reusing,
+    precompute_terminal_keyword_highlights, terminal_keyword_row_reuse_keys,
+    terminal_keyword_rules_key,
 };
 use crate::paint::{
     apply_action_link_ranges, flatten_highlight_spans, terminal_highlight_spans_with_keyword_ranges,
@@ -1490,11 +1491,27 @@ fn paired_input_colors_override_late_batches_and_reuse_the_final_layout() {
         palette,
         None,
     ));
-    for echo in [b"s".as_slice(), b"\x08 \x08", b"\x08 \x08"] {
+    let mut previous_input = None;
+    for echo in [
+        b"s".as_slice(),
+        b"\x08 \x08",
+        b"\x08 \x08",
+        b"\r\n$ ",
+        b"\r\n$ ",
+        b"\r\n$ ",
+        b"\r\n$ ",
+    ] {
         screen.advance(echo);
-        let snapshot = Arc::new(screen.snapshot());
-        let input =
-            Arc::new(precompute_terminal_input_highlights(&snapshot, &highlighter).unwrap());
+        let snapshot = Arc::new(screen.viewport_snapshot(0));
+        let input = Arc::new(
+            precompute_terminal_input_highlights_reusing(
+                &snapshot,
+                &highlighter,
+                previous_input.as_deref(),
+            )
+            .unwrap(),
+        );
+        previous_input = Some(input.clone());
         let final_batch = Arc::new(precompute_terminal_keyword_highlights(
             &snapshot,
             &highlighter,
@@ -1521,24 +1538,30 @@ fn paired_input_colors_override_late_batches_and_reuse_the_final_layout() {
             .with_keyword_highlights(old.clone())
             .with_input_keyword_highlights(input);
         let complete = make_element().with_keyword_highlights(final_batch);
-        let row = snapshot.cursor.row;
-        let reuse_key = terminal_keyword_row_reuse_keys(&snapshot)[row];
-        assert_eq!(
-            pending
-                .keyword_highlight_lookup(row, reuse_key)
-                .unwrap()
-                .ranges(),
-            complete
-                .keyword_highlight_lookup(row, reuse_key)
-                .unwrap()
-                .ranges()
-        );
         let style_key = pending.paint_style_key(pending.keyword_rules_key());
         let empty_key = pending.paint_style_key(0);
-        assert_eq!(
-            pending.row_layout_cache_keys(row, style_key, empty_key, reuse_key),
-            complete.row_layout_cache_keys(row, style_key, empty_key, reuse_key)
-        );
+        for (row, reuse_key) in terminal_keyword_row_reuse_keys(&snapshot)
+            .into_iter()
+            .enumerate()
+        {
+            if !snapshot.row(row).unwrap().text.starts_with('$') {
+                continue;
+            }
+            assert_eq!(
+                pending
+                    .keyword_highlight_lookup(row, reuse_key)
+                    .unwrap()
+                    .ranges(),
+                complete
+                    .keyword_highlight_lookup(row, reuse_key)
+                    .unwrap()
+                    .ranges()
+            );
+            assert_eq!(
+                pending.row_layout_cache_keys(row, style_key, empty_key, reuse_key),
+                complete.row_layout_cache_keys(row, style_key, empty_key, reuse_key)
+            );
+        }
     }
 }
 

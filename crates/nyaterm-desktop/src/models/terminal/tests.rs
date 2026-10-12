@@ -89,6 +89,55 @@ fn frame_worker_publishes_input_colors_with_each_echo_and_obeys_rule_changes() {
 }
 
 #[test]
+fn frame_worker_keeps_prior_prompt_colors_when_returns_arrive_before_keyword_batches() {
+    let mut recording = RecordingWritePipeline::spawn(4096);
+    let mut pipeline = TerminalFramePipeline::spawn(recording.writer());
+    let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true)
+        .into_iter()
+        .filter(|rule| rule.id == "builtin-prompt")
+        .collect();
+    pipeline.set_keyword_rules(Arc::new(rules));
+    for echo in [
+        "[root@host dir]# ",
+        "\r",
+        "\n",
+        "[root@host dir]# ",
+        "\r\n[root@host dir]# ",
+        "\r\n[root@host dir]# ",
+    ] {
+        pipeline.submit_outputs(vec![TerminalFrameOutputSubmission {
+            session_id: "s1".into(),
+            data: echo.as_bytes().to_vec(),
+            encoding: "UTF-8".into(),
+            scrollback_limit: 100,
+            raw_already_captured: true,
+        }]);
+        pipeline.finish_pending_output().unwrap();
+        let mut events = VecDeque::new();
+        pipeline.drain_events_into(&mut events, usize::MAX);
+        let TerminalFrameEvent::Output(frame) = events.pop_front().unwrap() else {
+            panic!("output frame");
+        };
+        let snapshot = frame.snapshot.unwrap();
+        let input = frame.input_highlights.unwrap();
+        let mut prompts = 0;
+        for (row, source) in snapshot.rows().iter().enumerate() {
+            if source.text.starts_with("[root@host dir]#") {
+                assert!(input.matches_snapshot_rows(
+                    &snapshot,
+                    nyaterm_ui::theme_palette("github-dark"),
+                    row..row + 1,
+                ));
+                prompts += 1;
+            }
+        }
+        assert_eq!(input.range_count(), prompts);
+    }
+    pipeline.shutdown();
+    recording.shutdown();
+}
+
+#[test]
 fn line_number_gutter_keeps_high_water_width_after_scrollback_prunes() {
     let mut view = TerminalViewState::new();
     let mut snapshot = TerminalScreen::default().viewport_snapshot(0);

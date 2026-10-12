@@ -736,11 +736,21 @@ fn shell_word_end(line: &str, start: usize, end: usize) -> usize {
 }
 
 pub(super) fn fallback_prompt(line: &str) -> Option<(usize, usize)> {
-    // Bare prompt signs or a single conventional user@host/path prefix only.
+    // Bare signs, user@host:path, or the conventional [user@host directory] sign.
     // Avoid interpreting arbitrary log text containing '$', '#' or '>' as input.
     let trimmed = line.trim_start();
     let prefix = line.len() - trimmed.len();
-    let first = trimmed.split_whitespace().next()?;
+    let first = if let Some(bracketed) = trimmed.strip_prefix('[') {
+        let (prefix, _) = bracketed.split_once(']')?;
+        let host = prefix.split_whitespace().next()?;
+        let (user, host) = host.split_once('@')?;
+        if user.is_empty() || host.is_empty() {
+            return None;
+        }
+        trimmed.get(..prefix.len() + 3)?
+    } else {
+        trimmed.split_whitespace().next()?
+    };
     let sign = first.as_bytes().last().copied()?;
     if !matches!(sign, b'$' | b'#' | b'>' | b'%') || !(first.len() == 1 || first.contains('@')) {
         return None;

@@ -87,10 +87,21 @@ impl std::fmt::Debug for TerminalKeywordHighlightSnapshot {
 
 /// Prepare the live input logical line before its frame is published. Call this
 /// on the frame worker, never from rendering or a GPUI update callback. Output,
-/// completion pages and pathological input retain the ordinary batch path.
+/// completion pages and pathological input retain the ordinary batch path;
+/// the adjacent input line is also prepared when the cursor leaves it.
 pub fn precompute_terminal_input_highlights(
     snapshot: &TerminalSnapshot,
     highlighter: &TerminalKeywordHighlighter,
+) -> Option<TerminalKeywordHighlightSnapshot> {
+    precompute_terminal_input_highlights_reusing(snapshot, highlighter, None)
+}
+
+/// Retain unchanged input rows across frames, including viewport scrolling, and
+/// prepare the just-submitted line before publishing its first output frame.
+pub fn precompute_terminal_input_highlights_reusing(
+    snapshot: &TerminalSnapshot,
+    highlighter: &TerminalKeywordHighlighter,
+    previous: Option<&TerminalKeywordHighlightSnapshot>,
 ) -> Option<TerminalKeywordHighlightSnapshot> {
     const MAX_INPUT_ROWS: usize = 16;
     const MAX_INPUT_BYTES: usize = 16 * 1024;
@@ -98,24 +109,52 @@ pub fn precompute_terminal_input_highlights(
     if snapshot.display_offset != 0 {
         return None;
     }
-    let cursor_row = snapshot.row(snapshot.cursor.row)?;
-    let group = terminal_keyword_wrapped_group_bounds(snapshot, snapshot.cursor.row);
-    if group.oversized || group.end - group.start > MAX_INPUT_ROWS {
-        return None;
-    }
-    let rows = &snapshot.rows()[group.start..group.end];
-    if rows
-        .iter()
-        .map(|row| terminal_keyword_row_bytes(row))
-        .sum::<usize>()
-        > MAX_INPUT_BYTES
+    snapshot.row(snapshot.cursor.row)?;
+    let current = terminal_keyword_wrapped_group_bounds(snapshot, snapshot.cursor.row);
+    let mut requested = current.start..current.start;
+    let mut input_rows = 0;
+    let mut input_bytes = 0;
+    // CR/LF and the next prompt may arrive in separate packets. The previous
+    // logical line must keep its colors even while the cursor is on a blank row.
+    for group in [
+        Some(current),
+        (current.start > 0)
+            .then(|| terminal_keyword_wrapped_group_bounds(snapshot, current.start - 1)),
+    ]
+    .into_iter()
+    .flatten()
     {
+        let rows = &snapshot.rows()[group.start..group.end];
+        let bytes = rows
+            .iter()
+            .map(|row| terminal_keyword_row_bytes(row))
+            .sum::<usize>();
+        if group.oversized
+            || input_rows + rows.len() > MAX_INPUT_ROWS
+            || input_bytes + bytes > MAX_INPUT_BYTES
+            || !terminal_keyword_group_is_input(rows)
+        {
+            continue;
+        }
+        input_rows += rows.len();
+        input_bytes += bytes;
+        requested.start = requested.start.min(group.start);
+        requested.end = requested.end.max(group.end);
+    }
+    let previous = previous.filter(|previous| previous.rules_key == highlighter.rules_key);
+    if requested.is_empty() && previous.is_none() {
         return None;
     }
-    let integrated_input = cursor_row.shell_input
-        == Some(nyaterm_terminal::ShellInputLineKind::Active)
-        && cursor_row.shell_input_columns.is_some();
-    let fallback_input = !rows.iter().any(|row| row.shell_integration) && !rows[0].wrapped && {
+    let (highlights, _) =
+        precompute_keyword_rows(snapshot, highlighter, previous, requested, || false)?;
+    (highlights.known_row_count() > 0).then_some(highlights)
+}
+
+fn terminal_keyword_group_is_input(rows: &[Arc<TerminalSnapshotRow>]) -> bool {
+    if rows.iter().any(|row| row.shell_input_columns.is_some()) {
+        return true;
+    }
+    !rows.iter().any(|row| row.shell_integration) && !rows[0].wrapped && {
         // Row text trims trailing blanks. Preserve the actual cells so an
         // empty "$ " prompt still publishes a known-empty input result.
         let line = rows[0]
@@ -131,14 +170,7 @@ pub fn precompute_terminal_input_highlights(
             })
             .collect::<String>();
         fallback_prompt(&line).is_some()
-    };
-    if !integrated_input && !fallback_input {
-        return None;
     }
-    precompute_keyword_rows(snapshot, highlighter, None, group.start..group.end, || {
-        false
-    })
-    .map(|(highlights, _)| highlights)
 }
 
 pub(super) enum TerminalKeywordHighlightLookup<'a> {

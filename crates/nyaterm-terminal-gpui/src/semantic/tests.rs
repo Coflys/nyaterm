@@ -8,7 +8,7 @@ use nyaterm_terminal::{ShellInputLineKind, TerminalScreen, TerminalSnapshot};
 use super::{SemanticContext, SemanticHighlighter};
 use crate::keywords::{
     compile_terminal_keyword_highlighter, parse_hex_rgb, precompute_terminal_input_highlights,
-    precompute_terminal_keyword_highlights,
+    precompute_terminal_input_highlights_reusing, precompute_terminal_keyword_highlights,
     precompute_terminal_keyword_highlights_for_rows_with_stats,
     precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel,
 };
@@ -109,10 +109,7 @@ fn input_frames_preserve_wrapped_unicode_and_user_rule_priority() {
 #[test]
 fn input_frames_skip_output_completion_pages_scrollback_and_oversized_lines() {
     let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true));
-    for output in [
-        "plain output",
-        "\x1b]133;A\x07$ \x1b]133;B\x07ls\r\ncompletion list",
-    ] {
+    for output in ["plain output", "plain output\r\ncompletion list"] {
         let mut screen = TerminalScreen::new(40, 3);
         screen.advance(output.as_bytes());
         assert!(precompute_terminal_input_highlights(&screen.snapshot(), &highlighter).is_none());
@@ -128,6 +125,105 @@ fn input_frames_skip_output_completion_pages_scrollback_and_oversized_lines() {
     let mut screen = TerminalScreen::new(17000, 2);
     screen.advance(b"$ ls");
     assert!(precompute_terminal_input_highlights(&screen.snapshot(), &highlighter).is_none());
+}
+
+#[test]
+fn submitted_prompt_colors_survive_split_returns_and_repeated_viewport_scrolling() {
+    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true));
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    for integrated in [false, true] {
+        for command in ["", "ls -a"] {
+            let mut screen = TerminalScreen::new(40, 3);
+            let prompt = if integrated {
+                "\x1b]133;A\x07[root@host dir]# \x1b]133;B\x07"
+            } else {
+                "[root@host dir]# "
+            };
+            screen.advance(format!("{prompt}{command}").as_bytes());
+            let mut previous = None;
+            for cycle in 0..6 {
+                // The batch worker has not caught up for any of these frames.
+                for echo in [
+                    "",
+                    "\r",
+                    "\n",
+                    if integrated { "\x1b]133;C\x07" } else { "" },
+                    prompt,
+                ] {
+                    screen.advance(echo.as_bytes());
+                    let snapshot = screen.viewport_snapshot(0);
+                    let immediate = precompute_terminal_input_highlights_reusing(
+                        &snapshot,
+                        &highlighter,
+                        previous.as_ref(),
+                    )
+                    .unwrap();
+                    let batch = precompute_terminal_keyword_highlights(
+                        &snapshot,
+                        &highlighter,
+                        palette,
+                        None,
+                    );
+                    for (row, source) in snapshot.rows().iter().enumerate() {
+                        if !source.text.starts_with("[root@host dir]#") {
+                            continue;
+                        }
+                        let lookup = immediate.lookup(row, &snapshot).unwrap_or_else(|| {
+                            panic!(
+                                "missing prompt: integrated={integrated}, cycle={cycle}, row={row}"
+                            )
+                        });
+                        assert_eq!(
+                            lookup.ranges(),
+                            batch.lookup(row, &snapshot).unwrap().ranges()
+                        );
+                        assert!(
+                            lookup.ranges().unwrap().iter().any(|range| {
+                                range.start_col == 15
+                                    && range.end_col == 16
+                                    && range.color == swatch("builtin-prompt")
+                            }),
+                            "integrated={integrated}, cycle={cycle}, echo={echo:?}, row={row}, ranges={:?}",
+                            lookup.ranges()
+                        );
+                    }
+                    previous = Some(immediate);
+                }
+            }
+            assert!(screen.viewport_snapshot(0).scrollback_len > 0);
+        }
+    }
+}
+
+#[test]
+fn completion_output_keeps_previous_input_colors_without_matching_the_output_page() {
+    let highlighter = compile_terminal_keyword_highlighter(&get_builtin_keyword_rules(true));
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\ncompletion list");
+    let snapshot = screen.snapshot();
+    let immediate = precompute_terminal_input_highlights(&snapshot, &highlighter).unwrap();
+    assert!(immediate.lookup(0, &snapshot).is_some());
+    assert!(immediate.lookup(1, &snapshot).is_none());
+}
+
+#[test]
+fn bracketed_prompt_detection_requires_a_host_and_an_adjacent_sign() {
+    for line in [
+        "[root@host dir]# ",
+        "[root@host dir]$ ls",
+        "  [root@host ~]% ",
+    ] {
+        assert!(super::fallback_prompt(line).is_some());
+    }
+    for line in [
+        "[INFO message]# text",
+        "[root@host dir] # text",
+        "[root@host dir]#text",
+        "[@host dir]# ",
+        "[root@ dir]# ",
+    ] {
+        assert!(super::fallback_prompt(line).is_none());
+    }
 }
 
 fn colors(line: &str, input: bool) -> Vec<Option<u32>> {

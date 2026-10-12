@@ -11,7 +11,7 @@ use nyaterm_terminal::{
 };
 use nyaterm_terminal_gpui::{
     TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter,
-    compile_terminal_keyword_highlighter, precompute_terminal_input_highlights,
+    compile_terminal_keyword_highlighter, precompute_terminal_input_highlights_reusing,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -2254,22 +2254,42 @@ fn terminal_frame_event_wake_interest(event: &TerminalFrameEvent) -> u8 {
 fn prepare_terminal_frame_input_highlights(
     event: &mut TerminalFrameEvent,
     highlighter: &TerminalKeywordHighlighter,
+    cache: &mut HashMap<String, Arc<TerminalKeywordHighlightSnapshot>>,
 ) {
-    match event {
+    let session_id = event.session_id().to_owned();
+    let previous = cache.get(&session_id).cloned();
+    let highlights = match event {
         TerminalFrameEvent::Output(frame) if !frame.protocol_state.alternate_screen => {
             let started_at = Instant::now();
             frame.input_highlights = frame.snapshot.as_deref().and_then(|snapshot| {
-                precompute_terminal_input_highlights(snapshot, highlighter).map(Arc::new)
+                precompute_terminal_input_highlights_reusing(
+                    snapshot,
+                    highlighter,
+                    previous.as_deref(),
+                )
+                .map(Arc::new)
             });
             frame.process_duration += started_at.elapsed();
+            frame.input_highlights.clone()
         }
         TerminalFrameEvent::Snapshot(frame) | TerminalFrameEvent::ClearExceptInput(frame) => {
             let started_at = Instant::now();
-            frame.input_highlights =
-                precompute_terminal_input_highlights(&frame.snapshot, highlighter).map(Arc::new);
+            frame.input_highlights = precompute_terminal_input_highlights_reusing(
+                &frame.snapshot,
+                highlighter,
+                previous.as_deref(),
+            )
+            .map(Arc::new);
             frame.process_duration += started_at.elapsed();
+            frame.input_highlights.clone()
         }
-        _ => {}
+        TerminalFrameEvent::Output(_) => None,
+        _ => return,
+    };
+    if let Some(highlights) = highlights {
+        cache.insert(session_id, highlights);
+    } else {
+        cache.remove(&session_id);
     }
 }
 
@@ -3538,6 +3558,7 @@ fn run_terminal_frame_processor(
     recording_writer: RecordingWriteHandle,
 ) {
     let mut input_highlighter: Option<Arc<TerminalKeywordHighlighter>> = None;
+    let mut input_highlight_cache = HashMap::new();
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
     let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
     let mut rekeyed_old_order = VecDeque::new();
@@ -3572,12 +3593,34 @@ fn run_terminal_frame_processor(
             }
             continue;
         };
+        match &command {
+            TerminalFrameCommand::SetKeywordRules { .. } => input_highlight_cache.clear(),
+            TerminalFrameCommand::SeedSession { session_id, .. }
+            | TerminalFrameCommand::RemoveSession { session_id }
+            | TerminalFrameCommand::TakeSession { session_id, .. } => {
+                input_highlight_cache.remove(session_id);
+            }
+            TerminalFrameCommand::InsertSessions { sessions } => {
+                for (session_id, _) in sessions {
+                    input_highlight_cache.remove(session_id);
+                }
+            }
+            TerminalFrameCommand::RekeySession { old_id, new_id, .. } => {
+                input_highlight_cache.remove(old_id);
+                input_highlight_cache.remove(new_id);
+            }
+            _ => {}
+        }
         // Enrich before enqueueing: consumers can never paint this input text
         // before its colors. Compiling rules and matching both stay on this worker.
         let frame_highlighter = input_highlighter.clone();
-        let push_event = |queue: &TerminalFrameEventQueue, mut event: TerminalFrameEvent| {
+        let mut push_event = |queue: &TerminalFrameEventQueue, mut event: TerminalFrameEvent| {
             if let Some(highlighter) = frame_highlighter.as_deref() {
-                prepare_terminal_frame_input_highlights(&mut event, highlighter);
+                prepare_terminal_frame_input_highlights(
+                    &mut event,
+                    highlighter,
+                    &mut input_highlight_cache,
+                );
             }
             push_terminal_frame_worker_event(queue, event);
         };
