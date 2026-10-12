@@ -942,6 +942,7 @@ impl NyaTermApp {
             session_id,
             visible_text,
             recording_text_bytes,
+            input_highlights,
             snapshot,
             action_links,
             protocol_state,
@@ -1057,6 +1058,7 @@ impl NyaTermApp {
                     revision,
                 );
             }
+            view.frame_input_highlights = view.frame_snapshot.as_ref().and(input_highlights);
             (unread_changed, view.scroll_offset)
         };
         if shell_edit_snapshot_available {
@@ -1235,6 +1237,7 @@ impl NyaTermApp {
                 frame.action_links,
                 frame.revision,
             );
+            view.frame_input_highlights = frame.input_highlights;
         } else {
             view.remember_scrollback_snapshot(frame.offset, frame.snapshot.clone());
             if let Some(action_links) = frame.action_links {
@@ -2139,6 +2142,7 @@ mod frame_event_queue_tests {
 
     fn output_frame(session_id: &str, revision: u64) -> TerminalFrameEvent {
         TerminalFrameEvent::Output(TerminalFrameOutputEvent {
+            input_highlights: None,
             session_id: session_id.to_string(),
             visible_text: format!("rev-{revision}"),
             recording_text_bytes: 0,
@@ -2184,6 +2188,7 @@ mod frame_event_queue_tests {
 
     fn snapshot_frame(session_id: &str, offset: usize) -> TerminalFrameEvent {
         TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+            input_highlights: None,
             session_id: session_id.to_string(),
             offset,
             snapshot: std::sync::Arc::new(

@@ -23,8 +23,8 @@ use super::{
 use crate::glyphs::CellGlyph;
 use crate::keywords::{
     TerminalKeywordHighlightLookup, compile_terminal_keyword_highlighter,
-    precompute_terminal_keyword_highlights, terminal_keyword_row_reuse_keys,
-    terminal_keyword_rules_key,
+    precompute_terminal_input_highlights, precompute_terminal_keyword_highlights,
+    terminal_keyword_row_reuse_keys, terminal_keyword_rules_key,
 };
 use crate::paint::{
     apply_action_link_ranges, flatten_highlight_spans, terminal_highlight_spans_with_keyword_ranges,
@@ -1475,6 +1475,113 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
         current.lookup(0, &changed).unwrap().ranges().unwrap().len(),
         2
     );
+}
+
+#[test]
+fn paired_input_colors_override_late_batches_and_reuse_the_final_layout() {
+    let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true);
+    let highlighter = compile_terminal_keyword_highlighter(&rules);
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"$ l");
+    let old = Arc::new(precompute_terminal_keyword_highlights(
+        &screen.snapshot(),
+        &highlighter,
+        palette,
+        None,
+    ));
+    for echo in [b"s".as_slice(), b"\x08 \x08", b"\x08 \x08"] {
+        screen.advance(echo);
+        let snapshot = Arc::new(screen.snapshot());
+        let input =
+            Arc::new(precompute_terminal_input_highlights(&snapshot, &highlighter).unwrap());
+        let final_batch = Arc::new(precompute_terminal_keyword_highlights(
+            &snapshot,
+            &highlighter,
+            palette,
+            None,
+        ));
+        let make_element = || {
+            NyaTerminalElement::new(
+                snapshot.clone(),
+                Arc::new(Vec::new()),
+                Vec::new(),
+                false,
+                "block",
+                8.0,
+                16.0,
+                palette,
+                "monospace".into(),
+                14.0,
+                400.0,
+                700.0,
+            )
+        };
+        let pending = make_element()
+            .with_keyword_highlights(old.clone())
+            .with_input_keyword_highlights(input);
+        let complete = make_element().with_keyword_highlights(final_batch);
+        let row = snapshot.cursor.row;
+        let reuse_key = terminal_keyword_row_reuse_keys(&snapshot)[row];
+        assert_eq!(
+            pending
+                .keyword_highlight_lookup(row, reuse_key)
+                .unwrap()
+                .ranges(),
+            complete
+                .keyword_highlight_lookup(row, reuse_key)
+                .unwrap()
+                .ranges()
+        );
+        let style_key = pending.paint_style_key(pending.keyword_rules_key());
+        let empty_key = pending.paint_style_key(0);
+        assert_eq!(
+            pending.row_layout_cache_keys(row, style_key, empty_key, reuse_key),
+            complete.row_layout_cache_keys(row, style_key, empty_key, reuse_key)
+        );
+    }
+}
+
+#[test]
+fn known_empty_input_result_suppresses_stale_command_colors() {
+    let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true)
+        .into_iter()
+        .filter(|rule| rule.id == "builtin-command")
+        .collect::<Vec<_>>();
+    let highlighter = compile_terminal_keyword_highlighter(&rules);
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"$ l");
+    let old = Arc::new(precompute_terminal_keyword_highlights(
+        &screen.snapshot(),
+        &highlighter,
+        palette,
+        None,
+    ));
+    screen.advance(b"\x08 \x08");
+    let snapshot = Arc::new(screen.snapshot());
+    let input = Arc::new(precompute_terminal_input_highlights(&snapshot, &highlighter).unwrap());
+    let element = NyaTerminalElement::new(
+        snapshot.clone(),
+        Arc::new(Vec::new()),
+        Vec::new(),
+        false,
+        "block",
+        8.0,
+        16.0,
+        palette,
+        "monospace".into(),
+        14.0,
+        400.0,
+        700.0,
+    )
+    .with_keyword_highlights(old)
+    .with_input_keyword_highlights(input);
+    let lookup = element
+        .keyword_highlight_lookup(0, terminal_keyword_row_reuse_keys(&snapshot)[0])
+        .unwrap();
+    assert!(lookup.is_known_empty());
+    assert!(!lookup.is_stale());
 }
 
 #[test]

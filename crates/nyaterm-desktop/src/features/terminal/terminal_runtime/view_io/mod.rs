@@ -426,8 +426,8 @@ fn terminal_scroll_text_first_decorations(
 }
 
 fn terminal_keyword_highlight_updates_allowed(is_active: bool, input_latency_active: bool) -> bool {
-    // TerminalSurface keeps the last precomputed spans while rules are withheld;
-    // the input-idle repaint restores rules and schedules one catch-up task.
+    // Output batches wait for input idle and retain their previous spans.
+    // Live input colors arrive already computed with each worker frame.
     is_active && !input_latency_active
 }
 
@@ -793,6 +793,11 @@ impl NyaTermApp {
                 &frame_action_links,
             );
         let configured_keyword_rules = self.resolved_keyword_highlight_rules();
+        let input_rules_key =
+            nyaterm_terminal_gpui::terminal_keyword_rules_key(&configured_keyword_rules);
+        let input_highlights = is_active
+            .then(|| view.frame_input_highlights.clone())
+            .flatten();
         let clear_keyword_highlights = configured_keyword_rules.is_empty();
         let keyword_rules =
             if terminal_keyword_highlight_updates_allowed(is_active, input_latency_active) {
@@ -870,6 +875,7 @@ impl NyaTermApp {
                     true,
                 )
             };
+            changed |= surface.set_input_keyword_highlights(input_highlights, input_rules_key);
             let selection_changed = surface.set_selection_visual(terminal_selection);
             if frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(
@@ -966,6 +972,11 @@ impl NyaTermApp {
             || self.settings.summary().terminal_low_latency_mode;
         let render_degraded = render_degraded_view || render_pressure;
         let configured_keyword_rules = self.resolved_keyword_highlight_rules();
+        let input_rules_key =
+            nyaterm_terminal_gpui::terminal_keyword_rules_key(&configured_keyword_rules);
+        let input_highlights = view
+            .filter(|_| is_active)
+            .and_then(|view| view.frame_input_highlights.clone());
         let clear_keyword_highlights = configured_keyword_rules.is_empty();
         let keyword_rules =
             if !terminal_keyword_highlight_updates_allowed(is_active, input_latency_active) {
@@ -1430,6 +1441,7 @@ impl NyaTermApp {
                     true,
                 )
             };
+            changed |= surface.set_input_keyword_highlights(input_highlights, input_rules_key);
             let selection_changed = surface.set_selection_visual(terminal_selection);
             if frame_applied || paint_details_changed {
                 surface.schedule_keyword_highlights(

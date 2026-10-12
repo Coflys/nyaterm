@@ -302,6 +302,7 @@ pub(in crate::features) struct TerminalSurface {
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
     keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
+    input_keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
     keyword_highlight_generation: u64,
     keyword_highlight_cancel_epoch: Arc<AtomicU64>,
     keyword_highlight_task: Option<gpui::Task<()>>,
@@ -372,6 +373,7 @@ impl TerminalSurface {
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
             keyword_highlights: None,
+            input_keyword_highlights: None,
             keyword_highlight_generation: 0,
             keyword_highlight_cancel_epoch: Arc::new(AtomicU64::new(0)),
             keyword_highlight_task: None,
@@ -1498,6 +1500,26 @@ impl TerminalSurface {
         true
     }
 
+    pub(in crate::features) fn set_input_keyword_highlights(
+        &mut self,
+        highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
+        rules_key: u64,
+    ) -> bool {
+        let highlights = highlights.filter(|highlights| {
+            !self.protocol_state.alternate_screen && highlights.rules_key() == rules_key
+        });
+        let unchanged = match (&self.input_keyword_highlights, &highlights) {
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return false;
+        }
+        self.input_keyword_highlights = highlights;
+        true
+    }
+
     pub(in crate::features) fn schedule_keyword_highlights(
         &mut self,
         clear_if_empty: bool,
@@ -2604,6 +2626,9 @@ impl Render for TerminalSurface {
             .with_zebra_stripes(zebra_stripes_visible, target_line);
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
+        }
+        if let Some(highlights) = self.input_keyword_highlights.clone() {
+            grid = grid.with_input_keyword_highlights(highlights);
         }
 
         let gutter = if gutter_enabled {

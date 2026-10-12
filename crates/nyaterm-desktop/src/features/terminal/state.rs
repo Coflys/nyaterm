@@ -537,6 +537,7 @@ impl TerminalFeatureState {
         &mut self,
         rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
     ) {
+        self.view.frame_pipeline.set_keyword_rules(rules.clone());
         self.paint.cached_keyword_highlight_rules = Some(rules);
     }
 

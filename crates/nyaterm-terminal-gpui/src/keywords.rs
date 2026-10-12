@@ -9,7 +9,7 @@ use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::{TerminalSnapshot, TerminalSnapshotRow, terminal_cell_col_for_byte_index};
 
 use crate::element::{TerminalBufferMatch, TerminalSearchFlags};
-use crate::semantic::{SemanticContext, SemanticHighlighter, extend_region};
+use crate::semantic::{SemanticContext, SemanticHighlighter, extend_region, fallback_prompt};
 use crate::types::{TerminalHighlightSpan, TerminalKeywordRange};
 use nyaterm_core::keyword_highlight_presets::builtin_keyword_matcher;
 
@@ -72,6 +72,73 @@ pub struct TerminalKeywordHighlightSnapshot {
     rows: Vec<Option<Arc<Vec<TerminalKeywordRange>>>>,
     source_rows: Vec<Option<Arc<TerminalSnapshotRow>>>,
     rows_by_reuse_key: HashMap<TerminalKeywordRowReuseKey, Option<Arc<Vec<TerminalKeywordRange>>>>,
+}
+
+impl std::fmt::Debug for TerminalKeywordHighlightSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TerminalKeywordHighlightSnapshot")
+            .field("rules_key", &self.rules_key)
+            .field("known_rows", &self.known_row_count())
+            .field("range_count", &self.range_count())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Prepare the live input logical line before its frame is published. Call this
+/// on the frame worker, never from rendering or a GPUI update callback. Output,
+/// completion pages and pathological input retain the ordinary batch path.
+pub fn precompute_terminal_input_highlights(
+    snapshot: &TerminalSnapshot,
+    highlighter: &TerminalKeywordHighlighter,
+) -> Option<TerminalKeywordHighlightSnapshot> {
+    const MAX_INPUT_ROWS: usize = 16;
+    const MAX_INPUT_BYTES: usize = 16 * 1024;
+
+    if snapshot.display_offset != 0 {
+        return None;
+    }
+    let cursor_row = snapshot.row(snapshot.cursor.row)?;
+    let group = terminal_keyword_wrapped_group_bounds(snapshot, snapshot.cursor.row);
+    if group.oversized || group.end - group.start > MAX_INPUT_ROWS {
+        return None;
+    }
+    let rows = &snapshot.rows()[group.start..group.end];
+    if rows
+        .iter()
+        .map(|row| terminal_keyword_row_bytes(row))
+        .sum::<usize>()
+        > MAX_INPUT_BYTES
+    {
+        return None;
+    }
+    let integrated_input = cursor_row.shell_input
+        == Some(nyaterm_terminal::ShellInputLineKind::Active)
+        && cursor_row.shell_input_columns.is_some();
+    let fallback_input = !rows.iter().any(|row| row.shell_integration) && !rows[0].wrapped && {
+        // Row text trims trailing blanks. Preserve the actual cells so an
+        // empty "$ " prompt still publishes a known-empty input result.
+        let line = rows[0]
+            .cells
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| {
+                if cell.text.is_empty() {
+                    " "
+                } else {
+                    cell.text()
+                }
+            })
+            .collect::<String>();
+        fallback_prompt(&line).is_some()
+    };
+    if !integrated_input && !fallback_input {
+        return None;
+    }
+    precompute_keyword_rows(snapshot, highlighter, None, group.start..group.end, || {
+        false
+    })
+    .map(|(highlights, _)| highlights)
 }
 
 pub(super) enum TerminalKeywordHighlightLookup<'a> {
@@ -311,12 +378,25 @@ pub fn precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel(
     palette: nyaterm_ui::ThemePalette,
     previous: Option<&TerminalKeywordHighlightSnapshot>,
     requested_rows: Range<usize>,
-    mut cancelled: impl FnMut() -> bool,
+    cancelled: impl FnMut() -> bool,
 ) -> Option<(
     TerminalKeywordHighlightSnapshot,
     TerminalKeywordHighlightPrecomputeStats,
 )> {
     let _ = palette;
+    precompute_keyword_rows(snapshot, highlighter, previous, requested_rows, cancelled)
+}
+
+fn precompute_keyword_rows(
+    snapshot: &TerminalSnapshot,
+    highlighter: &TerminalKeywordHighlighter,
+    previous: Option<&TerminalKeywordHighlightSnapshot>,
+    requested_rows: Range<usize>,
+    mut cancelled: impl FnMut() -> bool,
+) -> Option<(
+    TerminalKeywordHighlightSnapshot,
+    TerminalKeywordHighlightPrecomputeStats,
+)> {
     let previous = previous.filter(|previous| previous.rules_key == highlighter.rules_key);
     let requested_rows = terminal_keyword_highlight_expanded_rows(snapshot, requested_rows);
     let mut stats = TerminalKeywordHighlightPrecomputeStats {

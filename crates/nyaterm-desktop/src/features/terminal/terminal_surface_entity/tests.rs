@@ -43,6 +43,31 @@ struct TerminalSurfaceLayoutTestView {
 }
 
 #[test]
+fn input_colors_are_cleared_when_rules_change_or_alternate_screen_takes_over() {
+    let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true);
+    let highlighter = compile_terminal_keyword_highlighter(&rules);
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"$ ls");
+    let highlights = Arc::new(
+        nyaterm_terminal_gpui::precompute_terminal_input_highlights(
+            &screen.snapshot(),
+            &highlighter,
+        )
+        .unwrap(),
+    );
+    let key = highlights.rules_key();
+    let mut surface = TerminalSurface::new("session");
+    assert!(surface.set_input_keyword_highlights(Some(highlights.clone()), key));
+    assert!(!surface.set_input_keyword_highlights(Some(highlights.clone()), key));
+    assert!(surface.set_input_keyword_highlights(Some(highlights.clone()), key.wrapping_add(1)));
+    assert!(surface.input_keyword_highlights.is_none());
+    assert!(surface.set_input_keyword_highlights(Some(highlights.clone()), key));
+    surface.protocol_state.alternate_screen = true;
+    assert!(surface.set_input_keyword_highlights(Some(highlights), key));
+    assert!(surface.input_keyword_highlights.is_none());
+}
+
+#[test]
 fn overview_marker_buckets_reuse_arc_until_key_or_height_changes() {
     let mut surface = TerminalSurface::new("session");
     assert!(

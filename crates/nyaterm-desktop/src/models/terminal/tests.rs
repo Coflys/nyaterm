@@ -8,6 +8,7 @@ use nyaterm_terminal::{
     TerminalSearchQuery, TerminalSnapshot,
 };
 
+use crate::models::recording::RecordingWritePipeline;
 use crate::terminal::{TerminalLineDecorations, terminal_screen_from_output};
 
 use super::{
@@ -38,6 +39,54 @@ use super::{
     terminal_line_decorations_estimated_bytes, terminal_snapshot_matches_grid_geometry,
     try_next_terminal_frame_command,
 };
+
+#[test]
+fn frame_worker_publishes_input_colors_with_each_echo_and_obeys_rule_changes() {
+    let mut recording = RecordingWritePipeline::spawn(4096);
+    let mut pipeline = TerminalFramePipeline::spawn(recording.writer());
+    let rules = Arc::new(nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true));
+    pipeline.set_keyword_rules(rules.clone());
+    for echo in [b"$ l".as_slice(), b"s", b"\x08 \x08"] {
+        pipeline.submit_outputs(vec![TerminalFrameOutputSubmission {
+            session_id: "s1".into(),
+            data: echo.to_vec(),
+            encoding: "UTF-8".into(),
+            scrollback_limit: 100,
+            raw_already_captured: true,
+        }]);
+        pipeline.finish_pending_output().unwrap();
+        let mut events = VecDeque::new();
+        pipeline.drain_events_into(&mut events, usize::MAX);
+        let TerminalFrameEvent::Output(frame) = events.pop_front().unwrap() else {
+            panic!("output frame");
+        };
+        assert!(frame.snapshot.is_some());
+        let input = frame.input_highlights.unwrap();
+        assert_eq!(
+            input.rules_key(),
+            nyaterm_terminal_gpui::terminal_keyword_rules_key(&rules)
+        );
+        assert_eq!(input.known_row_count(), 1);
+        assert!(input.range_count() > 0);
+    }
+    pipeline.set_keyword_rules(Arc::new(Vec::new()));
+    pipeline.submit_outputs(vec![TerminalFrameOutputSubmission {
+        session_id: "s1".into(),
+        data: b"s".to_vec(),
+        encoding: "UTF-8".into(),
+        scrollback_limit: 100,
+        raw_already_captured: true,
+    }]);
+    pipeline.finish_pending_output().unwrap();
+    let mut events = VecDeque::new();
+    pipeline.drain_events_into(&mut events, usize::MAX);
+    let TerminalFrameEvent::Output(frame) = events.pop_front().unwrap() else {
+        panic!("output frame");
+    };
+    assert!(frame.input_highlights.is_none());
+    pipeline.shutdown();
+    recording.shutdown();
+}
 
 #[test]
 fn line_number_gutter_keeps_high_water_width_after_scrollback_prunes() {
@@ -213,6 +262,7 @@ fn output_frame_with_sizes(
     skipped_output_bytes: usize,
 ) -> TerminalFrameOutputEvent {
     TerminalFrameOutputEvent {
+        input_highlights: None,
         session_id: "s1".to_string(),
         visible_text: "x".to_string(),
         recording_text_bytes: 1,
@@ -1748,6 +1798,7 @@ fn the_drain_tasks_frame_interest_mask_covers_every_reply_kind() {
 
     let screen = TerminalScreen::default();
     queue.push(TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+        input_highlights: None,
         session_id: "s1".to_string(),
         offset: 1,
         snapshot: Arc::new(screen.snapshot()),
@@ -1776,6 +1827,7 @@ fn terminal_frame_event_queue_keeps_snapshot_wake_armed_across_output() {
 
     let screen = TerminalScreen::default();
     queue.push(TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+        input_highlights: None,
         session_id: "s1".to_string(),
         offset: 1,
         snapshot: Arc::new(screen.snapshot()),
@@ -1953,6 +2005,7 @@ fn terminal_frame_event_queue_delivers_snapshot_reply_after_critical_pressure() 
         let screen = TerminalScreen::default();
         let outcome =
             producer_queue.push(TerminalFrameEvent::Snapshot(TerminalFrameSnapshotEvent {
+                input_highlights: None,
                 session_id: "s1".to_string(),
                 offset: 0,
                 snapshot: Arc::new(screen.snapshot()),

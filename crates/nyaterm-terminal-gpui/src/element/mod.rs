@@ -406,6 +406,7 @@ pub struct NyaTerminalElement {
     snapshot: Arc<TerminalSnapshot>,
     keyword_rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
     keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
+    input_keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
     decorations: Arc<[TerminalLineDecorations]>,
     selection: Option<TerminalGridSelection>,
     layout_cache: Option<Arc<Mutex<NyaTerminalLayoutCache>>>,
@@ -502,6 +503,7 @@ impl NyaTerminalElement {
             snapshot,
             keyword_rules,
             keyword_highlights: None,
+            input_keyword_highlights: None,
             decorations: decorations.into(),
             selection: None,
             layout_cache: None,
@@ -570,6 +572,35 @@ impl NyaTerminalElement {
     ) -> Self {
         self.keyword_highlights = Some(highlights);
         self
+    }
+
+    /// Exact input-row results travel with the text frame and take precedence
+    /// over output batches. A known-empty result also suppresses stale colors.
+    pub fn with_input_keyword_highlights(
+        mut self,
+        highlights: Arc<TerminalKeywordHighlightSnapshot>,
+    ) -> Self {
+        self.input_keyword_highlights = Some(highlights);
+        self
+    }
+
+    fn keyword_highlight_lookup(
+        &self,
+        row: usize,
+        reuse_key: Option<TerminalKeywordRowReuseKey>,
+    ) -> Option<TerminalKeywordHighlightLookup<'_>> {
+        self.input_keyword_highlights
+            .as_ref()
+            .and_then(|highlights| highlights.lookup_with_reuse_key(row, &self.snapshot, reuse_key))
+            .or_else(|| {
+                self.keyword_highlights.as_ref().and_then(|highlights| {
+                    highlights
+                        .lookup_with_reuse_key(row, &self.snapshot, reuse_key)
+                        .or_else(|| {
+                            highlights.stale_lookup_with_reuse_key(row, &self.snapshot, reuse_key)
+                        })
+                })
+            })
     }
 
     pub fn with_visual_y_offset(mut self, offset: f32) -> Self {
@@ -695,7 +726,13 @@ impl NyaTerminalElement {
     }
 
     fn keyword_rules_key(&self) -> u64 {
-        terminal_keyword_rules_key(&self.keyword_rules)
+        self.input_keyword_highlights
+            .as_ref()
+            .or(self.keyword_highlights.as_ref())
+            .map_or_else(
+                || terminal_keyword_rules_key(&self.keyword_rules),
+                |highlights| highlights.rules_key(),
+            )
     }
 
     fn row_layout_cache_keys(
@@ -710,17 +747,7 @@ impl NyaTerminalElement {
         let display_line = if line.is_empty() { " " } else { line };
         let ansi = snapshot_row.map(|row| row.styled_spans.as_ref());
         let row_revision = snapshot_row.map(|row| row.revision);
-        let keyword_lookup = self.keyword_highlights.as_ref().and_then(|highlights| {
-            highlights
-                .lookup_with_reuse_key(row, self.snapshot.as_ref(), keyword_reuse_key)
-                .or_else(|| {
-                    highlights.stale_lookup_with_reuse_key(
-                        row,
-                        self.snapshot.as_ref(),
-                        keyword_reuse_key,
-                    )
-                })
-        });
+        let keyword_lookup = self.keyword_highlight_lookup(row, keyword_reuse_key);
         let keyword_result_known_empty = keyword_lookup
             .as_ref()
             .is_some_and(|lookup| lookup.is_known_empty());
@@ -1473,7 +1500,11 @@ impl Element for NyaTerminalElement {
         let mut base_font = font(SharedString::from(self.font_family.clone()));
         base_font.fallbacks = self.font_fallbacks.clone();
         base_font.features = terminal_font_features();
-        let keyword_rules_key = if let Some(highlights) = self.keyword_highlights.as_ref() {
+        let keyword_rules_key = if let Some(highlights) = self
+            .input_keyword_highlights
+            .as_ref()
+            .or(self.keyword_highlights.as_ref())
+        {
             highlights.rules_key()
         } else if self.keyword_rules.is_empty() {
             0
@@ -1529,8 +1560,9 @@ impl Element for NyaTerminalElement {
             .iter()
             .any(|row| row.wrapped);
         let keyword_row_reuse_keys = self
-            .keyword_highlights
+            .input_keyword_highlights
             .as_ref()
+            .or(self.keyword_highlights.as_ref())
             .filter(|_| visible_has_wrapped_group)
             .map(|_| terminal_keyword_row_reuse_keys(self.snapshot.as_ref()));
         // Follow the editor model: once the visible viewport is entirely hot,
@@ -1572,17 +1604,7 @@ impl Element for NyaTerminalElement {
                 .copied()
                 .flatten()
                 .or_else(|| terminal_keyword_row_reuse_key(self.snapshot.as_ref(), row));
-            let keyword_lookup = self.keyword_highlights.as_ref().and_then(|highlights| {
-                highlights
-                    .lookup_with_reuse_key(row, self.snapshot.as_ref(), keyword_reuse_key)
-                    .or_else(|| {
-                        highlights.stale_lookup_with_reuse_key(
-                            row,
-                            self.snapshot.as_ref(),
-                            keyword_reuse_key,
-                        )
-                    })
-            });
+            let keyword_lookup = self.keyword_highlight_lookup(row, keyword_reuse_key);
             let keyword_result_known_empty = keyword_lookup
                 .as_ref()
                 .is_some_and(|lookup| lookup.is_known_empty());

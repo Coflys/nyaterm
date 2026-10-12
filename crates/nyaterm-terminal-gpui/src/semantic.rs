@@ -735,7 +735,7 @@ fn shell_word_end(line: &str, start: usize, end: usize) -> usize {
     cursor
 }
 
-fn fallback_prompt(line: &str) -> Option<(usize, usize)> {
+pub(super) fn fallback_prompt(line: &str) -> Option<(usize, usize)> {
     // Bare prompt signs or a single conventional user@host/path prefix only.
     // Avoid interpreting arbitrary log text containing '$', '#' or '>' as input.
     let trimmed = line.trim_start();
