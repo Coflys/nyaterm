@@ -3211,6 +3211,9 @@ mod tests {
             send_sga: true,
             telnet_auto_login_enabled: true,
             telnet_auto_login_send_wake_enter: true,
+            telnet_keep_alive_interval_secs:
+                nyaterm_core::models::connection::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS
+                    .to_string(),
             telnet_auto_login_timeout_ms: "60000".to_string(),
             telnet_auto_login_username_prompt_regex: String::new(),
             telnet_auto_login_password_prompt_regex: String::new(),

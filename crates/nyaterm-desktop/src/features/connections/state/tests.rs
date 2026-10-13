@@ -2079,6 +2079,8 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         send_sga: true,
         telnet_auto_login_enabled: true,
         telnet_auto_login_send_wake_enter: true,
+        telnet_keep_alive_interval_secs:
+            nyaterm_core::models::connection::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS.to_string(),
         telnet_auto_login_timeout_ms: "60000".to_string(),
         telnet_auto_login_username_prompt_regex: String::new(),
         telnet_auto_login_password_prompt_regex: String::new(),
@@ -2132,5 +2134,23 @@ fn network_proxy_editor(id: &str) -> NetworkProxyEditorState {
         group_id: None,
         focused_field: NetworkProxyEditorField::Name,
         error: None,
+    }
+}
+
+#[test]
+fn raw_tcp_toggle_retains_telnet_keepalive_configuration() {
+    let mut draft = Some(ConnectionEditorState {
+        raw_tcp_cli: false,
+        telnet_keep_alive_interval_secs: "45".into(),
+        ..connection_editor_state_with_secret_draft()
+    });
+    for expected_raw in [true, false] {
+        assert!(toggle_connection_editor_flag(
+            &mut draft,
+            ConnectionEditorToggle::RawTcp
+        ));
+        let editor = draft.as_ref().unwrap();
+        assert_eq!(editor.raw_tcp_cli, expected_raw);
+        assert_eq!(editor.telnet_keep_alive_interval_secs, "45");
     }
 }

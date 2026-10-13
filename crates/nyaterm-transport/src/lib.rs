@@ -645,6 +645,30 @@ pub struct SerialTransport {
 struct QueuedTransportWriter {
     command_tx: mpsc::Sender<TransportWriterCommand>,
     worker_thread: Option<JoinHandle<()>>,
+    telnet_lifecycle: Option<Arc<TelnetWriterLifecycle>>,
+}
+
+// Shared only by a TCP session's reader and writer. Closing the socket also
+// interrupts a blocked write before either thread is joined.
+struct TelnetWriterLifecycle {
+    stopped: AtomicBool,
+    stream: TcpStream,
+}
+
+impl TelnetWriterLifecycle {
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+        let _ = self.stream.shutdown(Shutdown::Both);
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+}
+
+struct TelnetWriterPolicy {
+    idle_interval: Option<Duration>,
+    lifecycle: Arc<TelnetWriterLifecycle>,
 }
 
 #[derive(Clone, Copy)]
@@ -666,6 +690,8 @@ impl WriterFlushPolicy {
 
 enum TransportWriterCommand {
     Write(Vec<u8>),
+    // Already encoded wire bytes: never apply application escaping or EachByte.
+    TelnetControl(Vec<u8>),
     Close,
 }
 
@@ -679,14 +705,42 @@ impl QueuedTransportWriter {
     where
         W: Write + Send + 'static,
     {
+        Self::spawn_with_telnet_policy(session_id, writer, flush_policy, event_queue, None)
+    }
+
+    fn spawn_with_telnet_policy<W>(
+        session_id: String,
+        writer: W,
+        flush_policy: WriterFlushPolicy,
+        event_queue: SessionEventQueue,
+        telnet_policy: Option<TelnetWriterPolicy>,
+    ) -> Self
+    where
+        W: Write + Send + 'static,
+    {
         let (command_tx, command_rx) = mpsc::channel();
+        let telnet_lifecycle = telnet_policy
+            .as_ref()
+            .map(|policy| policy.lifecycle.clone());
         let worker_thread = std::thread::spawn(move || {
-            run_transport_writer(session_id, writer, flush_policy, command_rx, event_queue)
+            run_transport_writer(
+                session_id,
+                writer,
+                flush_policy,
+                command_rx,
+                event_queue,
+                telnet_policy,
+            )
         });
         Self {
             command_tx,
             worker_thread: Some(worker_thread),
+            telnet_lifecycle,
         }
+    }
+
+    fn write_telnet_control(&self, data: Vec<u8>) -> anyhow::Result<()> {
+        queue_telnet_control(&self.command_tx, data)
     }
 
     fn write(&self, data: Vec<u8>) -> anyhow::Result<()> {
@@ -699,11 +753,26 @@ impl QueuedTransportWriter {
     }
 
     fn close(&mut self) {
+        if let Some(lifecycle) = &self.telnet_lifecycle {
+            lifecycle.stop();
+        }
         let _ = self.command_tx.send(TransportWriterCommand::Close);
         if let Some(worker_thread) = self.worker_thread.take() {
             let _ = worker_thread.join();
         }
     }
+}
+
+fn queue_telnet_control(
+    command_tx: &mpsc::Sender<TransportWriterCommand>,
+    data: Vec<u8>,
+) -> anyhow::Result<()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+    command_tx
+        .send(TransportWriterCommand::TelnetControl(data))
+        .map_err(|_| anyhow::anyhow!("transport writer stopped"))
 }
 
 fn run_transport_writer<W>(
@@ -712,34 +781,72 @@ fn run_transport_writer<W>(
     flush_policy: WriterFlushPolicy,
     command_rx: mpsc::Receiver<TransportWriterCommand>,
     event_queue: SessionEventQueue,
+    telnet_policy: Option<TelnetWriterPolicy>,
 ) where
     W: Write,
 {
-    while let Ok(command) = command_rx.recv() {
-        match command {
-            TransportWriterCommand::Write(data) => {
-                let write_result = if matches!(flush_policy, WriterFlushPolicy::EachByte) {
-                    data.iter().try_for_each(|byte| {
-                        writer
-                            .write_all(std::slice::from_ref(byte))
-                            .and_then(|_| writer.flush())
-                    })
-                } else {
-                    writer.write_all(&data).and_then(|_| {
-                        if matches!(flush_policy, WriterFlushPolicy::Never) {
-                            Ok(())
-                        } else {
-                            writer.flush()
-                        }
-                    })
-                };
-                if let Err(error) = write_result {
-                    send_session_error(&event_queue, &session_id, error);
-                    break;
+    let stopped = || {
+        telnet_policy
+            .as_ref()
+            .is_some_and(|policy| policy.lifecycle.is_stopped())
+    };
+    let idle_interval = telnet_policy
+        .as_ref()
+        .and_then(|policy| policy.idle_interval);
+    let mut last_sent = Instant::now();
+    while !stopped() {
+        let command = if let Some(interval) = idle_interval {
+            match command_rx.recv_timeout(interval.saturating_sub(last_sent.elapsed())) {
+                Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    TransportWriterCommand::TelnetControl(telnet_codec::NOP.to_vec())
                 }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            TransportWriterCommand::Close => break,
+        } else {
+            match command_rx.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            }
+        };
+        if stopped() {
+            break;
         }
+        let (data, policy) = match command {
+            TransportWriterCommand::Write(data) => (data, flush_policy),
+            TransportWriterCommand::TelnetControl(data) => (data, WriterFlushPolicy::AfterWrite),
+            TransportWriterCommand::Close => break,
+        };
+        if data.is_empty() {
+            continue;
+        }
+        let write_result = if matches!(policy, WriterFlushPolicy::EachByte) {
+            data.iter().try_for_each(|byte| {
+                writer
+                    .write_all(std::slice::from_ref(byte))
+                    .and_then(|_| writer.flush())
+            })
+        } else {
+            writer.write_all(&data).and_then(|_| {
+                if matches!(policy, WriterFlushPolicy::Never) {
+                    Ok(())
+                } else {
+                    writer.flush()
+                }
+            })
+        };
+        if let Err(error) = write_result {
+            if !stopped() {
+                send_session_error(&event_queue, &session_id, error);
+            }
+            break;
+        }
+        // Count completed sends, including negotiation and NOP; never catch up
+        // missed deadlines after a slow write.
+        last_sent = Instant::now();
+    }
+    if let Some(policy) = telnet_policy {
+        policy.lifecycle.stop();
     }
 }
 
@@ -966,23 +1073,28 @@ impl SessionManager {
             .set_read_timeout(Some(Duration::from_millis(250)))
             .ok();
 
-        let mut writer = stream
+        let writer_stream = stream
             .try_clone()
             .map_err(|source| SessionError::CloneTcp {
                 session_id: session_id.clone(),
                 source,
             })?;
-        let response_writer = stream
+        let reader_stream = stream
             .try_clone()
             .map_err(|source| SessionError::CloneTcp {
                 session_id: session_id.clone(),
                 source,
             })?;
-
-        if let Some(naws) = maybe_build_naws(config.cols, config.rows, &config) {
-            writer.write_all(&naws).ok();
-            writer.flush().ok();
-        }
+        let shutdown_stream = stream
+            .try_clone()
+            .map_err(|source| SessionError::CloneTcp {
+                session_id: session_id.clone(),
+                source,
+            })?;
+        let lifecycle = Arc::new(TelnetWriterLifecycle {
+            stopped: AtomicBool::new(false),
+            stream: shutdown_stream,
+        });
 
         let info = SessionInfo {
             id: session_id.clone(),
@@ -997,29 +1109,38 @@ impl SessionManager {
             rows: config.rows,
         };
 
+        // Fail before spawning either worker if session registration is unavailable.
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
         let auto_login =
             TelnetAutoLoginState::new(&config).map(|state| Arc::new(Mutex::new(state)));
-        let reader_thread = spawn_tcp_reader_thread(
+        let writer = QueuedTransportWriter::spawn_with_telnet_policy(
             session_id.clone(),
-            stream
-                .try_clone()
-                .map_err(|source| SessionError::CloneTcp {
-                    session_id: session_id.clone(),
-                    source,
-                })?,
-            response_writer,
-            config.clone(),
-            auto_login.clone(),
-            self.event_queue.clone(),
-        );
-        let writer = QueuedTransportWriter::spawn(
-            session_id.clone(),
-            writer,
+            writer_stream,
             if config.force_character_at_a_time {
                 WriterFlushPolicy::EachByte
             } else {
                 WriterFlushPolicy::AfterWrite
             },
+            self.event_queue.clone(),
+            Some(TelnetWriterPolicy {
+                idle_interval: (!config.raw_tcp && config.keep_alive_interval_secs != 0)
+                    .then(|| Duration::from_secs(u64::from(config.keep_alive_interval_secs))),
+                lifecycle: lifecycle.clone(),
+            }),
+        );
+        if let Some(naws) = maybe_build_naws(config.cols, config.rows, &config) {
+            let _ = writer.write_telnet_control(naws);
+        }
+        let reader_thread = spawn_tcp_reader_thread(
+            session_id.clone(),
+            reader_stream,
+            writer.command_tx.clone(),
+            lifecycle,
+            config.clone(),
+            auto_login.clone(),
             self.event_queue.clone(),
         );
 
@@ -1038,10 +1159,7 @@ impl SessionManager {
             reader_thread: Some(reader_thread),
         };
 
-        self.sessions
-            .lock()
-            .map_err(|_| SessionError::LockPoisoned)?
-            .insert(session_id, ManagedSession::Tcp(Box::new(session)));
+        sessions.insert(session_id, ManagedSession::Tcp(Box::new(session)));
 
         Ok(info)
     }
@@ -1513,7 +1631,7 @@ impl TerminalTransport for TelnetTransport {
         self.info.cols = cols;
         self.info.rows = rows;
         if let Some(naws) = maybe_build_naws(cols, rows, &self.config) {
-            self.writer.write(naws)?;
+            self.writer.write_telnet_control(naws)?;
         }
         Ok(())
     }
@@ -1670,16 +1788,20 @@ fn spawn_reader_thread(
 fn spawn_tcp_reader_thread(
     session_id: String,
     mut reader: TcpStream,
-    mut response_writer: TcpStream,
+    command_tx: mpsc::Sender<TransportWriterCommand>,
+    lifecycle: Arc<TelnetWriterLifecycle>,
     config: TelnetSessionConfig,
     auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
     event_queue: SessionEventQueue,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
-        loop {
+        while !lifecycle.is_stopped() {
             match reader.read(&mut buffer) {
                 Ok(0) => {
+                    if lifecycle.is_stopped() {
+                        break;
+                    }
                     event_queue.push(SessionEvent::Exited {
                         session_id: session_id.clone(),
                         reason: if config.raw_tcp {
@@ -1702,8 +1824,7 @@ fn spawn_tcp_reader_thread(
                                 config.send_sga,
                             );
                             if !response.is_empty() {
-                                let _ = response_writer.write_all(&response);
-                                let _ = response_writer.flush();
+                                let _ = queue_telnet_control(&command_tx, response);
                             }
                         })
                     };
@@ -1714,8 +1835,7 @@ fn spawn_tcp_reader_thread(
                             for action in auto_login.handle_visible_output(&visible, &config) {
                                 match action {
                                     TelnetAutoLoginAction::Send(payload) => {
-                                        let _ = response_writer.write_all(&payload);
-                                        let _ = response_writer.flush();
+                                        let _ = queue_telnet_control(&command_tx, payload);
                                     }
                                     TelnetAutoLoginAction::Complete
                                     | TelnetAutoLoginAction::Disable => {}
@@ -1737,6 +1857,9 @@ fn spawn_tcp_reader_thread(
                     continue;
                 }
                 Err(error) => {
+                    if lifecycle.is_stopped() {
+                        break;
+                    }
                     event_queue.push(SessionEvent::Error {
                         session_id: session_id.clone(),
                         message: error.to_string(),
@@ -1745,6 +1868,8 @@ fn spawn_tcp_reader_thread(
                 }
             }
         }
+        lifecycle.stop();
+        let _ = command_tx.send(TransportWriterCommand::Close);
     })
 }
 

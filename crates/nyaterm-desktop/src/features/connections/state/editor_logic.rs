@@ -1064,6 +1064,12 @@ pub(super) fn editor_field_seeds(
             Empty,
         ),
         (
+            ConnectionEditorField::TelnetKeepAliveInterval,
+            draft.telnet_keep_alive_interval_secs.clone(),
+            false,
+            Empty,
+        ),
+        (
             ConnectionEditorField::TelnetAutoLoginTimeout,
             draft.telnet_auto_login_timeout_ms.clone(),
             false,
@@ -1262,6 +1268,9 @@ pub(super) fn set_connection_editor_field_text(
         ConnectionEditorField::PostLoginDelay => draft.post_login_delay_ms = text,
         ConnectionEditorField::SftpShellDetectionTimeout => {
             draft.sftp_shell_detection_timeout_ms = text
+        }
+        ConnectionEditorField::TelnetKeepAliveInterval => {
+            draft.telnet_keep_alive_interval_secs = text;
         }
         ConnectionEditorField::TelnetAutoLoginTimeout => {
             draft.telnet_auto_login_timeout_ms = text;

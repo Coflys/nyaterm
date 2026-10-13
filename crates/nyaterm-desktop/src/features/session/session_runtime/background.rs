@@ -1043,6 +1043,8 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
                 force_character_at_a_time: false,
                 send_naws: false,
                 send_sga: false,
+                keep_alive_interval_secs:
+                    nyaterm_core::models::connection::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS,
                 auto_login: nyaterm_transport::TelnetAutoLoginConfig::default(),
                 encoding: "UTF-8".to_string(),
                 cols: info.cols,

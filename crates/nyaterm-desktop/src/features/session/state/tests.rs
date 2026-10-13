@@ -1667,3 +1667,29 @@ fn reconnect_releases_old_lease_without_disconnecting_shared_sibling_or_replacem
     pool.finish_disconnects();
     assert_eq!(new_disconnects.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn telnet_reconnect_request_retains_custom_keepalive_through_event_routing() {
+    let mut starts = SessionStartFeatureState::new();
+    let mut request = pending("Telnet reconnect");
+    request.reconnect_session_id = Some("old-telnet".into());
+    request.launch_config = Some(SessionLaunchConfig::Telnet(
+        nyaterm_transport::TelnetSessionConfig {
+            keep_alive_interval_secs: 45,
+            ..Default::default()
+        },
+    ));
+    starts.register_pending("telnet-request".into(), request);
+    assert!(starts.reconnect_is_pending("old-telnet"));
+    let SessionStartEventRequest::Pending { pending, .. } =
+        starts.take_event_request("telnet-request")
+    else {
+        panic!("Pending reconnect expected");
+    };
+    let pending = pending.expect("registered request");
+    assert_eq!(pending.reconnect_session_id.as_deref(), Some("old-telnet"));
+    let Some(SessionLaunchConfig::Telnet(config)) = pending.launch_config else {
+        panic!("Telnet launch config expected");
+    };
+    assert_eq!(config.keep_alive_interval_secs, 45);
+}

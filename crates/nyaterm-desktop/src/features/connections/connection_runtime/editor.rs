@@ -44,6 +44,9 @@ impl NyaTermApp {
         match error {
             ConnectionEditorValidationError::HostRequired => t!("dialog.hostRequired").into(),
             ConnectionEditorValidationError::PortInvalid => t!("dialog.portInvalid").into(),
+            ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
+                t!("dialog.telnetKeepAliveIntervalInvalid").into()
+            }
             ConnectionEditorValidationError::UsernameRequired => {
                 t!("dialog.usernameRequired").into()
             }
@@ -239,6 +242,9 @@ impl NyaTermApp {
                 send_sga: true,
                 telnet_auto_login_enabled: true,
                 telnet_auto_login_send_wake_enter: true,
+                telnet_keep_alive_interval_secs:
+                    nyaterm_core::models::connection::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS
+                        .to_string(),
                 telnet_auto_login_timeout_ms: "60000".to_string(),
                 telnet_auto_login_username_prompt_regex: String::new(),
                 telnet_auto_login_password_prompt_regex: String::new(),
@@ -759,6 +765,8 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.connection_state.toggle_editor_flag(flag);
+        self.connection_state
+            .sync_telnet_keep_alive_field_disabled(cx);
         cx.notify();
     }
 

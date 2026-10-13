@@ -7147,3 +7147,54 @@ fn recording_input_opt_in_preserves_legacy_unknown_fields_sync_and_backup() {
         std::fs::remove_dir_all(dir).ok();
     }
 }
+
+#[test]
+fn telnet_keepalive_survives_storage_backup_and_sync_round_trips() {
+    let dir = unique_temp_dir("telnet-keepalive");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let config: SessionsConfig = serde_json::from_value(serde_json::json!({
+        "groups": [], "connections": [
+            {"id":"old", "name":"Old Telnet", "type":"telnet", "host":"old.invalid", "future_telnet":{"retained":true}},
+            {"id":"disabled", "name":"Disabled", "type":"telnet", "host":"disabled.invalid", "keep_alive_interval_secs":0},
+            {"id":"custom", "name":"Custom", "type":"telnet", "host":"custom.invalid", "keep_alive_interval_secs":45}
+        ]
+    })).unwrap();
+    store.replace_sessions(&config).unwrap();
+    let assert_connections = |store: &ConnectionStore| {
+        let loaded = store.load_sessions().unwrap();
+        for expected in &config.connections {
+            let actual = loaded
+                .connections
+                .iter()
+                .find(|connection| connection.id == expected.id)
+                .unwrap();
+            assert_eq!(actual.config, expected.config);
+        }
+        let old = loaded
+            .connections
+            .iter()
+            .find(|connection| connection.id == "old")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(old).unwrap()["future_telnet"]["retained"],
+            true
+        );
+    };
+    assert_connections(&store);
+    for kind in [
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Backup,
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Sync,
+    ] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "telnet-test", "2.0.0")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let encoded = crate::portable_codec::encode_raw_portable_snapshot(&snapshot).unwrap();
+        let decoded = crate::portable_codec::decode_raw_portable_snapshot(&encoded).unwrap();
+        store.replace_sessions(&SessionsConfig::default()).unwrap();
+        store.apply_raw_portable_snapshot(&decoded).unwrap();
+        assert_connections(&store);
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}

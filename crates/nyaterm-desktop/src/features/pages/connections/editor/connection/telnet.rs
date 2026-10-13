@@ -405,6 +405,20 @@ pub(super) fn connection_editor_telnet_section(
                                 ))
                                 .child(
                                     div()
+                                        .w_full()
+                                        .opacity(if editor.raw_tcp_cli { 0.55 } else { 1.0 })
+                                        .child(editor_stepper_field(
+                                            palette,
+                                            t!("dialog.telnetKeepAliveInterval"),
+                                            ConnectionEditorField::TelnetKeepAliveInterval,
+                                            fields,
+                                            cx,
+                                        ))
+                                        .child(div().text_size(px(10.)).text_color(rgb(palette.text_muted))
+                                            .child(t!("dialog.telnetKeepAliveIntervalDesc"))),
+                                )
+                                .child(
+                                    div()
                                         .grid()
                                         .grid_cols(2)
                                         .gap_2()

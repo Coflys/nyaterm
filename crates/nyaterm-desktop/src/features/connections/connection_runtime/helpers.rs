@@ -20,6 +20,7 @@ use crate::models::{
 pub(super) enum ConnectionEditorValidationError {
     HostRequired,
     PortInvalid,
+    TelnetKeepAliveIntervalInvalid,
     UsernameRequired,
     ShellPathRequired,
     SerialPortRequired,
@@ -178,6 +179,8 @@ pub(super) fn connection_editor_from_saved(
         send_sga: true,
         telnet_auto_login_enabled: telnet_auto_login.enabled,
         telnet_auto_login_send_wake_enter: telnet_auto_login.send_wake_enter,
+        telnet_keep_alive_interval_secs:
+            nyaterm_core::models::connection::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS.to_string(),
         telnet_auto_login_timeout_ms: telnet_auto_login.timeout_ms.to_string(),
         telnet_auto_login_username_prompt_regex: telnet_auto_login
             .username_prompt_regex
@@ -259,6 +262,7 @@ pub(super) fn connection_editor_from_saved(
             force_character_at_a_time,
             send_naws,
             send_sga,
+            keep_alive_interval_secs,
             backspace_mode,
             encoding,
             ..
@@ -273,6 +277,7 @@ pub(super) fn connection_editor_from_saved(
             editor.force_character_at_a_time = force_character_at_a_time;
             editor.send_naws = send_naws;
             editor.send_sga = send_sga;
+            editor.telnet_keep_alive_interval_secs = keep_alive_interval_secs.to_string();
             editor.backspace_mode = backspace_mode;
             editor.encoding = encoding_to_editor_value(&encoding);
         }
@@ -455,6 +460,11 @@ pub(super) fn build_saved_connection_from_editor(
                 force_character_at_a_time: editor.force_character_at_a_time,
                 send_naws: editor.send_naws,
                 send_sga: editor.send_sga,
+                keep_alive_interval_secs: editor
+                    .telnet_keep_alive_interval_secs
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid)?,
                 auto_login: TelnetAutoLoginConfig {
                     enabled: editor.telnet_auto_login_enabled,
                     send_wake_enter: editor.telnet_auto_login_send_wake_enter,
@@ -1302,6 +1312,7 @@ mod tests {
                 force_character_at_a_time: true,
                 send_naws: false,
                 send_sga: false,
+                keep_alive_interval_secs: 45,
                 auto_login: Default::default(),
                 encoding: String::new(),
             },
@@ -1325,6 +1336,23 @@ mod tests {
         };
 
         let editor = connection_editor_from_saved(connection, false);
+        assert_eq!(editor.telnet_keep_alive_interval_secs, "45");
+        for invalid in ["", "-1", "1.5", "4294967296", "invalid"] {
+            let mut invalid_editor = editor.clone();
+            invalid_editor.telnet_keep_alive_interval_secs = invalid.into();
+            assert_eq!(
+                build_saved_connection_from_editor(&invalid_editor).unwrap_err(),
+                ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid
+            );
+        }
+        for valid in [0, 1, 60, u32::MAX] {
+            let mut valid_editor = editor.clone();
+            valid_editor.telnet_keep_alive_interval_secs = valid.to_string();
+            let saved = build_saved_connection_from_editor(&valid_editor).unwrap();
+            assert!(
+                matches!(saved.config, ConnectionType::Telnet { keep_alive_interval_secs, .. } if keep_alive_interval_secs == valid)
+            );
+        }
         let saved = build_saved_connection_from_editor(&editor).expect("valid connection");
         let ConnectionType::Telnet {
             enter_mode,
@@ -1332,6 +1360,7 @@ mod tests {
             force_character_at_a_time,
             send_naws,
             send_sga,
+            keep_alive_interval_secs,
             ..
         } = saved.config
         else {
@@ -1342,6 +1371,7 @@ mod tests {
         assert!(force_character_at_a_time);
         assert!(!send_naws);
         assert!(!send_sga);
+        assert_eq!(keep_alive_interval_secs, 45);
     }
 
     #[test]
@@ -1600,6 +1630,8 @@ mod tests {
                 force_character_at_a_time: false,
                 send_naws: true,
                 send_sga: true,
+                keep_alive_interval_secs:
+                    nyaterm_core::models::connection::DEFAULT_TELNET_KEEP_ALIVE_INTERVAL_SECS,
                 auto_login: Default::default(),
                 encoding: "GB18030".to_string(),
             },

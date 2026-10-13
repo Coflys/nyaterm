@@ -738,6 +738,9 @@ impl ConnectionFeatureState {
                 ConnectionEditorPlaceholder::Literal(value) => Cow::Borrowed(value),
             };
             if let Some(options) = connection_editor_number_options(field) {
+                let options = options.disabled(
+                    field == ConnectionEditorField::TelnetKeepAliveInterval && draft.raw_tcp_cli,
+                );
                 let entity = cx.new(|cx| {
                     NyaNumberInputState::new(cx, value, options).placeholder(placeholder)
                 });
@@ -864,6 +867,18 @@ impl ConnectionFeatureState {
             if let Some(entity) = self.editor.number_fields.get(&field) {
                 entity.update(cx, |entity, cx| entity.set_content(&value, cx));
             }
+        }
+        self.sync_telnet_keep_alive_field_disabled(cx);
+    }
+
+    pub fn sync_telnet_keep_alive_field_disabled(&self, cx: &mut App) {
+        if let Some(draft) = &self.editor.draft
+            && let Some(entity) = self
+                .editor
+                .number_fields
+                .get(&ConnectionEditorField::TelnetKeepAliveInterval)
+        {
+            entity.update(cx, |entity, cx| entity.set_disabled(draft.raw_tcp_cli, cx));
         }
     }
 
@@ -2133,6 +2148,11 @@ fn connection_editor_number_options(field: ConnectionEditorField) -> Option<NyaN
         ConnectionEditorField::PostLoginDelay => Some(
             NyaNumberInputOptions::default()
                 .range(0.0, 60_000.0)
+                .step(1.0),
+        ),
+        ConnectionEditorField::TelnetKeepAliveInterval => Some(
+            NyaNumberInputOptions::default()
+                .range(0.0, f64::from(u32::MAX))
                 .step(1.0),
         ),
         ConnectionEditorField::TelnetAutoLoginTimeout => Some(
