@@ -11,6 +11,8 @@ use crate::{
     SftpWriteTextResult, SshMultiplexHandle, SshSessionConfig,
 };
 
+#[cfg(test)]
+mod editor_save_tests;
 mod revision;
 mod shell;
 
@@ -1911,6 +1913,54 @@ fn read_shell_text_document(
     })
 }
 
+fn shell_editor_properties(
+    shell: &ShellRemote,
+    path: &RemoteFilePath,
+) -> anyhow::Result<SftpFileProperties> {
+    let mut properties = shell_properties(shell, path)?;
+    if shell.kind() == RemoteFileBackendKind::ScpNormal {
+        // The normal backend has no stat dependency. Use numeric ls output
+        // for saving while retaining owner/group names in property views.
+        let output = shell.exec_ok(
+            format!("LC_ALL=C ls -ldn -- {}", shell_quote(&path.display_path)),
+            None,
+        )?;
+        let line = String::from_utf8_lossy(&output);
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        properties.uid = columns.get(2).and_then(|value| value.parse().ok());
+        properties.gid = columns.get(3).and_then(|value| value.parse().ok());
+    }
+    Ok(properties)
+}
+
+fn shell_editor_replace_command(
+    properties: &SftpFileProperties,
+    temporary: &str,
+    target: &str,
+) -> anyhow::Result<String> {
+    let (Some(uid), Some(gid), Some(mode)) =
+        (properties.uid, properties.gid, properties.permissions)
+    else {
+        anyhow::bail!("Remote save refused: original ownership or permissions are unavailable");
+    };
+    let temporary = shell_quote(temporary);
+    let target = shell_quote(target);
+    let mode = mode & 0o7777;
+    let symbolic = format_permissions(SftpFileType::File, mode);
+    // Skip a no-op chown, restore mode after chown clears special bits, and
+    // verify both before mv. A rejected or ignored attribute change must not
+    // replace the original. Numeric ls works in both shell backends.
+    Ok(format!(
+        "(attrs=$(LC_ALL=C ls -ldn -- {temporary}) && \
+         set -f && set -- $attrs && \
+         (test \"$3:$4\" = '{uid}:{gid}' || chown {uid}:{gid} -- {temporary})) && \
+         chmod {mode:o} -- {temporary} && \
+         (attrs=$(LC_ALL=C ls -ldn -- {temporary}) && set -f && set -- $attrs && \
+         case \"$1\" in '{symbolic}'*) test \"$3:$4\" = '{uid}:{gid}' ;; *) false ;; esac) && \
+         mv -f -- {temporary} {target}"
+    ))
+}
+
 fn write_shell_text_document(
     shell: &ShellRemote,
     path: &RemoteFilePath,
@@ -1967,7 +2017,7 @@ fn write_shell_text_document(
         }
     }
 
-    let replacement_properties = match shell_properties(shell, path) {
+    let replacement_properties = match shell_editor_properties(shell, path) {
         Ok(properties) => properties,
         Err(error) => {
             cleanup_temporary();
@@ -1980,15 +2030,17 @@ fn write_shell_text_document(
         cleanup_temporary();
         return Ok(RemoteTextWriteResult::Conflict);
     }
-    let mode = replacement_properties.permissions.unwrap_or(0o600) & 0o7777;
     // POSIX shell fallback has no universal compare-and-swap primitive. Keep the
     // verified revision check adjacent to the final atomic rename.
-    let replace = format!(
-        "chmod {mode:o} -- {} && mv -f -- {} {}",
-        shell_quote(&temporary),
-        shell_quote(&temporary),
-        shell_quote(&path.display_path)
-    );
+    let replace =
+        match shell_editor_replace_command(&replacement_properties, &temporary, &path.display_path)
+        {
+            Ok(command) => command,
+            Err(error) => {
+                cleanup_temporary();
+                return Err(error);
+            }
+        };
     if let Err(error) = shell.exec_ok(replace, None) {
         cleanup_temporary();
         return Err(error);
@@ -2010,7 +2062,7 @@ fn write_shell_text(
     expected_size: Option<u64>,
     force: bool,
 ) -> anyhow::Result<SftpWriteTextResult> {
-    let properties = shell_properties(shell, path)?;
+    let properties = shell_editor_properties(shell, path)?;
     let modified_at = u64::from(properties.modified_at.unwrap_or(0));
     let size = properties.size.unwrap_or(0);
     if !force
@@ -2024,15 +2076,12 @@ fn write_shell_text(
         path.display_path,
         uuid::Uuid::new_v4().simple()
     );
-    let mode = properties.permissions.unwrap_or(0o600) & 0o7777;
+    let replace = shell_editor_replace_command(&properties, &temporary, &path.display_path)?;
     let command = format!(
-        "umask 077; cat > {} && test $(wc -c < {}) -eq {} && chmod {mode:o} -- {} && mv -f -- {} {}",
+        "umask 077; cat > {} && test $(wc -c < {}) -eq {} && {replace}",
         shell_quote(&temporary),
         shell_quote(&temporary),
-        content.len(),
-        shell_quote(&temporary),
-        shell_quote(&temporary),
-        shell_quote(&path.display_path)
+        content.len()
     );
     if let Err(error) = shell.exec_ok(command, Some(content.as_bytes().to_vec())) {
         let _ = shell.exec(format!("rm -f -- {}", shell_quote(&temporary)), None);
