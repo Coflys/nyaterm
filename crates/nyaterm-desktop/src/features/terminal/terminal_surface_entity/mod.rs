@@ -2611,15 +2611,10 @@ impl Render for TerminalSurface {
         );
         grid = grid
             .with_bold_default_foreground(self.bold_default_foreground)
-            .with_selection(self.selection_visual.map(|selection| {
-                TerminalGridSelection::new(
-                    selection.anchor.line,
-                    selection.anchor.col,
-                    selection.head.line,
-                    selection.head.col,
-                    selection.all_buffer,
-                )
-            }))
+            .with_selection(
+                self.selection_visual
+                    .map(TerminalGridSelection::from_selection),
+            )
             .with_font_fallbacks(self.font_fallbacks.clone())
             .with_layout_cache(self.layout_cache.clone())
             .with_layout_rows(self.viewport_rows)

@@ -9,6 +9,10 @@ use gpui::{
     TextRun, Window, fill, font, point, px, relative, rgb, rgba, size,
 };
 use nyaterm_core::ResolvedKeywordHighlightRule;
+use nyaterm_terminal::selection::{
+    TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
+    expand_selection_range,
+};
 use nyaterm_terminal::{
     ShellInputLineKind, TerminalLineId, TerminalSnapshot, terminal_cell_count,
     terminal_char_cell_width, terminal_is_zero_width_mark,
@@ -59,17 +63,20 @@ pub struct TerminalLineDecorations {
     pub link_ranges: Vec<(usize, usize)>,
 }
 
-/// Dynamic absolute-buffer selection. Endpoints are inclusive terminal cells.
+/// Dynamic absolute-buffer selection with half-cell endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalGridSelection {
     pub anchor_line: usize,
     pub anchor_col: usize,
     pub head_line: usize,
     pub head_col: usize,
+    pub anchor_side: TerminalCellSide,
+    pub head_side: TerminalCellSide,
     pub all_buffer: bool,
 }
 
 impl TerminalGridSelection {
+    /// Compatibility constructor: inclusive cells, with identical cells empty.
     pub fn new(
         anchor_line: usize,
         anchor_col: usize,
@@ -77,51 +84,42 @@ impl TerminalGridSelection {
         head_col: usize,
         all_buffer: bool,
     ) -> Self {
+        let anchor = TerminalBufferCellPos::new(anchor_line, anchor_col);
+        let head = TerminalBufferCellPos::new(head_line, head_col);
+        let mut selection = if anchor == head {
+            TerminalSelection::with_anchor(anchor)
+        } else {
+            TerminalSelection::from_range(anchor, head)
+        };
+        selection.all_buffer = all_buffer;
+        Self::from_selection(selection)
+    }
+
+    pub fn from_selection(selection: TerminalSelection) -> Self {
         Self {
-            anchor_line,
-            anchor_col,
-            head_line,
-            head_col,
-            all_buffer,
+            anchor_line: selection.anchor.position.line,
+            anchor_col: selection.anchor.position.col,
+            head_line: selection.head.position.line,
+            head_col: selection.head.position.col,
+            anchor_side: selection.anchor.side,
+            head_side: selection.head.side,
+            all_buffer: selection.all_buffer,
         }
     }
 
     fn cols_for_absolute_line(self, line: usize) -> Option<(usize, usize)> {
-        if self.all_buffer {
-            return Some((0, usize::MAX));
+        TerminalSelection {
+            anchor: TerminalSelectionEndpoint::new(
+                TerminalBufferCellPos::new(self.anchor_line, self.anchor_col),
+                self.anchor_side,
+            ),
+            head: TerminalSelectionEndpoint::new(
+                TerminalBufferCellPos::new(self.head_line, self.head_col),
+                self.head_side,
+            ),
+            all_buffer: self.all_buffer,
         }
-        if (self.anchor_line, self.anchor_col) == (self.head_line, self.head_col) {
-            return None;
-        }
-        let (start_line, start_col, end_line, end_col) =
-            if (self.anchor_line, self.anchor_col) <= (self.head_line, self.head_col) {
-                (
-                    self.anchor_line,
-                    self.anchor_col,
-                    self.head_line,
-                    self.head_col,
-                )
-            } else {
-                (
-                    self.head_line,
-                    self.head_col,
-                    self.anchor_line,
-                    self.anchor_col,
-                )
-            };
-        if line < start_line || line > end_line {
-            return None;
-        }
-        if start_line == end_line {
-            return Some((start_col, end_col.saturating_add(1)));
-        }
-        if line == start_line {
-            return Some((start_col, usize::MAX));
-        }
-        if line == end_line {
-            return Some((0, end_col.saturating_add(1)));
-        }
-        Some((0, usize::MAX))
+        .cols_for_absolute_line(line)
     }
 }
 
@@ -1360,7 +1358,7 @@ fn terminal_selection_cols_for_snapshot_row(
     let (start, end) = selection?.cols_for_absolute_line(absolute_line)?;
     let start = start.min(snapshot.cols);
     let end = end.min(snapshot.cols);
-    (end > start).then_some((start, end))
+    expand_selection_range(&snapshot.row(row)?.cells, start, end)
 }
 
 fn push_dynamic_selection_background(

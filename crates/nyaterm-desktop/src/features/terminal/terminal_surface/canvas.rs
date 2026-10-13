@@ -26,7 +26,7 @@ use crate::models::{
     SessionLaunchConfig, TerminalPerformanceMode, TerminalPerformanceOverlay, TerminalSearchMode,
     terminal_action_link_matcher_key, terminal_expensive_interactions_enabled,
 };
-use crate::terminal::{NyaTerminalElement, TerminalLineDecorations};
+use crate::terminal::{NyaTerminalElement, TerminalGridSelection, TerminalLineDecorations};
 use crate::widgets::small_button;
 
 use super::decorations::{
@@ -608,15 +608,7 @@ impl NyaTermApp {
             );
             grid = grid
                 .with_bold_default_foreground(self.settings.summary().bold_default_foreground)
-                .with_selection(terminal_selection.map(|selection| {
-                    crate::terminal::TerminalGridSelection::new(
-                        selection.anchor.line,
-                        selection.anchor.col,
-                        selection.head.line,
-                        selection.head.col,
-                        selection.all_buffer,
-                    )
-                }))
+                .with_selection(terminal_selection.map(TerminalGridSelection::from_selection))
                 .with_font_fallbacks(terminal_font_fallbacks.clone());
             if let Some(cache) = layout_cache {
                 grid = grid.with_layout_cache(cache);
@@ -643,15 +635,7 @@ impl NyaTermApp {
             );
             grid = grid
                 .with_bold_default_foreground(self.settings.summary().bold_default_foreground)
-                .with_selection(terminal_selection.map(|selection| {
-                    crate::terminal::TerminalGridSelection::new(
-                        selection.anchor.line,
-                        selection.anchor.col,
-                        selection.head.line,
-                        selection.head.col,
-                        selection.all_buffer,
-                    )
-                }))
+                .with_selection(terminal_selection.map(TerminalGridSelection::from_selection))
                 .with_font_fallbacks(terminal_font_fallbacks.clone());
             if let Some(cache) = layout_cache {
                 grid = grid.with_layout_cache(cache);
