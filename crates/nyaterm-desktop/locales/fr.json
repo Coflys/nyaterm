@@ -9,7 +9,7 @@
     "lock": "Verrouiller l’écran",
     "update": "Rechercher des mises à jour",
     "quit": "Quitter NyaTerm",
-    "unavailable": "Le masquage dans la zone de notification est indisponible. La fenêtre a été réduite normalement.",
+    "unavailable": "Impossible de masquer la fenêtre dans la zone de notification pour le moment. La fenêtre a été réduite normalement.",
     "hide": "Masquer dans la zone de notification",
     "activeSessions": "Sessions actives (%{count})",
     "noActiveSessions": "Aucune session active",

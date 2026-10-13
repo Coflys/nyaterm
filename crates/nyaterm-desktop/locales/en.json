@@ -9,7 +9,7 @@
     "lock": "Lock Screen",
     "update": "Check for updates",
     "quit": "Quit NyaTerm",
-    "unavailable": "Tray hiding is unavailable in this desktop session. The window was minimized normally.",
+    "unavailable": "Could not hide to the tray at this time. The window was minimized normally.",
     "hide": "Hide to Tray",
     "activeSessions": "Active Sessions (%{count})",
     "noActiveSessions": "No Active Sessions",

@@ -9,7 +9,7 @@
     "lock": "화면 잠금",
     "update": "업데이트 확인",
     "quit": "NyaTerm 종료",
-    "unavailable": "현재 데스크톱은 트레이 숨기기를 지원하지 않아 일반 최소화를 수행했습니다.",
+    "unavailable": "현재 트레이로 숨길 수 없어 창을 일반 최소화했습니다.",
     "hide": "트레이로 숨기기",
     "activeSessions": "활성 세션 (%{count})",
     "noActiveSessions": "활성 세션 없음",

@@ -9,7 +9,7 @@
     "lock": "画面をロック",
     "update": "更新を確認",
     "quit": "NyaTerm を終了",
-    "unavailable": "このデスクトップではトレイに非表示にできません。通常の最小化を行いました。",
+    "unavailable": "現在トレイに非表示にできません。通常の最小化を行いました。",
     "hide": "トレイに隠す",
     "activeSessions": "アクティブなセッション (%{count})",
     "noActiveSessions": "アクティブなセッションはありません",

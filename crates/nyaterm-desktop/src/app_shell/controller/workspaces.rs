@@ -6,6 +6,7 @@ use crate::app_shell::AppShell;
 use crate::app_shell::AppShellStartup;
 use crate::app_shell::GlobalStateMutation;
 use crate::app_shell::window_state::MainWindowPlacement;
+use crate::features::shell::tray::show_window;
 use crate::models::NavItem;
 use gpui::AppContext as _;
 use gpui::Context;
@@ -241,8 +242,7 @@ impl DesktopController {
             return false;
         }
         let _ = entry.handle.update(cx, |_, window, cx| {
-            window.activate_window();
-            cx.activate(true);
+            show_window(window, cx);
         });
         self.most_recent_workspace_id = Some(workspace_id);
         true
@@ -301,8 +301,7 @@ impl DesktopController {
                 app.activate_settings_window(cx);
             });
             let _ = entry.handle.update(cx, |_, window, cx| {
-                window.activate_window();
-                cx.activate(true);
+                show_window(window, cx);
             });
             self.mark_active(owner);
             true

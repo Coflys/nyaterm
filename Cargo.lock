@@ -6361,6 +6361,7 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.61.2",
+ "x11rb",
  "zed-reqwest",
  "zeroize",
  "zip",

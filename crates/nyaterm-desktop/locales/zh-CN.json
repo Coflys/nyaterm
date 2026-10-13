@@ -9,7 +9,7 @@
     "lock": "锁定界面",
     "update": "检查更新",
     "quit": "退出 NyaTerm",
-    "unavailable": "当前桌面会话不支持隐藏到托盘，窗口已正常最小化。",
+    "unavailable": "暂时无法隐藏到托盘，窗口已正常最小化。",
     "hide": "隐藏到托盘",
     "activeSessions": "活动会话 (%{count})",
     "noActiveSessions": "暂无活动会话",

@@ -9,7 +9,7 @@
     "lock": "鎖定介面",
     "update": "檢查更新",
     "quit": "結束 NyaTerm",
-    "unavailable": "目前桌面工作階段不支援隱藏至系統匣，視窗已正常最小化。",
+    "unavailable": "暫時無法隱藏至系統匣，視窗已正常最小化。",
     "hide": "隱藏到系統匣",
     "activeSessions": "使用中的工作階段 (%{count})",
     "noActiveSessions": "目前沒有使用中的工作階段",
