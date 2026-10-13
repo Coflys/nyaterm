@@ -57,8 +57,8 @@ same-file = "1"
 tempfile = "3"
 glob = "0.3.4"
 gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "9d03436aa8185c972e957f36e95044ac524b2cf4" }
-gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "b5bec2f7fb23169628d641f01e925764fe518072" }
-gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "b5bec2f7fb23169628d641f01e925764fe518072" }
+gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "d613d7bf07baf02bc32864117640e78aa0e2f077" }
+gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "d613d7bf07baf02bc32864117640e78aa0e2f077" }
 gpui_platform = { git = "https://github.com/nyakang/zed", rev = "9d03436aa8185c972e957f36e95044ac524b2cf4" }
 # Pure-Rust, `#![forbid(unsafe)]` PDF rasterizer (MIT OR Apache-2.0). Pinned
 # exactly: the crate is pre-1.0 and explicitly experimental, so a caret range
