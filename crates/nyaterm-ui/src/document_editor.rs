@@ -7,7 +7,7 @@ use gpui::{
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 
 use crate::document_snapshot::NyaDocumentSnapshot;
-use crate::input_focus::register_nya_input_focus;
+use crate::input_focus::{preserve_nya_input_focus_on_pointer_down, register_nya_input_focus};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NyaDocumentEditorEvent {
@@ -271,7 +271,14 @@ impl Render for NyaDocumentEditorState {
         if let Some(font) = &self.font {
             editor = editor.font(font.clone());
         }
-        div().size_full().min_h_0().min_w_0().child(editor)
+        div()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .capture_any_mouse_down(|_, _, cx| {
+                preserve_nya_input_focus_on_pointer_down(cx);
+            })
+            .child(editor)
     }
 }
 
@@ -298,7 +305,77 @@ impl gpui::RenderOnce for NyaDocumentEditor {
 mod tests {
     use super::{NyaDocumentEditorEvent, NyaDocumentEditorState};
     use crate::document_snapshot::NyaDocumentSnapshot;
-    use gpui::TestAppContext;
+    use crate::root::nya_root;
+    use gpui::{AppContext as _, Focusable as _, Modifiers, MouseButton, TestAppContext};
+
+    #[gpui::test]
+    fn clicking_another_line_moves_the_document_cursor(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut document = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| {
+                NyaDocumentEditorState::new_source(
+                    window,
+                    cx,
+                    "abcdefghij\nklmnopqrst\nuvwxyz",
+                    "plain",
+                )
+            });
+            document = Some(editor.clone());
+            nya_root(editor, window, cx)
+        });
+        let document = document.unwrap();
+        cx.run_until_parked();
+        cx.update(|window, cx| _ = window.draw(cx));
+        let positions = cx.update(|_, cx| {
+            let editor = document.read(cx).editor.read(cx);
+            [2, 13].map(|offset| editor.range_to_bounds(&(offset..offset)).unwrap().center())
+        });
+        for (position, offset) in positions.into_iter().zip([2, 13]) {
+            cx.simulate_click(position, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+                assert_eq!(document.read(cx).selected_range(cx), offset..offset);
+                assert!(document.read(cx).focus_handle(cx).is_focused(window));
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn dragging_on_another_line_starts_a_new_document_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut document = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| {
+                NyaDocumentEditorState::new_source(
+                    window,
+                    cx,
+                    "abcdefghij\nklmnopqrst\nuvwxyz",
+                    "plain",
+                )
+            });
+            document = Some(editor.clone());
+            nya_root(editor, window, cx)
+        });
+        let document = document.unwrap();
+        cx.run_until_parked();
+        cx.update(|window, cx| _ = window.draw(cx));
+        let [first, start, end] = cx.update(|_, cx| {
+            let editor = document.read(cx).editor.read(cx);
+            [2, 13, 17].map(|offset| editor.range_to_bounds(&(offset..offset)).unwrap().center())
+        });
+        cx.simulate_click(first, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| _ = window.draw(cx));
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| _ = window.draw(cx));
+        cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(document.read(cx).selected_range(cx), 13..17));
+    }
 
     #[gpui::test]
     fn queued_replacement_is_compared_before_the_next_render(cx: &mut TestAppContext) {
