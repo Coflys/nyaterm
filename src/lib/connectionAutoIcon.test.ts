@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SavedConnection } from "@/types/global";
 import { updateConnectionAutoIconAfterSessionStart } from "./connectionAutoIcon";
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getRemoteStats: vi.fn(),
+  invoke: vi.fn(),
+}));
 
 vi.mock("./invoke", () => ({ invoke: mocks.invoke }));
+vi.mock("./remoteStats", () => ({ getRemoteStats: mocks.getRemoteStats }));
 
 describe("connection auto icon monitoring eligibility", () => {
   beforeEach(() => {
@@ -32,10 +36,7 @@ describe("connection auto icon monitoring eligibility", () => {
 
     expect(mocks.invoke).toHaveBeenCalledTimes(1);
     expect(mocks.invoke).toHaveBeenCalledWith("get_saved_connections");
-    expect(mocks.invoke).not.toHaveBeenCalledWith(
-      "get_remote_stats",
-      expect.objectContaining({ sessionId: "session-network" }),
-    );
+    expect(mocks.getRemoteStats).not.toHaveBeenCalled();
   });
 
   it("short-circuits before loading a connection when remote stats are disabled", async () => {
@@ -46,5 +47,6 @@ describe("connection auto icon monitoring eligibility", () => {
     });
 
     expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.getRemoteStats).not.toHaveBeenCalled();
   });
 });
