@@ -4,6 +4,10 @@ use std::sync::Arc;
 
 use gpui::{Bounds, ShapedLine, SharedString, font, point, px, rgb, size};
 use nyaterm_core::ResolvedKeywordHighlightRule;
+use nyaterm_terminal::selection::{
+    TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
+    selected_row_text,
+};
 use nyaterm_terminal::{ShellInputLineKind, TerminalScreen, TerminalSnapshot};
 
 use super::{
@@ -1893,6 +1897,116 @@ fn grid_selection_uses_cell_columns_for_wide_characters() {
         terminal_selection_cols_for_snapshot_row(&snapshot, 0, Some(selection)),
         Some((1, 3))
     );
+}
+
+#[test]
+fn half_cell_grid_selection_paints_the_same_cells_that_are_copied() {
+    let mut screen = TerminalScreen::new(8, 2);
+    screen.advance("A界😀B".as_bytes());
+    let snapshot = screen.snapshot();
+    for (start_col, start_side, end_col, end_side, expected, text) in [
+        (
+            0,
+            TerminalCellSide::Left,
+            0,
+            TerminalCellSide::Right,
+            Some((0, 1)),
+            "A",
+        ),
+        (
+            0,
+            TerminalCellSide::Left,
+            1,
+            TerminalCellSide::Left,
+            Some((0, 1)),
+            "A",
+        ),
+        (
+            1,
+            TerminalCellSide::Left,
+            1,
+            TerminalCellSide::Right,
+            Some((1, 3)),
+            "界",
+        ),
+        (
+            2,
+            TerminalCellSide::Left,
+            2,
+            TerminalCellSide::Right,
+            Some((1, 3)),
+            "界",
+        ),
+        (
+            4,
+            TerminalCellSide::Left,
+            4,
+            TerminalCellSide::Right,
+            Some((3, 5)),
+            "😀",
+        ),
+        (
+            0,
+            TerminalCellSide::Right,
+            1,
+            TerminalCellSide::Left,
+            None,
+            "",
+        ),
+    ] {
+        let a =
+            TerminalSelectionEndpoint::new(TerminalBufferCellPos::new(0, start_col), start_side);
+        let b = TerminalSelectionEndpoint::new(TerminalBufferCellPos::new(0, end_col), end_side);
+        for (anchor, head) in [(a, b), (b, a)] {
+            let selection = TerminalSelection {
+                anchor,
+                head,
+                all_buffer: false,
+            };
+            let grid = TerminalGridSelection::from_selection(selection);
+            assert_eq!(
+                terminal_selection_cols_for_snapshot_row(&snapshot, 0, Some(grid)),
+                expected
+            );
+            let copied = selection
+                .cols_for_absolute_line(0)
+                .map(|(start, end)| selected_row_text(&snapshot.row(0).unwrap().cells, start, end))
+                .unwrap_or_default();
+            assert_eq!(copied, text);
+            for scale in [1.0, 1.25, 1.5] {
+                let geometry = TerminalPaintGeometry {
+                    bounds: Bounds::new(
+                        point(px(3.5), px(9.25)),
+                        size(px(8.0 * 7.5 * scale), px(32.0)),
+                    ),
+                    visual_y_offset: -2.5,
+                    cell_width: 7.5 * scale,
+                    cell_height: 16.0 * scale,
+                };
+                let mut backgrounds = Vec::new();
+                push_dynamic_selection_background(
+                    &snapshot,
+                    0,
+                    Some(grid),
+                    nyaterm_ui::theme_palette("github-dark"),
+                    geometry,
+                    &mut backgrounds,
+                );
+                assert_eq!(backgrounds.len(), usize::from(expected.is_some()));
+                if let Some((start, end)) = expected {
+                    let bounds = backgrounds[0].bounds;
+                    assert_eq!(
+                        f32::from(bounds.left()),
+                        (3.5 + start as f32 * geometry.cell_width).floor()
+                    );
+                    assert_eq!(
+                        f32::from(bounds.right()),
+                        (3.5 + end as f32 * geometry.cell_width).ceil()
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

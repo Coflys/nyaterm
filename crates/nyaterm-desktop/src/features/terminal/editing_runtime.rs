@@ -320,8 +320,98 @@ mod tests {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{TerminalBufferCellPos, TerminalSelection};
     use crate::test_support::TestConfigDir;
+    use nyaterm_terminal::selection::{TerminalCellSide, TerminalSelectionEndpoint};
 
     struct InputHost;
+
+    #[test]
+    fn half_cell_selection_deletes_and_replaces_only_the_highlighted_input() {
+        let dir = TestConfigDir::new("nyaterm-shell-edit-half-cell");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"abcdef", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ abcdef".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            app.terminal.selection.session_id = Some("s1".into());
+            for (start_col, start_side, end_col, end_side, expected) in [
+                (
+                    3,
+                    TerminalCellSide::Left,
+                    5,
+                    TerminalCellSide::Left,
+                    Some((1, 3)),
+                ),
+                (
+                    5,
+                    TerminalCellSide::Left,
+                    3,
+                    TerminalCellSide::Left,
+                    Some((1, 3)),
+                ),
+                (
+                    3,
+                    TerminalCellSide::Left,
+                    3,
+                    TerminalCellSide::Right,
+                    Some((1, 2)),
+                ),
+                (3, TerminalCellSide::Right, 4, TerminalCellSide::Left, None),
+                (
+                    1,
+                    TerminalCellSide::Right,
+                    4,
+                    TerminalCellSide::Left,
+                    Some((0, 2)),
+                ),
+                (1, TerminalCellSide::Left, 4, TerminalCellSide::Left, None),
+            ] {
+                app.terminal.selection.selection = Some(TerminalSelection {
+                    anchor: TerminalSelectionEndpoint::new(
+                        TerminalBufferCellPos::new(0, start_col),
+                        start_side,
+                    ),
+                    head: TerminalSelectionEndpoint::new(
+                        TerminalBufferCellPos::new(0, end_col),
+                        end_side,
+                    ),
+                    all_buffer: false,
+                });
+                app.begin_smart_input_selection();
+                app.commit_smart_input_selection();
+                let range = app.smart_cursor_selected_input_range();
+                assert_eq!(
+                    range.as_ref().map(|range| (range.start, range.end)),
+                    expected
+                );
+                if let Some(range) = range {
+                    let state = app.terminal.editing.state().unwrap();
+                    let delete = plan_edit(
+                        &state.model.input,
+                        state.model.version,
+                        EditIntent::Delete(range.start..range.end),
+                    )
+                    .unwrap();
+                    let replace = plan_edit(
+                        &state.model.input,
+                        state.model.version,
+                        EditIntent::Replace {
+                            range: range.start..range.end,
+                            text: "X",
+                        },
+                    )
+                    .unwrap();
+                    let mut deleted = "abcdef".to_string();
+                    deleted.replace_range(range.start..range.end, "");
+                    let mut replaced = "abcdef".to_string();
+                    replaced.replace_range(range.start..range.end, "X");
+                    assert_eq!(delete.predicted.value, deleted);
+                    assert_eq!(replace.predicted.value, replaced);
+                }
+            }
+        });
+    }
 
     #[test]
     fn foreground_echo_cannot_move_delete_or_replace_shell_input() {
@@ -419,10 +509,11 @@ mod tests {
                 .seed_session_view(info.id.clone(), "$ abcdef".into(), "UTF-8");
             app.reconcile_shell_editing(&info.id, cx);
             app.terminal.selection.session_id = Some(info.id.clone());
-            app.terminal.selection.selection = Some(TerminalSelection::from_range(
-                TerminalBufferCellPos::new(0, 3),
-                TerminalBufferCellPos::new(0, 5),
-            ));
+            app.terminal.selection.selection = Some(TerminalSelection {
+                anchor: TerminalBufferCellPos::new(0, 3).into(),
+                head: TerminalBufferCellPos::new(0, 6).into(),
+                all_buffer: false,
+            });
             app.begin_smart_input_selection();
             app.commit_smart_input_selection();
             assert!(app.smart_cursor_selected_input_range().is_some());

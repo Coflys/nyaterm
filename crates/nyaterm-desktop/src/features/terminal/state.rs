@@ -4,6 +4,7 @@
 //! selected, where the surface was painted. Parsing, snapshots and the wire
 //! protocol stay in `nyaterm-terminal` and `nyaterm-transport`.
 
+use nyaterm_terminal::selection::TerminalSelectionEndpoint;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,8 +22,8 @@ use super::window_state::TerminalWindowState;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
 use crate::models::{
     ActionLinkMenuState, ActionLinkTooltipState, RecordingHistorySearchEvent,
-    RecordingHistorySearchKey, TerminalBufferCellPos, TerminalFrameEvent, TerminalFramePipeline,
-    TerminalSearchMode, TerminalSelection, TerminalViewState,
+    RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
+    TerminalSelection, TerminalViewState,
 };
 use crate::theme::ThemePalette;
 
@@ -99,7 +100,7 @@ pub(super) struct TerminalSelectionState {
     pub(super) selection: Option<TerminalSelection>,
     /// A released empty selection retains only its anchor for a later Shift+click.
     /// It shares `session_id` with selection and is never painted or copied.
-    pub(super) click_anchor: Option<TerminalBufferCellPos>,
+    pub(super) click_anchor: Option<TerminalSelectionEndpoint>,
     pub(super) session_id: Option<String>,
     /// Derived once from the worker's authoritative buffer for each Select All.
     pub(super) all_buffer_text: Option<String>,
@@ -663,7 +664,7 @@ mod tests {
     #[test]
     fn terminal_owner_clears_activation_interaction_as_one_transition() {
         let mut state = terminal_state();
-        state.selection.click_anchor = Some(crate::models::TerminalBufferCellPos::new(4, 2));
+        state.selection.click_anchor = Some(crate::models::TerminalBufferCellPos::new(4, 2).into());
         state.selection.dragging = true;
         state.menus.action_link_hover_pending = Some((
             "https://example.com".to_string(),
@@ -715,6 +716,38 @@ mod tests {
         );
         assert!(state.selection.selection.is_some());
         assert!(!state.selection.dragging);
+    }
+
+    #[test]
+    fn lost_mouse_up_distinguishes_a_single_cell_from_adjacent_empty_sides() {
+        use nyaterm_terminal::selection::{
+            TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
+        };
+
+        let mut state = terminal_state();
+        state.selection.dragging = true;
+        state.selection.selection = Some(TerminalSelection::from_range(
+            TerminalBufferCellPos::new(4, 2),
+            TerminalBufferCellPos::new(4, 2),
+        ));
+        assert_eq!(
+            state.recover_lost_selection_mouse_up(),
+            LostTerminalSelectionRecovery::Committed
+        );
+        state.selection.dragging = true;
+        state.selection.selection = Some(TerminalSelection {
+            anchor: TerminalSelectionEndpoint::new(
+                TerminalBufferCellPos::new(4, 2),
+                TerminalCellSide::Right,
+            ),
+            head: TerminalBufferCellPos::new(4, 3).into(),
+            all_buffer: false,
+        });
+        assert_eq!(
+            state.recover_lost_selection_mouse_up(),
+            LostTerminalSelectionRecovery::ClearedEmpty
+        );
+        assert!(state.selection.selection.is_none());
     }
 
     #[test]
