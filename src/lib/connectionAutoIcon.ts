@@ -1,7 +1,8 @@
 import { inferConnectionIconKeyFromRemoteSystem } from "@/components/icons";
-import type { RemoteStats, SavedConnection } from "@/types/global";
+import type { SavedConnection } from "@/types/global";
 import { invoke } from "./invoke";
 import { logger } from "./logger";
+import { getRemoteStats } from "./remoteStats";
 
 type AutoIconSessionStartOptions = {
   connectionId?: string | null;
@@ -42,7 +43,7 @@ export async function updateConnectionAutoIconAfterSessionStart({
       return;
     }
 
-    const stats = await invoke<RemoteStats>("get_remote_stats", { sessionId });
+    const stats = await getRemoteStats(sessionId);
     const iconKey = inferConnectionIconKeyFromRemoteSystem(stats.system);
     if (!iconKey) return;
 
