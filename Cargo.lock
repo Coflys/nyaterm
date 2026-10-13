@@ -181,7 +181,7 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
-source = "git+https://github.com/nyakang/alacritty?rev=e3d2ce97748039dedcd9316778d61d65c7b8ff2e#e3d2ce97748039dedcd9316778d61d65c7b8ff2e"
+source = "git+https://github.com/nyakang/alacritty?rev=4155cc1d57788444594d9d31cf233568ef113ee8#4155cc1d57788444594d9d31cf233568ef113ee8"
 dependencies = [
  "arrayvec",
  "base64 0.22.1",
@@ -455,18 +455,6 @@ dependencies = [
  "concurrent-queue",
  "event-listener-strategy",
  "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-compression"
-version = "0.4.48"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb61aea1a7def73ee7c350a184f0e70b32c182344e2e75bf70c9b621b83417fd"
-dependencies = [
- "compression-codecs",
- "compression-core",
- "futures-io",
  "pin-project-lite",
 ]
 
@@ -848,26 +836,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bindgen"
-version = "0.72.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
-dependencies = [
- "bitflags 2.13.2",
- "cexpr",
- "clang-sys",
- "itertools 0.13.0",
- "log",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 2.1.3",
- "shlex 1.3.0",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1033,16 +1001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "borsh"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
-dependencies = [
- "bytes",
- "cfg_aliases 0.2.2",
-]
-
-[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1070,6 +1028,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
 dependencies = [
  "memchr",
+ "regex-automata",
  "serde_core",
 ]
 
@@ -1125,15 +1084,6 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
-
-[[package]]
-name = "bzip2"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
-dependencies = [
- "libbz2-rs-sys",
-]
 
 [[package]]
 name = "cairo-rs"
@@ -1230,16 +1180,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 2.0.1",
-]
-
-[[package]]
-name = "cexpr"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
-dependencies = [
- "nom 7.1.3",
+ "shlex",
 ]
 
 [[package]]
@@ -1269,15 +1210,6 @@ name = "cfg_aliases"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
-
-[[package]]
-name = "cgl"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ced0551234e87afee12411d535648dd89d2e7f34c78b753395567aff3d447ff"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "chacha20"
@@ -1327,17 +1259,6 @@ dependencies = [
  "crypto-common 0.2.2",
  "inout 0.2.2",
  "zeroize",
-]
-
-[[package]]
-name = "clang-sys"
-version = "1.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"
-dependencies = [
- "glob",
- "libc",
- "libloading 0.8.9",
 ]
 
 [[package]]
@@ -1457,7 +1378,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -1478,24 +1399,6 @@ name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
-
-[[package]]
-name = "compression-codecs"
-version = "0.4.43"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef16c47ba2797aa6a909cc37d39911f3a6743811fe7408ac0b0cc0276b656e9"
-dependencies = [
- "bzip2",
- "compression-core",
- "flate2",
- "memchr",
-]
-
-[[package]]
-name = "compression-core"
-version = "0.4.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e8ccc4ea9f6acc32d102c0f6d471d11d913ad15f20c04de743374861fa1d414"
 
 [[package]]
 name = "concurrent-queue"
@@ -1654,19 +1557,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-graphics2"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4416167a69126e617f8d0a214af0e3c1dbdeffcb100ddf72dcd1a1ac9893c146"
-dependencies = [
- "bitflags 2.13.2",
- "block",
- "cfg-if",
- "core-foundation 0.10.1",
- "libc",
-]
-
-[[package]]
 name = "core-text"
 version = "21.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1676,20 +1566,6 @@ dependencies = [
  "core-graphics 0.24.0",
  "foreign-types",
  "libc",
-]
-
-[[package]]
-name = "core-video"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "139679cc63eb9504bdbe37e37874b0247136177655f0008588781e90863afa62"
-dependencies = [
- "block",
- "core-foundation 0.10.1",
- "core-graphics2",
- "io-surface",
- "libc",
- "metal",
 ]
 
 [[package]]
@@ -2302,13 +2178,12 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.119",
- "unicode-xid",
 ]
 
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2383,7 +2258,6 @@ checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
- "libc",
  "objc2 0.6.4",
 ]
 
@@ -2698,17 +2572,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "erased-serde"
-version = "0.4.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2add8a07dd6a8d93ff627029c51de145e12686fbc36ecb298ac22e74cf02dec"
-dependencies = [
- "serde",
- "serde_core",
- "typeid",
-]
-
-[[package]]
 name = "errno"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2812,9 +2675,6 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-dependencies = [
- "getrandom 0.4.3",
-]
 
 [[package]]
 name = "fax"
@@ -2946,7 +2806,6 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
- "fastrand",
  "futures-core",
  "futures-sink",
  "spin 0.9.9",
@@ -3631,18 +3490,16 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "accesskit",
  "anyhow",
  "async-channel",
  "async-task",
  "backtrace",
- "bindgen",
  "bitflags 2.13.2",
  "chrono",
  "collections",
- "core-video",
  "ctor",
  "derive_more",
  "embed-resource",
@@ -3692,19 +3549,17 @@ dependencies = [
  "ttf-parser",
  "url",
  "usvg 0.46.0",
- "util_macros",
  "uuid",
  "waker-fn",
  "web-time",
  "windows 0.62.2",
- "zed-font-kit",
  "zed-scap",
 ]
 
 [[package]]
 name = "gpui-base"
-version = "0.7.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c4f044e6a140a8320ed90192fd0508e91da20855#c4f044e6a140a8320ed90192fd0508e91da20855"
+version = "0.7.1"
+source = "git+https://github.com/nyakang/gpui-kit?rev=b5bec2f7fb23169628d641f01e925764fe518072#b5bec2f7fb23169628d641f01e925764fe518072"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3735,6 +3590,7 @@ dependencies = [
  "smol",
  "sum_tree",
  "tracing",
+ "unicode-linebreak",
  "unicode-segmentation",
  "web-time",
  "windows 0.58.0",
@@ -3742,8 +3598,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-component"
-version = "0.7.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c4f044e6a140a8320ed90192fd0508e91da20855#c4f044e6a140a8320ed90192fd0508e91da20855"
+version = "0.7.1"
+source = "git+https://github.com/nyakang/gpui-kit?rev=b5bec2f7fb23169628d641f01e925764fe518072#b5bec2f7fb23169628d641f01e925764fe518072"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3775,6 +3631,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
+ "similar",
  "smallvec",
  "smol",
  "sum_tree",
@@ -3794,14 +3651,16 @@ dependencies = [
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
+ "unicode-segmentation",
+ "unicode-width",
  "uuid",
  "windows 0.58.0",
 ]
 
 [[package]]
 name = "gpui-component-macros"
-version = "0.7.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c4f044e6a140a8320ed90192fd0508e91da20855#c4f044e6a140a8320ed90192fd0508e91da20855"
+version = "0.7.1"
+source = "git+https://github.com/nyakang/gpui-kit?rev=b5bec2f7fb23169628d641f01e925764fe518072#b5bec2f7fb23169628d641f01e925764fe518072"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -3811,21 +3670,22 @@ dependencies = [
 
 [[package]]
 name = "gpui-kit"
-version = "0.7.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c4f044e6a140a8320ed90192fd0508e91da20855#c4f044e6a140a8320ed90192fd0508e91da20855"
+version = "0.7.1"
+source = "git+https://github.com/nyakang/gpui-kit?rev=b5bec2f7fb23169628d641f01e925764fe518072#b5bec2f7fb23169628d641f01e925764fe518072"
 dependencies = [
  "gpui",
  "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
+ "gpui_macros",
  "gpui_platform",
  "gpui_web",
 ]
 
 [[package]]
 name = "gpui-kit-assets"
-version = "0.7.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=c4f044e6a140a8320ed90192fd0508e91da20855#c4f044e6a140a8320ed90192fd0508e91da20855"
+version = "0.7.1"
+source = "git+https://github.com/nyakang/gpui-kit?rev=b5bec2f7fb23169628d641f01e925764fe518072#b5bec2f7fb23169628d641f01e925764fe518072"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3839,43 +3699,54 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "anyhow",
  "async-task",
  "block2 0.6.2",
  "cbindgen",
+ "collections",
  "core-foundation 0.10.1",
+ "core-foundation-sys",
  "core-graphics 0.24.0",
- "core-video",
+ "core-text",
  "derive_more",
  "dispatch2",
  "etagere",
  "foreign-types",
+ "futures",
  "gpui",
  "gpui_util",
  "image",
  "libc",
  "log",
- "mach2 0.5.0",
+ "mach2 0.6.0",
  "metal",
  "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-security",
  "parking_lot",
+ "pathfinder_geometry",
+ "smallvec",
+ "thiserror 2.0.20",
+ "zed-font-kit",
 ]
 
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "accesskit",
  "accesskit_unix",
  "anyhow",
  "as-raw-xcb-connection",
  "ashpd",
- "bitflags 2.13.2",
  "bytemuck",
  "calloop",
  "calloop-wayland-source",
@@ -3913,7 +3784,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3924,7 +3795,6 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "core-graphics 0.24.0",
- "core-text",
  "ctor",
  "dispatch2",
  "foreign-types",
@@ -3938,25 +3808,22 @@ dependencies = [
  "objc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
- "objc2-core-graphics",
- "objc2-core-media",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
- "objc2-screen-capture-kit",
  "objc2-user-notifications",
  "parking_lot",
- "pathfinder_geometry",
  "raw-window-handle",
+ "scheduler",
  "semver",
  "smallvec",
  "strum",
  "uuid",
- "zed-font-kit",
 ]
 
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3967,7 +3834,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3982,7 +3849,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "schemars",
  "serde",
@@ -3992,7 +3859,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "anyhow",
  "log",
@@ -4002,9 +3869,10 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "anyhow",
+ "async-channel",
  "console_error_panic_hook",
  "futures",
  "gpui",
@@ -4030,7 +3898,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4057,7 +3925,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4074,6 +3942,7 @@ dependencies = [
  "parking_lot",
  "rand 0.9.5",
  "raw-window-handle",
+ "scheduler",
  "smallvec",
  "uuid",
  "windows 0.62.2",
@@ -4497,12 +4366,10 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "anyhow",
- "async-compression",
  "bytes",
- "derive_more",
  "futures",
  "http",
  "http-body",
@@ -4902,18 +4769,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "io-surface"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "554b8c5d64ec09a3a520fe58e4d48a73e00ff32899cdcbe32a4877afd4968b8e"
-dependencies = [
- "cgl",
- "core-foundation 0.10.1",
- "core-foundation-sys",
- "leaky-cow",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4922,7 +4777,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 [[package]]
 name = "ironrdp-async"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bytes",
  "ironrdp-connector",
@@ -4935,12 +4790,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-bulk"
 version = "0.1.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 
 [[package]]
 name = "ironrdp-cfg"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-propertyset",
 ]
@@ -4948,7 +4803,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -4983,7 +4838,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr"
 version = "0.7.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -4995,18 +4850,22 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr-native"
 version = "0.7.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-cliprdr",
  "ironrdp-core",
+ "nix 0.31.3",
  "tracing",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "windows 0.62.2",
 ]
 
 [[package]]
 name = "ironrdp-connector"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-core",
  "ironrdp-error",
@@ -5023,7 +4882,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-core"
 version = "0.2.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-error",
 ]
@@ -5031,7 +4890,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-displaycontrol"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -5043,7 +4902,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-dvc"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-core",
  "ironrdp-pdu",
@@ -5054,7 +4913,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-echo"
 version = "0.4.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -5065,7 +4924,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-egfx"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -5079,12 +4938,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-error"
 version = "0.2.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 
 [[package]]
 name = "ironrdp-graphics"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -5101,7 +4960,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-input"
 version = "0.7.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bitvec",
  "ironrdp-pdu",
@@ -5111,7 +4970,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-mstsgu"
 version = "0.0.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
@@ -5134,7 +4993,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-pdu"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -5157,12 +5016,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-propertyset"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 
 [[package]]
 name = "ironrdp-rail"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-core",
  "ironrdp-svc",
@@ -5171,7 +5030,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdcleanpath"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "der 0.8.2",
 ]
@@ -5179,7 +5038,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdpei"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -5192,7 +5051,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-session"
 version = "0.11.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-bulk",
  "ironrdp-core",
@@ -5210,7 +5069,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-svc"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -5220,7 +5079,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-tls"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "rustls-native-certs",
  "tokio",
@@ -5231,7 +5090,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-tokio"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=e6cae7c73bbaf093af96bd985e36261efc706038#e6cae7c73bbaf093af96bd985e36261efc706038"
+source = "git+https://github.com/nyakang/IronRDP?rev=56dd8686723423f2a570598ed66d2df6fd90f547#56dd8686723423f2a570598ed66d2df6fd90f547"
 dependencies = [
  "ironrdp-async",
  "ironrdp-connector",
@@ -5458,21 +5317,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leak"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd100e01f1154f2908dfa7d02219aeab25d0b9c7fa955164192e3245255a0c73"
-
-[[package]]
-name = "leaky-cow"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40a8225d44241fd324a8af2806ba635fc7c8a7e9a7de4d5cf3ef54e71f5926fc"
-dependencies = [
- "leak",
-]
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5507,12 +5351,6 @@ dependencies = [
  "libloading 0.7.4",
  "once_cell",
 ]
-
-[[package]]
-name = "libbz2-rs-sys"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
 
 [[package]]
 name = "libc"
@@ -5626,7 +5464,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 dependencies = [
  "serde_core",
- "value-bag",
 ]
 
 [[package]]
@@ -5749,12 +5586,9 @@ dependencies = [
 
 [[package]]
 name = "mach2"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
-dependencies = [
- "libc",
-]
+checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "malloc_buf"
@@ -6830,28 +6664,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-core-audio"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1eebcea8b0dbff5f7c8504f3107c68fc061a3eb44932051c8cf8a68d969c3b2"
-dependencies = [
- "dispatch2",
- "objc2 0.6.4",
- "objc2-core-audio-types",
- "objc2-core-foundation",
-]
-
-[[package]]
-name = "objc2-core-audio-types"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a89f2ec274a0cf4a32642b2991e8b351a404d290da87bb6a9a9d8632490bd1c"
-dependencies = [
- "bitflags 2.13.2",
- "objc2 0.6.4",
-]
-
-[[package]]
 name = "objc2-core-data"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6921,31 +6733,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-core-location"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca347214e24bc973fc025fd0d36ebb179ff30536ed1f80252706db19ee452009"
-dependencies = [
- "objc2 0.6.4",
- "objc2-foundation 0.3.2",
-]
-
-[[package]]
-name = "objc2-core-media"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05ec576860167a15dd9fce7fbee7512beb4e31f532159d3482d1f9c6caedf31d"
-dependencies = [
- "bitflags 2.13.2",
- "dispatch2",
- "objc2 0.6.4",
- "objc2-core-audio",
- "objc2-core-audio-types",
- "objc2-core-foundation",
- "objc2-core-video",
-]
-
-[[package]]
 name = "objc2-core-text"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6968,6 +6755,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-io-surface",
+ "objc2-metal 0.3.2",
 ]
 
 [[package]]
@@ -7063,17 +6851,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-screen-capture-kit"
+name = "objc2-security"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74b7c5390f477482f001bc354d6571a70db7e4f8d5288e860c45521fbce11394"
+checksum = "709fe137109bd1e8b5a99390f77a7d8b2961dafc1a1c5db8f2e60329ad6d895a"
 dependencies = [
- "block2 0.6.2",
- "dispatch2",
- "objc2 0.6.4",
- "objc2-core-graphics",
- "objc2-core-media",
- "objc2-foundation 0.3.2",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -7085,7 +6868,6 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "objc2 0.6.4",
- "objc2-core-location",
  "objc2-foundation 0.3.2",
 ]
 
@@ -7269,8 +7051,8 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.2.3"
-source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
+version = "0.2.4"
+source = "git+https://github.com/nyakang/russh?rev=3092e06cc827fc0f8d4c991280478f6e53c121a3#3092e06cc827fc0f8d4c991280478f6e53c121a3"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -7444,16 +7226,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "perf"
-version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
-dependencies = [
- "collections",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "petgraph"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7613,9 +7385,9 @@ dependencies = [
 
 [[package]]
 name = "picky-asn1-der"
-version = "0.5.6"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d413165e4bf7f808b9a27cbaba657657a2921f0965db833f488c4d4be96dcd2e"
+checksum = "b4467118a2c640f4040aea27d01293620984b0b3f3ef0c53577c3bbf6bab4256"
 dependencies = [
  "picky-asn1",
  "serde",
@@ -7624,11 +7396,11 @@ dependencies = [
 
 [[package]]
 name = "picky-asn1-x509"
-version = "0.15.4"
+version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "859d4117bd1b1dc5646359ee7243c50c5000c0920ea2d1fb120335a2f4c684b8"
+checksum = "3f110226d163cea4380b0e5ef698a107061d198b279cc27d2b2c1e95c08cd9b0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "crypto-bigint",
  "oid",
  "picky-asn1",
@@ -7640,9 +7412,9 @@ dependencies = [
 
 [[package]]
 name = "picky-krb"
-version = "0.12.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d188f3192356068dbdba54bddbca6fd0f7a09565d3861eeb8efe1ab77ae8e97"
+checksum = "4a272e7c4191fbb5ea7e0b34f47208804d47a6f748344351ba9229b0e5a604ed"
 dependencies = [
  "aes 0.9.3",
  "block-padding 0.4.2",
@@ -7928,8 +7700,6 @@ checksum = "af3fb618632874fb76937c2361a7f22afd393c982a2165595407edc75b06d3c1"
 dependencies = [
  "atomic",
  "crossbeam-queue",
- "futures",
- "log",
  "parking_lot",
  "pin-project",
  "pollster 0.2.5",
@@ -8598,7 +8368,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "derive_refineable",
 ]
@@ -8870,8 +8640,8 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.63.3"
-source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
+version = "0.64.1"
+source = "git+https://github.com/nyakang/russh?rev=3092e06cc827fc0f8d4c991280478f6e53c121a3#3092e06cc827fc0f8d4c991280478f6e53c121a3"
 dependencies = [
  "aes 0.9.3",
  "aws-lc-rs",
@@ -8942,7 +8712,7 @@ dependencies = [
 [[package]]
 name = "russh-cryptovec"
 version = "0.62.0"
-source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
+source = "git+https://github.com/nyakang/russh?rev=3092e06cc827fc0f8d4c991280478f6e53c121a3#3092e06cc827fc0f8d4c991280478f6e53c121a3"
 dependencies = [
  "log",
  "nix 0.31.3",
@@ -8953,7 +8723,7 @@ dependencies = [
 [[package]]
 name = "russh-sftp"
 version = "3.0.1"
-source = "git+https://github.com/nyakang/russh-sftp?rev=aba3096b600dbbecbe7172dd4dec946667346c6b#aba3096b600dbbecbe7172dd4dec946667346c6b"
+source = "git+https://github.com/nyakang/russh-sftp?rev=b638b4896de6a0efd699e4c3833873221b3b3f01#b638b4896de6a0efd699e4c3833873221b3b3f01"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -8972,7 +8742,7 @@ dependencies = [
 [[package]]
 name = "russh-util"
 version = "0.52.0"
-source = "git+https://github.com/nyakang/russh?rev=5ed33bde6e9f0288b7f0d54394d29f436849582b#5ed33bde6e9f0288b7f0d54394d29f436849582b"
+source = "git+https://github.com/nyakang/russh?rev=3092e06cc827fc0f8d4c991280478f6e53c121a3#3092e06cc827fc0f8d4c991280478f6e53c121a3"
 dependencies = [
  "chrono",
  "tokio",
@@ -9289,7 +9059,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "async-task",
  "backtrace",
@@ -9536,15 +9306,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_fmt"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e497af288b3b95d067a23a4f749f2861121ffcb2f6d8379310dcda040c345ed"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
 name = "serde_json"
 version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9745,12 +9506,6 @@ dependencies = [
 
 [[package]]
 name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
-
-[[package]]
-name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
@@ -9815,6 +9570,16 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+dependencies = [
+ "bstr",
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "simplecss"
@@ -9908,7 +9673,6 @@ version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4aaa7368fcf4852a4c2dd92df0cace6a71f2091ca0a23391ce7f3a31833f1523"
 dependencies = [
- "borsh",
  "serde_core",
 ]
 
@@ -10043,8 +9807,8 @@ dependencies = [
 
 [[package]]
 name = "sspi"
-version = "0.22.1"
-source = "git+https://github.com/nyakang/sspi-rs?rev=37afc5f400193a219fdd1cf4c9d83f1fedac650c#37afc5f400193a219fdd1cf4c9d83f1fedac650c"
+version = "0.23.0"
+source = "git+https://github.com/nyakang/sspi-rs?rev=d2b04e63ca9a72f2a70b456186e2472b27f0d45d#d2b04e63ca9a72f2a70b456186e2472b27f0d45d"
 dependencies = [
  "async-dnssd",
  "async-recursion",
@@ -10183,92 +9947,12 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "heapless",
- "log",
  "rayon",
  "tracing",
  "ztracing",
-]
-
-[[package]]
-name = "sval"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b81b254da21fe1fcc4e3a74fe39b46e25e3a863078f8b71c954d47f84889dbc6"
-
-[[package]]
-name = "sval_buffer"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50be352d2822ffafb59e3e2ddac9d5ee60f2eeadbb7b5a2a951b9f3651e87a6f"
-dependencies = [
- "sval",
- "sval_ref",
- "zerocopy",
-]
-
-[[package]]
-name = "sval_dynamic"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b048ca293b998d9a45659159f94a64063791e74cdc670164943dbb434405573d"
-dependencies = [
- "sval",
-]
-
-[[package]]
-name = "sval_fmt"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6b5888e40f80568733217f27b7317b845f463400ced36c424b1a804730e53b2"
-dependencies = [
- "itoa",
- "ryu",
- "sval",
-]
-
-[[package]]
-name = "sval_json"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17664d6bb6b74947afaab9d7c991caa9bf5638d4dee16fcbef637f440796049"
-dependencies = [
- "itoa",
- "ryu",
- "sval",
-]
-
-[[package]]
-name = "sval_nested"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07c059969ca5ca163ea7fef6c9661758973d17691aba92abdcf5c428f4ec122c"
-dependencies = [
- "sval",
- "sval_buffer",
- "sval_ref",
-]
-
-[[package]]
-name = "sval_ref"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42d6b29ff568c85c87561807f51d2adfff4b6016c6363133f7cd1652a12548f3"
-dependencies = [
- "sval",
-]
-
-[[package]]
-name = "sval_serde"
-version = "2.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f33ec9edc42b12764d5c90ca0a1d84189c6bde81ed27507f1e661c6e4e05853"
-dependencies = [
- "serde_core",
- "sval",
- "sval_nested",
 ]
 
 [[package]]
@@ -10516,7 +10200,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -11316,12 +11000,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
-name = "typeid"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
-
-[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11551,16 +11229,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
-name = "util_macros"
-version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
-dependencies = [
- "perf",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "uuid"
 version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11589,42 +11257,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "value-bag"
-version = "1.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2799ffb329a792ecfd902b71306c8a815a6ef1c0470fa9953a6aa4d4cecbe511"
-dependencies = [
- "value-bag-serde1",
- "value-bag-sval2",
-]
-
-[[package]]
-name = "value-bag-serde1"
-version = "1.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0941feceafbe7a8f59ea1096d45b97002884a41306315ad797b3684b63a81d8c"
-dependencies = [
- "erased-serde",
- "serde_core",
- "serde_fmt",
-]
-
-[[package]]
-name = "value-bag-sval2"
-version = "1.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "839752af8179287d27eb2b94164641b1ede9e60ab7424163388dc21ebd0508cd"
-dependencies = [
- "sval",
- "sval_buffer",
- "sval_dynamic",
- "sval_fmt",
- "sval_json",
- "sval_ref",
- "sval_serde",
-]
 
 [[package]]
 name = "vello_common"
@@ -11687,14 +11319,15 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vnc-rs"
-version = "0.5.3"
-source = "git+https://github.com/nyakang/vnc-rs?rev=689a65166d6440946529b2696314386a70d71d86#689a65166d6440946529b2696314386a70d71d86"
+version = "0.6.0"
+source = "git+https://github.com/nyakang/vnc-rs?rev=ff1f60518247362dd763bfc84e60f8478d9cc18e#ff1f60518247362dd763bfc84e60f8478d9cc18e"
 dependencies = [
  "aes 0.8.4",
  "async_io_stream",
  "eax",
  "flate2",
  "futures",
+ "getrandom 0.2.17",
  "image",
  "rand 0.8.8",
  "rsa 0.9.10",
@@ -13896,17 +13529,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
-name = "zlog"
-version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
-dependencies = [
- "anyhow",
- "chrono",
- "collections",
- "log",
-]
-
-[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13937,18 +13559,16 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 dependencies = [
  "tracing",
- "tracing-subscriber",
- "zlog",
  "ztracing_macro",
 ]
 
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=400d43cd62b6499c77a1400d6f83116d9845e187#400d43cd62b6499c77a1400d6f83116d9845e187"
+source = "git+https://github.com/nyakang/zed?rev=9d03436aa8185c972e957f36e95044ac524b2cf4#9d03436aa8185c972e957f36e95044ac524b2cf4"
 
 [[package]]
 name = "zune-core"

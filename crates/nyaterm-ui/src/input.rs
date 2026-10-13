@@ -345,7 +345,9 @@ impl NyaInputState {
         self.placeholder_pending = false;
         let placeholder = component_placeholder(self.placeholder.clone(), multi_line);
         let language = self.language.clone();
-        let rows = self.rows;
+        // The shell supplies a definite height, including a resizable footer.
+        // Kit 0.7.1 treats rows as a minimum and would force that viewport taller.
+        let rows = self.rows.unwrap_or(1).min(1);
         let submit_on_enter = self.submit_on_enter;
         let (state, subscription) = if multi_line && self.code {
             let state = cx.new(|cx| {
@@ -366,14 +368,11 @@ impl NyaInputState {
             (ComponentState::Editor(state), subscription)
         } else if multi_line {
             let state = cx.new(|cx| {
-                let mut input = TextareaState::new(window, cx)
+                TextareaState::new(window, cx)
                     .default_value(value)
                     .placeholder(placeholder)
-                    .submit_on_enter(submit_on_enter);
-                if let Some(rows) = rows {
-                    input = input.rows(rows);
-                }
-                input
+                    .submit_on_enter(submit_on_enter)
+                    .rows(rows)
             });
             let subscription = cx.subscribe(&state, |this, input, event: &InputEvent, cx| {
                 forward_input_event(this, input.read(cx).value().to_string(), event, cx)
@@ -827,8 +826,8 @@ impl RenderOnce for NyaInputShell {
             .when(fill_height, |this| this.h_full().min_h_0())
             .capture_any_mouse_down(move |event, window, cx| {
                 preserve_nya_input_focus_on_pointer_down(cx);
-                // ContextMenu captures the focus to restore before bubble handlers.
-                // Right-clicking an unfocused field must restore this input on Esc.
+                // The input menu opens during bubble dispatch, after this capture
+                // handler establishes the input as its dismissal focus target.
                 if gpui_context_menu && !disabled && event.button == MouseButton::Right {
                     capture_focus_state.focus(window, cx);
                 }
@@ -892,6 +891,7 @@ impl RenderOnce for NyaInputShell {
                 }
                 items
             })
+            .bubble_right_click()
             .min_width(px(144.))
             .enabled(!disabled)
             .into_any_element()
