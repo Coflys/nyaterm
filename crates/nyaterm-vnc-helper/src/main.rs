@@ -831,6 +831,7 @@ async fn run_generation(
             }
         })
         .set_auth_method(async move { Ok(auth_password.to_string()) })
+        .set_credentials_available(config.password.is_some())
         .set_security_policy(security_policy(
             config.security.mode,
             config.password.is_some(),

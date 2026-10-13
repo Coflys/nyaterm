@@ -39,7 +39,7 @@ impl NyaTermApp {
         };
         let app = cx.weak_entity();
         cx.defer(move |cx| {
-            let _ = window.update(cx, |_, window, cx| {
+            let _ = gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
                 let _ = app.update(cx, |app, cx| {
                     app.pump_startup_restore_queue_if_ready(window, cx);
                 });
@@ -62,7 +62,9 @@ impl NyaTermApp {
         let app = cx.weak_entity();
         let session_id = session_id.to_string();
         cx.defer(move |cx| {
-            let _ = window.update(cx, |_, window, cx| {
+            // Dialog APIs read and update NyaRoot themselves. A typed window
+            // update would lease that root for this entire callback.
+            let _ = gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
                 let _ = app.update(cx, |app, cx| {
                     use gpui::{ParentElement as _, Styled as _};
                     use nyaterm_ui::{NyaDialogWindowExt as _, NyaInput, NyaInputState};

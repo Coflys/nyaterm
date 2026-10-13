@@ -18,6 +18,73 @@ use super::{
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
 #[test]
+fn vnc_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
+    use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::VncSessionConfig;
+    use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
+
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+
+    struct EmptyView;
+    impl Render for EmptyView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    let root = TestTempDir::new("nyaterm-vnc-retry-password-dialog");
+    let mut cx = TestAppContext::single();
+    let app = app_with_visible_local_session(&mut cx, root.path(), "vnc-retry");
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| EmptyView);
+        nya_root(view, window, cx)
+    });
+    cx.update(|window, cx| {
+        let handle = window.window_handle().downcast().unwrap();
+        app.update(cx, |app, cx| {
+            app.shell.remember_main_window(handle);
+            app.session.metadata_mut("vnc-retry").unwrap().launch_config =
+                SessionLaunchConfig::Vnc(VncSessionConfig {
+                    username: String::new(),
+                    relay: None,
+                    name: "VNC retry".into(),
+                    host: "127.0.0.1".into(),
+                    port: 5900,
+                    password: None,
+                    security: Default::default(),
+                    display: Default::default(),
+                    clipboard: Default::default(),
+                    reconnect: Default::default(),
+                    shared: true,
+                    view_only: false,
+                });
+            app.remote_desktop.insert_connecting("vnc-retry".into());
+            app.retry_rdp_runtime("vnc-retry", cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.has_active_nya_dialog(cx));
+        assert_eq!(
+            app.read(cx).remote_desktop.sessions["vnc-retry"].state,
+            RemoteDesktopViewState::Connecting,
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        assert_eq!(
+            app.read(cx).remote_desktop.sessions["vnc-retry"].state,
+            RemoteDesktopViewState::Disconnected,
+        );
+    });
+}
+
+#[test]
 fn reconnect_classification_only_accepts_transient_failures() {
     for kind in [
         RdpErrorKind::Timeout,
