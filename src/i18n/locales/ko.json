@@ -862,6 +862,8 @@
     "telnetForceCharAtATimeDesc": "입력한 각 문자를 즉시 TCP 스트림에 씁니다.",
     "telnetInputBehavior": "키 입력",
     "telnetInputSettings": "입력",
+    "telnetKeepAliveInterval": "NOP 연결 유지 간격(초)",
+    "telnetKeepAliveIntervalDesc": "고정 간격으로 Telnet NOP를 전송합니다. 0은 연결 유지를 비활성화합니다. Raw TCP CLI 모드에서는 사용할 수 없으며, 변경 사항은 다음 연결부터 적용됩니다.",
     "telnetLocalEcho": "로컬 에코",
     "telnetLocalEchoDesc": "장치가 에코하지 않을 때 입력한 내용을 로컬에 표시합니다.",
     "telnetLocalLineEdit": "로컬 줄 편집 / Enter 시 줄 전송",

@@ -862,6 +862,8 @@
     "telnetForceCharAtATimeDesc": "每個輸入字元都會立即寫入 TCP 流。",
     "telnetInputBehavior": "按鍵輸入",
     "telnetInputSettings": "輸入",
+    "telnetKeepAliveInterval": "NOP 保活間隔（秒）",
+    "telnetKeepAliveIntervalDesc": "按固定間隔傳送 Telnet NOP，0 停用保活。Raw TCP CLI 模式下無法使用；變更於下次連線時生效。",
     "telnetLocalEcho": "本機回顯",
     "telnetLocalEchoDesc": "當裝置端不回顯輸入時，在本機顯示使用者輸入。",
     "telnetLocalLineEdit": "本機行編輯 / 按行傳送",

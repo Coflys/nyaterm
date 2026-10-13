@@ -863,6 +863,8 @@
     "telnetForceCharAtATimeDesc": "Write each input character to the TCP stream immediately.",
     "telnetInputBehavior": "Key input",
     "telnetInputSettings": "Input",
+    "telnetKeepAliveInterval": "NOP keep-alive interval (seconds)",
+    "telnetKeepAliveIntervalDesc": "Send Telnet NOP at a fixed interval. 0 disables keep-alive. Unavailable in Raw TCP CLI mode; changes apply on the next connection.",
     "telnetLocalEcho": "Local Echo",
     "telnetLocalEchoDesc": "Show typed input locally when the device does not echo.",
     "telnetLocalLineEdit": "Local line editing / Send line on Enter",
