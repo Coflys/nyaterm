@@ -153,7 +153,7 @@ impl NyaTermApp {
         let Some(state) = self.transfer.active_editor_tab_mut() else {
             return;
         };
-        let matches = editor_search_matches(&state.content, &state.search_query);
+        let matches = editor_search_matches(state.content.as_str(), &state.search_query);
         if matches.is_empty() {
             state.active_match = 0;
         } else if delta >= 0 {

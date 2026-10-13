@@ -278,7 +278,7 @@ impl NyaTermApp {
             remote_path: entry.path.clone(),
             raw_path_token: entry.raw_path_token.clone(),
             name: entry.name.clone(),
-            content: String::new(),
+            content: Default::default(),
             search_query: String::new(),
             active_match: 0,
             revision: None,

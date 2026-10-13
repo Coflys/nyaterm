@@ -2,6 +2,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
     Render, ScrollDelta, ScrollWheelEvent, Subscription, Window, div, prelude::*, px,
 };
+use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
 use nyaterm_ui::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
 
 use crate::features::NyaTermApp;
@@ -11,6 +12,7 @@ pub(in crate::features) struct RemoteTextEditor {
     app: Entity<NyaTermApp>,
     tab_id: String,
     document: Entity<NyaDocumentEditorState>,
+    synced_content: NyaDocumentSnapshot,
     read_only: bool,
     _subscription: Subscription,
 }
@@ -26,7 +28,7 @@ impl RemoteTextEditor {
             NyaDocumentEditorState::new_source(
                 window,
                 cx,
-                tab.content.clone(),
+                tab.content.to_string(),
                 language_for_path(&tab.remote_path),
             )
         });
@@ -34,8 +36,9 @@ impl RemoteTextEditor {
         let app_for_events = app.clone();
         let subscription = cx.subscribe(
             &document,
-            move |_, _, event: &NyaDocumentEditorEvent, cx| match event {
+            move |this, _, event: &NyaDocumentEditorEvent, cx| match event {
                 NyaDocumentEditorEvent::Changed(content) => {
+                    this.synced_content = content.clone();
                     app_for_events.update(cx, |app, cx| {
                         app.transfer.sync_editor_content(&tab_id, content.clone());
                         app.mark_user_activity();
@@ -55,6 +58,7 @@ impl RemoteTextEditor {
             app,
             tab_id: tab.id.clone(),
             document,
+            synced_content: tab.content.clone(),
             read_only: tab.loading || tab.saving,
             _subscription: subscription,
         }
@@ -75,6 +79,7 @@ impl RemoteTextEditor {
             app,
             tab_id: id,
             document,
+            synced_content: Default::default(),
             read_only: true,
             _subscription: subscription,
         }
@@ -98,9 +103,15 @@ impl RemoteTextEditor {
         tab: &TransferEditorState,
         cx: &mut Context<Self>,
     ) {
-        if !self.document.read(cx).content_equals(&tab.content, cx) {
-            self.document
-                .update(cx, |document, cx| document.set_content(&tab.content, cx));
+        // User changes already carry this exact immutable snapshot. Only external
+        // replacements need a text comparison, which also preserves undo on save.
+        if !self.synced_content.same_version(&tab.content) {
+            if !self.document.read(cx).snapshot_equals(&tab.content, cx) {
+                self.document.update(cx, |document, cx| {
+                    document.set_content(tab.content.as_str(), cx)
+                });
+            }
+            self.synced_content = tab.content.clone();
         }
         let read_only = tab.loading || tab.saving;
         if self.read_only != read_only {

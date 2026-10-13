@@ -224,6 +224,7 @@ struct TransferFileOpsState {
 /// Built-in remote file editor workspace.
 struct TransferEditorFeatureState {
     workspace: Option<TransferEditorWorkspaceState>,
+    preview_cache: Option<editor::EditorPreviewCache>,
     tabs_menu_open: bool,
     focus: FocusHandle,
     window: ChildWindowSlot,

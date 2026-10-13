@@ -842,7 +842,7 @@ fn editor_tab(session_id: &str, remote_path: &str) -> TransferEditorState {
         remote_path: remote_path.to_string(),
         raw_path_token: None,
         name: remote_path.rsplit('/').next().unwrap().to_string(),
-        content: String::new(),
+        content: Default::default(),
         search_query: String::new(),
         active_match: 0,
         revision: Some(RemoteTextRevision::from_bytes(
@@ -863,6 +863,70 @@ fn editor_tab(session_id: &str, remote_path: &str) -> TransferEditorState {
         backup_warning_path: None,
         focused_field: TransferEditorField::Content,
     }
+}
+
+#[test]
+fn editor_preview_cache_tracks_content_query_match_and_tab_changes() {
+    let cx = TestAppContext::single();
+    let mut transfer = transfer_state(&cx);
+    let mut tab = editor_tab("session-a", "/a.txt");
+    tab.content = "中 a a".into();
+    transfer.open_editor_tab(tab);
+    let builds = std::cell::Cell::new(0);
+    let build = |content: &str, query: &str, active_match: usize| {
+        builds.set(builds.get() + 1);
+        format!("{content}/{query}/{active_match}")
+    };
+    assert_eq!(transfer.editor_content_preview(build).as_ref(), "中 a a//0");
+    transfer.active_editor_tab_mut().unwrap().dirty = true;
+    transfer.editor_content_preview(build);
+    assert_eq!(builds.get(), 1);
+    transfer.active_editor_tab_mut().unwrap().search_query = "a".to_string();
+    assert_eq!(
+        transfer.editor_content_preview(build).as_ref(),
+        "中 a a/a/0"
+    );
+    transfer.active_editor_tab_mut().unwrap().active_match = 1;
+    assert_eq!(
+        transfer.editor_content_preview(build).as_ref(),
+        "中 a a/a/1"
+    );
+    transfer.active_editor_tab_mut().unwrap().content.push('🙂');
+    assert_eq!(
+        transfer.editor_content_preview(build).as_ref(),
+        "中 a a🙂/a/1"
+    );
+    transfer.open_editor_tab(editor_tab("session-b", "/b.txt"));
+    assert_eq!(transfer.editor_content_preview(build).as_ref(), "//0");
+    assert_eq!(builds.get(), 5);
+}
+
+#[test]
+fn editor_changes_keep_save_snapshots_independent_and_reject_busy_tabs() {
+    let cx = TestAppContext::single();
+    let mut transfer = transfer_state(&cx);
+    let mut tab = editor_tab("session-a", "/a.txt");
+    tab.content = "original".into();
+    let tab_id = tab.id.clone();
+    transfer.open_editor_tab(tab);
+    let saved = transfer.editor_tab_snapshot(&tab_id).unwrap();
+    assert!(!transfer.sync_editor_content(&tab_id, "original"));
+    assert!(!transfer.active_editor_tab().unwrap().dirty);
+    let mut edited = saved.content.clone();
+    edited.push('🙂');
+    assert!(transfer.sync_editor_content(&tab_id, edited.clone()));
+    assert!(
+        transfer
+            .active_editor_tab()
+            .unwrap()
+            .content
+            .same_version(&edited)
+    );
+    assert!(!transfer.sync_editor_content(&tab_id, edited.clone()));
+    assert_eq!(saved.content, "original");
+    assert!(transfer.begin_editor_tab_save(&tab_id));
+    assert!(!transfer.sync_editor_content(&tab_id, "during save"));
+    assert_eq!(transfer.active_editor_tab().unwrap().content, "original🙂");
 }
 
 #[test]
@@ -1518,7 +1582,7 @@ fn transfer_editor_ignores_stale_load_and_failure_generations() {
     {
         let tab = transfer.active_editor_tab_mut().unwrap();
         tab.generation = current_generation;
-        tab.content = "new incarnation".to_string();
+        tab.content = "new incarnation".into();
     }
     let stale_revision = RemoteTextRevision::from_bytes(
         b"stale",
@@ -1585,7 +1649,7 @@ fn transfer_editor_conflict_preserves_baseline_and_stale_save_is_ignored() {
         tab.generation = current_generation;
         tab.saving = false;
         tab.dirty = true;
-        tab.content = "newer edit".to_string();
+        tab.content = "newer edit".into();
     }
     let stale_saved_revision = RemoteTextRevision::from_bytes(
         b"local edit",

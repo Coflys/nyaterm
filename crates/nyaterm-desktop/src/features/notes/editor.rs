@@ -156,12 +156,12 @@ impl NoteEditorWindow {
             &editor,
             |this, _, event: &NyaDocumentEditorEvent, cx| match event {
                 NyaDocumentEditorEvent::Changed(value) => {
-                    this.note.markdown = value.clone();
+                    this.note.markdown = value.to_string();
                     this.mark_dirty(cx);
                 }
                 NyaDocumentEditorEvent::Blurred(value) => {
-                    let changed = this.note.markdown != *value;
-                    this.note.markdown = value.clone();
+                    let changed = !value.eq(&this.note.markdown.as_str());
+                    this.note.markdown = value.to_string();
                     if changed {
                         this.mark_dirty_without_debounce();
                     }

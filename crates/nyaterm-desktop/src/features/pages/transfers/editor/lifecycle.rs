@@ -224,7 +224,7 @@ impl NyaTermApp {
             snapshot.session_id,
             snapshot.id,
             remote_file_path,
-            snapshot.content,
+            snapshot.content.to_string(),
             snapshot.revision,
             snapshot.generation,
             force,

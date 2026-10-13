@@ -6,12 +6,13 @@ use gpui::{
 };
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 
+use crate::document_snapshot::NyaDocumentSnapshot;
 use crate::input_focus::register_nya_input_focus;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NyaDocumentEditorEvent {
-    Changed(String),
-    Blurred(String),
+    Changed(NyaDocumentSnapshot),
+    Blurred(NyaDocumentSnapshot),
     /// Cursor position changed; visual-only notifications do not emit this.
     Updated,
 }
@@ -84,23 +85,27 @@ impl NyaDocumentEditorState {
             }
         });
         register_nya_input_focus(&editor.read(cx).focus_handle(cx), cx);
-        let subscription = cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
-            let value = editor.read(cx).value().to_string();
-            match event {
+        let subscription = cx.subscribe(
+            &editor,
+            |this, editor, event: &InputEvent, cx| match event {
                 InputEvent::Change => {
                     if this
                         .silent_content
                         .take()
-                        .is_some_and(|expected| expected.as_ref() == value)
+                        .is_some_and(|expected| editor.read(cx).text() == expected.as_ref())
                     {
                         return;
                     }
-                    cx.emit(NyaDocumentEditorEvent::Changed(value));
+                    cx.emit(NyaDocumentEditorEvent::Changed(
+                        NyaDocumentSnapshot::from_rope(editor.read(cx).text()),
+                    ));
                 }
-                InputEvent::Blur => cx.emit(NyaDocumentEditorEvent::Blurred(value)),
+                InputEvent::Blur => cx.emit(NyaDocumentEditorEvent::Blurred(
+                    NyaDocumentSnapshot::from_rope(editor.read(cx).text()),
+                )),
                 InputEvent::Focus | InputEvent::PressEnter { .. } => {}
-            }
-        });
+            },
+        );
         let observed_cursor = editor.read(cx).cursor();
         let observation = cx.observe(&editor, |this, editor, cx| {
             let cursor = editor.read(cx).cursor();
@@ -145,12 +150,14 @@ impl NyaDocumentEditorState {
     }
 
     pub fn cursor_position(&self, cx: &App) -> (usize, usize) {
-        let value = self.editor.read(cx).value();
+        let value = self.editor.read(cx).text();
         let cursor = self.editor.read(cx).cursor().min(value.len());
-        let before = &value[..cursor];
-        let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
-        let line_start = before.rfind('\n').map(|index| index + 1).unwrap_or(0);
-        (line, before[line_start..].chars().count() + 1)
+        let line = value.byte_to_line_idx(cursor, ropey::LineType::LF);
+        let line_start = value.line_to_byte_idx(line, ropey::LineType::LF);
+        (
+            line + 1,
+            value.slice(line_start..cursor).chars().count() + 1,
+        )
     }
 
     pub fn open_search(&mut self, replace: bool, cx: &mut Context<Self>) {
@@ -159,11 +166,21 @@ impl NyaDocumentEditorState {
     }
 
     pub fn value(&self, cx: &App) -> String {
-        self.editor.read(cx).value().to_string()
+        self.editor.read(cx).text().to_string()
     }
 
     pub fn content_equals(&self, content: &str, cx: &App) -> bool {
-        self.editor.read(cx).value().as_ref() == content
+        if let Some(pending) = &self.pending_content {
+            return pending.as_ref() == content;
+        }
+        self.editor.read(cx).text() == content
+    }
+
+    pub fn snapshot_equals(&self, content: &NyaDocumentSnapshot, cx: &App) -> bool {
+        if let Some(pending) = &self.pending_content {
+            return content == &pending.as_ref();
+        }
+        self.editor.read(cx).text() == content.text()
     }
 
     pub fn selected_range(&self, cx: &App) -> Range<usize> {
@@ -171,7 +188,7 @@ impl NyaDocumentEditorState {
     }
 
     pub fn move_cursor_to_end(&mut self, cx: &mut Context<Self>) {
-        let end = self.editor.read(cx).value().len();
+        let end = self.editor.read(cx).text().len();
         self.editor
             .update(cx, |editor, cx| editor.set_selected_range(end..end, cx));
     }
@@ -280,7 +297,48 @@ impl gpui::RenderOnce for NyaDocumentEditor {
 #[cfg(test)]
 mod tests {
     use super::{NyaDocumentEditorEvent, NyaDocumentEditorState};
+    use crate::document_snapshot::NyaDocumentSnapshot;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn queued_replacement_is_compared_before_the_next_render(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (document, window_cx) =
+            cx.add_window_view(|window, cx| NyaDocumentEditorState::new(window, cx, "original"));
+        window_cx.update(|_, cx| {
+            document.update(cx, |document, cx| {
+                document.set_content("reload", cx);
+                assert!(document.content_equals("reload", cx));
+                assert!(!document.snapshot_equals(&NyaDocumentSnapshot::from("original"), cx));
+                document.set_content("original", cx);
+            });
+        });
+        window_cx.run_until_parked();
+        window_cx.update(|_, cx| assert_eq!(document.read(cx).value(cx), "original"));
+    }
+
+    #[gpui::test]
+    fn document_snapshots_preserve_undo_and_utf8_cursor_positions(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (document, window_cx) =
+            cx.add_window_view(|window, cx| NyaDocumentEditorState::new(window, cx, "中\r\n🙂"));
+        window_cx.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.move_cursor_to_end(cx);
+                document.apply_edit("猫".to_string(), 12..12, window, cx);
+                assert_eq!(document.cursor_position(cx), (2, 3));
+                let snapshot = NyaDocumentSnapshot::from_rope(document.editor.read(cx).text());
+                assert!(document.snapshot_equals(&snapshot, cx));
+                document.undo(window, cx);
+            });
+        });
+        window_cx.run_until_parked();
+        window_cx.update(|_, cx| assert_eq!(document.read(cx).value(cx), "中\r\n🙂"));
+        window_cx
+            .update(|window, cx| document.update(cx, |document, cx| document.redo(window, cx)));
+        window_cx.run_until_parked();
+        window_cx.update(|_, cx| assert_eq!(document.read(cx).value(cx), "中\r\n🙂猫"));
+    }
 
     #[gpui::test]
     fn visual_editor_notifications_do_not_emit_document_activity(cx: &mut TestAppContext) {
@@ -317,7 +375,7 @@ mod tests {
             events
                 .lock()
                 .unwrap()
-                .contains(&NyaDocumentEditorEvent::Changed("edited".to_string()))
+                .contains(&NyaDocumentEditorEvent::Changed("edited".into()))
         );
         events.lock().unwrap().clear();
         window_cx.update(|_, cx| {
