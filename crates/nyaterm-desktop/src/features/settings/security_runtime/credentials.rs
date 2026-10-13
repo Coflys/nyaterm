@@ -1,6 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{ClipboardItem, Context, IntoElement as _, KeyDownEvent, Window};
+use gpui::{Context, IntoElement as _, KeyDownEvent, Window};
 use nyaterm_core::{SavedCredential, validate_prompt_regex};
 use nyaterm_ui::NyaDialogWindowExt as _;
 
@@ -409,6 +409,7 @@ impl NyaTermApp {
             .begin_credential_request(credential_id.clone());
         let location = SecurityStoreLocation::new(self.store_blocking_client());
         let scheduler = self.blocking_jobs.clone();
+        let origin_window = Some(window.window_handle());
         cx.spawn(async move |this, cx| {
             let task = scheduler.submit_task("credential-reveal", move |_| {
                 let store = location.open()?;
@@ -429,16 +430,46 @@ impl NyaTermApp {
                         let value = entry.password.unwrap_or_default().into_secret();
                         if value.is_empty() {
                             this.security.set_status("credential has no password");
+                            this.notify_operation_at(
+                                origin_window,
+                                "copy-credential-password",
+                                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                                rust_i18n::t!("common.nothingToCopy").to_string(),
+                                cx,
+                            );
                         } else {
                             this.security
                                 .reveal_credential(request_credential_id.clone(), value.clone());
-                            cx.write_to_clipboard(ClipboardItem::new_string(value));
+                            this.copy_text_with_feedback_at(
+                                origin_window,
+                                "copy-credential-password",
+                                value,
+                                cx,
+                            );
                             this.security
                                 .set_status("credential password revealed and copied");
                         }
                     }
-                    Ok(None) => this.security.set_status("credential not found"),
-                    Err(error) => this.security.set_status(error),
+                    Ok(None) => {
+                        this.security.set_status("credential not found");
+                        this.notify_operation_at(
+                            origin_window,
+                            "copy-credential-password",
+                            nyaterm_ui::notification::NyaNotificationKind::Error,
+                            rust_i18n::t!("common.copyFailed").to_string(),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        this.security.set_status(error);
+                        this.notify_operation_at(
+                            origin_window,
+                            "copy-credential-password",
+                            nyaterm_ui::notification::NyaNotificationKind::Error,
+                            rust_i18n::t!("common.copyFailed").to_string(),
+                            cx,
+                        );
+                    }
                 }
                 cx.notify();
             });
@@ -460,9 +491,11 @@ impl NyaTermApp {
             .map(|entry| entry.username.clone())
             && !username.is_empty()
         {
-            cx.write_to_clipboard(ClipboardItem::new_string(username));
+            self.copy_text_with_feedback("copy-credential-username", username, cx);
             self.security.set_status(t!("common.copied").to_string());
             cx.notify();
+        } else {
+            self.copy_text_with_feedback("copy-credential-username", String::new(), cx);
         }
     }
 
@@ -474,9 +507,11 @@ impl NyaTermApp {
         if let Some(value) = self.security.revealed_credential(&credential_id)
             && !value.is_empty()
         {
-            cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
+            self.copy_text_with_feedback("copy-credential-password", value.to_string(), cx);
             self.security.set_status(t!("common.copied").to_string());
             cx.notify();
+        } else {
+            self.copy_text_with_feedback("copy-credential-password", String::new(), cx);
         }
     }
 

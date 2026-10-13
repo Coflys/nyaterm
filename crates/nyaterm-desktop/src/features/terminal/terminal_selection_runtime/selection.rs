@@ -203,6 +203,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.copy_terminal_selection(cx) {
+            self.notify_operation(
+                "copy-terminal-selection",
+                nyaterm_ui::notification::NyaNotificationKind::Success,
+                rust_i18n::t!("common.copied").to_string(),
+                cx,
+            );
             return;
         }
         self.copy_terminal_visible_text(cx);

@@ -1,6 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{ClipboardItem, Context, IntoElement as _, KeyDownEvent, Window};
+use gpui::{Context, IntoElement as _, KeyDownEvent, Window};
 use nyaterm_core::SavedPassword;
 use nyaterm_ui::NyaDialogWindowExt as _;
 
@@ -305,8 +305,14 @@ impl NyaTermApp {
         {
             if value.is_empty() {
                 self.security.set_status("password has no secret");
+                self.notify_operation(
+                    "copy-password",
+                    nyaterm_ui::notification::NyaNotificationKind::Warning,
+                    rust_i18n::t!("common.nothingToCopy").to_string(),
+                    cx,
+                );
             } else {
-                cx.write_to_clipboard(ClipboardItem::new_string(value));
+                self.copy_text_with_feedback("copy-password", value, cx);
                 self.security.set_status("password copied");
             }
             cx.notify();
@@ -334,6 +340,9 @@ impl NyaTermApp {
         let request_id = self.security.begin_password_request(password_id.clone());
         let location = SecurityStoreLocation::new(self.store_blocking_client());
         let scheduler = self.blocking_jobs.clone();
+        let origin_window = cx
+            .active_window()
+            .or_else(|| self.shell.main_window().map(Into::into));
         cx.spawn(async move |this, cx| {
             let task = scheduler.submit_task("saved-password-reveal", move |_| {
                 let store = location.open()?;
@@ -354,19 +363,55 @@ impl NyaTermApp {
                         let value = entry.password.unwrap_or_default().into_secret();
                         if value.is_empty() {
                             this.security.set_status("password has no secret");
+                            if copy {
+                                this.notify_operation_at(
+                                    origin_window,
+                                    "copy-password",
+                                    nyaterm_ui::notification::NyaNotificationKind::Warning,
+                                    rust_i18n::t!("common.nothingToCopy").to_string(),
+                                    cx,
+                                );
+                            }
                         } else {
                             this.security
                                 .reveal_password(request_password_id.clone(), value.clone());
                             if copy {
-                                cx.write_to_clipboard(ClipboardItem::new_string(value));
+                                this.copy_text_with_feedback_at(
+                                    origin_window,
+                                    "copy-password",
+                                    value,
+                                    cx,
+                                );
                                 this.security.set_status("password revealed and copied");
                             } else {
                                 this.security.set_status("password revealed");
                             }
                         }
                     }
-                    Ok(None) => this.security.set_status("password not found"),
-                    Err(error) => this.security.set_status(error),
+                    Ok(None) => {
+                        this.security.set_status("password not found");
+                        if copy {
+                            this.notify_operation_at(
+                                origin_window,
+                                "copy-password",
+                                nyaterm_ui::notification::NyaNotificationKind::Error,
+                                rust_i18n::t!("common.copyFailed").to_string(),
+                                cx,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        this.security.set_status(error);
+                        if copy {
+                            this.notify_operation_at(
+                                origin_window,
+                                "copy-password",
+                                nyaterm_ui::notification::NyaNotificationKind::Error,
+                                rust_i18n::t!("common.copyFailed").to_string(),
+                                cx,
+                            );
+                        }
+                    }
                 }
                 cx.notify();
             });

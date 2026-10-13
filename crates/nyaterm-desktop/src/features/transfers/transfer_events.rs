@@ -380,6 +380,27 @@ impl NyaTermApp {
         let event_failed = matches!(&event.event, TransferJobEvent::Finished(Err(_)));
         let event_succeeded = matches!(&event.event, TransferJobEvent::Finished(Ok(_)));
         let event_finished = event_failed || event_succeeded;
+        if let (TransferJobKind::SendTo { .. }, TransferJobEvent::Finished(result)) =
+            (&job.kind, &event.event)
+        {
+            use nyaterm_ui::notification::NyaNotificationKind;
+
+            match result {
+                Ok(TransferJobOutput::Sent { .. }) => self.notify_background_operation(
+                    "file-copy-result",
+                    NyaNotificationKind::Success,
+                    t!("common.operationSucceeded").to_string(),
+                    cx,
+                ),
+                Err(error) if error != SFTP_TRANSFER_CANCELLED => self.notify_background_operation(
+                    "file-copy-result",
+                    NyaNotificationKind::Error,
+                    t!("common.operationFailed").to_string(),
+                    cx,
+                ),
+                _ => {}
+            }
+        }
         if event_finished {
             self.transfer.settle_cut_job(
                 &event_id,

@@ -1,7 +1,6 @@
 use crate::features::NyaTermApp;
 use crate::models::AiDetectedErrorState;
 use crate::models::AiPreparedRequest;
-use gpui::ClipboardItem;
 use gpui::Context;
 use gpui::Window;
 use nyaterm_core::AiAction;
@@ -34,9 +33,7 @@ impl NyaTermApp {
     ) {
         let value = text.trim().to_string();
         let copied = !value.is_empty();
-        if copied {
-            cx.write_to_clipboard(ClipboardItem::new_string(value));
-        }
+        self.copy_text_with_feedback("copy-ai-message", value, cx);
         self.ai.finish_copy_message(copied);
         self.defer_ai_panel_snapshot_flush(cx);
     }

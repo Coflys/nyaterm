@@ -1,3 +1,4 @@
+use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use std::collections::HashSet;
 
 use gpui::{
@@ -1108,8 +1109,14 @@ impl AiPanel {
             format!("ai-command-copy-{key}"),
             t!("ai.copyCommand"),
             NyaButtonVariant::Ghost,
-            cx.listener(move |_, _, _, cx| {
+            cx.listener(move |_, _, window, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+                window.notify_operation(
+                    "copy-ai-command",
+                    NyaNotificationKind::Success,
+                    t!("common.copied").to_string(),
+                    cx,
+                );
             }),
         ));
         if phase.offers_reuse() {

@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use std::borrow::Cow;
 
-use gpui::{ClipboardItem, Context, Window};
+use gpui::{Context, Window};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{session_kind_label, short_id};
@@ -382,10 +382,16 @@ impl NyaTermApp {
         let Some(name) = self.session.display_name(session_id) else {
             self.shell
                 .set_status("active session name is unavailable".to_string());
+            self.notify_operation(
+                "copy-session-name",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                rust_i18n::t!("common.nothingToCopy").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
-        cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
+        self.copy_text_with_feedback("copy-session-name", name.clone(), cx);
         self.shell.set_status(format!("copied tab name '{name}'"));
         cx.notify();
     }
@@ -394,16 +400,28 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id() else {
             self.shell
                 .set_status("no active SSH host to copy".to_string());
+            self.notify_operation(
+                "copy-session-host",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                rust_i18n::t!("common.nothingToCopy").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
         let Some(host) = self.session.ssh_host(session_id) else {
             self.shell
                 .set_status("active session is not SSH".to_string());
+            self.notify_operation(
+                "copy-session-host",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                rust_i18n::t!("common.nothingToCopy").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
-        cx.write_to_clipboard(ClipboardItem::new_string(host.clone()));
+        self.copy_text_with_feedback("copy-session-host", host.clone(), cx);
         self.shell.set_status(format!("copied SSH host '{host}'"));
         cx.notify();
     }
@@ -437,6 +455,12 @@ impl NyaTermApp {
         let Some(details) = self.active_session_info_details() else {
             self.shell
                 .set_status("no active session info to copy".to_string());
+            self.notify_operation(
+                "copy-session-info",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                rust_i18n::t!("common.nothingToCopy").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
@@ -445,7 +469,7 @@ impl NyaTermApp {
             .map(|(label, value)| format!("{label}: {value}"))
             .collect::<Vec<_>>()
             .join("\n");
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.copy_text_with_feedback("copy-session-info", text, cx);
         self.shell.set_status("copied session info".to_string());
         cx.notify();
     }

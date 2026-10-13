@@ -1,3 +1,4 @@
+use rust_i18n::t;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -167,6 +168,13 @@ impl NyaTermApp {
         {
             self.shell
                 .set_status("cut is only available for remote files");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -195,6 +203,13 @@ impl NyaTermApp {
             .collect::<Vec<_>>();
         if entries.is_empty() {
             self.shell.set_status("select files to copy or cut");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -205,6 +220,13 @@ impl NyaTermApp {
             "{} {count} file item(s)",
             if cut { "cut" } else { "copied" }
         ));
+        self.notify_operation_at(
+            cx.active_window(),
+            "file-clipboard",
+            nyaterm_ui::notification::NyaNotificationKind::Success,
+            t!("common.operationSucceeded").to_string(),
+            cx,
+        );
         cx.notify();
     }
 
@@ -234,11 +256,25 @@ impl NyaTermApp {
             internal
         } else {
             self.shell.set_status("file clipboard is empty");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
         if clipboard.entries.is_empty() {
             self.shell.set_status("file clipboard has no usable paths");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -246,6 +282,13 @@ impl NyaTermApp {
             || (!prefer_local && self.session.is_disconnected(&clipboard.source_session_id))
         {
             self.shell.set_status("file clipboard session disconnected");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -261,11 +304,25 @@ impl NyaTermApp {
         let (Some(source_service), Some(target_service)) = (source_service, target_service) else {
             self.shell
                 .set_status("file clipboard session is unavailable");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
         if clipboard.cut && target_service.kind() != FileBrowserBackendKind::Remote {
             self.shell.set_status("cut requires a remote destination");
+            self.notify_operation_at(
+                cx.active_window(),
+                "file-clipboard",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                t!("common.operationFailed").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }

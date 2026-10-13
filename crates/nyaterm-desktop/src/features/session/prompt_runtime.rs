@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use gpui::{ClipboardItem, Context, KeyDownEvent, Window};
+use gpui::{Context, KeyDownEvent, Window};
 use nyaterm_transport::{
     SftpDuplicateDecision, SftpDuplicateRequest, SshAgentPromptAction, SshCredentialPrompt,
     SshHostKey, SshKeyboardInteractiveRequest,
@@ -228,9 +228,10 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let Some(code) = self.session.prompts.keyboard_interactive_otp_code() else {
+            self.copy_text_with_feedback("copy-auth-otp", String::new(), cx);
             return;
         };
-        cx.write_to_clipboard(ClipboardItem::new_string(code));
+        self.copy_text_with_feedback("copy-auth-otp", code, cx);
         self.shell.set_status("OTP code copied".to_string());
         cx.notify();
     }

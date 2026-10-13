@@ -1,3 +1,4 @@
+use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
@@ -91,11 +92,17 @@ impl RenderOnce for ConnectionDetailsHoverCard {
                         NyaIconButton::new(format!("{copy_id}-button"), "icons/copy.svg")
                             .icon_size(px(12.))
                             .tooltip(t!("savedConnections.copy").to_string())
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     copy_value.clone(),
                                 ));
+                                window.notify_operation(
+                                    "copy-connection-detail",
+                                    NyaNotificationKind::Success,
+                                    t!("common.copied").to_string(),
+                                    cx,
+                                );
                             }),
                     )
             });
@@ -745,8 +752,8 @@ mod hover_card_tests {
     use std::{sync::Arc, time::Duration};
 
     use gpui::{
-        Context, InteractiveElement as _, Modifiers, ParentElement as _, Render, Styled as _,
-        TestAppContext, Window, div, px,
+        AppContext as _, Context, InteractiveElement as _, Modifiers, ParentElement as _, Render,
+        Styled as _, TestAppContext, Window, div, px,
     };
     use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
 
@@ -804,7 +811,10 @@ mod hover_card_tests {
                 cx,
             )
         });
-        let (_, cx) = cx.add_window_view(|_, _| HoverCardHarness);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| HoverCardHarness);
+            nyaterm_ui::nya_root(view, window, cx)
+        });
         cx.update(|window, cx| window.draw(cx).clear(cx));
 
         let trigger = cx

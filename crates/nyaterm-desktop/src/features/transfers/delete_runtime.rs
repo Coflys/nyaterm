@@ -48,6 +48,21 @@ impl NyaTermApp {
                 outcome.errors[0]
             )
         });
+        self.notify_background_operation(
+            "file-delete-result",
+            if outcome.errors.is_empty() {
+                nyaterm_ui::notification::NyaNotificationKind::Success
+            } else {
+                nyaterm_ui::notification::NyaNotificationKind::Error
+            },
+            t!(if outcome.errors.is_empty() {
+                "common.deletingSuccess"
+            } else {
+                "common.operationFailed"
+            })
+            .to_string(),
+            cx,
+        );
         cx.notify();
     }
 }

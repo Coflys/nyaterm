@@ -1,8 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{
-    ClipboardItem, Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, svg,
-};
+use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
 use nyaterm_core::{CloudConflictKind, truncate_preview};
 
 use crate::features::NyaTermApp;
@@ -121,8 +119,13 @@ impl NyaTermApp {
                         if copy_message.trim().is_empty() {
                             this.shell
                                 .set_status("history entry has no message".to_string());
+                            this.copy_text_with_feedback("copy-sync-history", String::new(), cx);
                         } else {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy_message.clone()));
+                            this.copy_text_with_feedback(
+                                "copy-sync-history",
+                                copy_message.clone(),
+                                cx,
+                            );
                             this.shell
                                 .set_status("sync history message copied".to_string());
                         }

@@ -509,6 +509,10 @@
     "switchTerminal": "切换终端"
   },
   "common": {
+    "operationSucceeded": "操作完成",
+    "nothingToCopy": "没有可复制的内容",
+    "copyFailed": "复制失败",
+    "operationFailed": "操作失败",
     "add": "添加",
     "apply": "应用",
     "cancel": "取消",

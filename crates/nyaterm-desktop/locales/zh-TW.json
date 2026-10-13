@@ -509,6 +509,10 @@
     "switchTerminal": "切換終端"
   },
   "common": {
+    "operationSucceeded": "操作完成",
+    "nothingToCopy": "沒有可複製的內容",
+    "copyFailed": "複製失敗",
+    "operationFailed": "操作失敗",
     "add": "新增",
     "apply": "套用",
     "cancel": "取消",

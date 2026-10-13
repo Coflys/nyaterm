@@ -509,6 +509,10 @@
     "switchTerminal": "Changer de terminal"
   },
   "common": {
+    "operationSucceeded": "Opération terminée",
+    "nothingToCopy": "Aucun contenu à copier",
+    "copyFailed": "Échec de la copie",
+    "operationFailed": "Échec de l’opération",
     "add": "Ajouter",
     "apply": "Appliquer",
     "cancel": "Annuler",

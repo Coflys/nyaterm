@@ -509,6 +509,10 @@
     "switchTerminal": "ターミナルを切り替え"
   },
   "common": {
+    "operationSucceeded": "操作が完了しました",
+    "nothingToCopy": "コピーする内容がありません",
+    "copyFailed": "コピーに失敗しました",
+    "operationFailed": "操作に失敗しました",
     "add": "追加",
     "apply": "適用",
     "cancel": "キャンセル",

@@ -1,3 +1,4 @@
+use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use rust_i18n::t;
 
 use gpui::{
@@ -190,9 +191,15 @@ fn session_tab_hover_card_row(
                 NyaIconButton::new(id, "icons/copy.svg")
                     .icon_size(px(13.))
                     .tooltip(tooltip)
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
+                        window.notify_operation(
+                            "copy-tab-detail",
+                            NyaNotificationKind::Success,
+                            t!("common.copied").to_string(),
+                            cx,
+                        );
                     }),
             )
         })
@@ -254,11 +261,17 @@ impl Render for SessionTabTooltip {
                             .hover(|style| style.bg(rgb(0x334155)).text_color(rgb(0xe5edf7)))
                             .cursor_pointer()
                             .child(mono_icon("icons/copy.svg", rgb(0x8f98aa).into(), 11.))
-                            .on_click(cx.listener(move |_, _, _, cx| {
+                            .on_click(cx.listener(move |_, _, window, cx| {
                                 cx.stop_propagation();
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     copy_value.clone(),
                                 ));
+                                window.notify_operation(
+                                    "copy-tab-detail",
+                                    NyaNotificationKind::Success,
+                                    t!("common.copied").to_string(),
+                                    cx,
+                                );
                             })),
                     )
                 });

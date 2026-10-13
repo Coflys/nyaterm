@@ -43,6 +43,52 @@ struct OverlayFlags {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn copy_text_with_feedback(
+        &self,
+        key: &'static str,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let target = cx
+            .active_window()
+            .or_else(|| self.shell.main_window().map(Into::into));
+        self.copy_text_with_feedback_at(target, key, text, cx)
+    }
+
+    pub(in crate::features) fn copy_text_with_feedback_at(
+        &self,
+        target: Option<gpui::AnyWindowHandle>,
+        key: &'static str,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use nyaterm_ui::notification::NyaNotificationKind;
+        use rust_i18n::t;
+
+        // Preserve whitespace and never include clipboard contents in feedback.
+        let copied = !text.is_empty();
+        if copied {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+        self.notify_operation_at(
+            target,
+            key,
+            if copied {
+                NyaNotificationKind::Success
+            } else {
+                NyaNotificationKind::Warning
+            },
+            t!(if copied {
+                "common.copied"
+            } else {
+                "common.nothingToCopy"
+            })
+            .to_string(),
+            cx,
+        );
+        copied
+    }
+
     /// Capture the initiating window before deferring across entity leases.
     pub(in crate::features) fn notify_operation(
         &self,

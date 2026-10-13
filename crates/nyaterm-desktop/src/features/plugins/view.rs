@@ -10,6 +10,7 @@ use nyaterm_core::plugins::manifest::{ParameterKind, ResultKind};
 use nyaterm_core::plugins::{ErrorCode, MAX_TEXT_BYTES, PluginError, PluginStatus};
 use nyaterm_plugin_host::manager::{Contribution, InvocationLease, PluginSource};
 use nyaterm_plugin_host::service::{OperationReply, PluginOperation};
+use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaInput, NyaInputState, NyaScrollable};
 use rust_i18n::t;
 
@@ -695,10 +696,27 @@ impl Render for PluginPanel {
                             .child(NyaInput::new(&self.output)),
                     )
                     .child(NyaButton::new("plugins-copy", t!("plugins.copy")).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                this.output.read(cx).value(cx),
-                            ));
+                        cx.listener(|this, _, window, cx| {
+                            let value = this.output.read(cx).value(cx);
+                            let copied = !value.is_empty();
+                            if copied {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
+                            }
+                            window.notify_operation(
+                                "copy-plugin-result",
+                                if copied {
+                                    NyaNotificationKind::Success
+                                } else {
+                                    NyaNotificationKind::Warning
+                                },
+                                t!(if copied {
+                                    "common.copied"
+                                } else {
+                                    "common.nothingToCopy"
+                                })
+                                .to_string(),
+                                cx,
+                            );
                         }),
                     ));
             if preview.kind == ResultKind::Command {

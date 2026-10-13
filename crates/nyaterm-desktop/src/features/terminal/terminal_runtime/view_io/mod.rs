@@ -7,7 +7,7 @@ use crate::models::{
     TerminalViewState, TerminalWorkPolicy, terminal_action_link_matcher_key,
     terminal_snapshot_matches_grid_geometry,
 };
-use gpui::{AppContext, ClipboardItem, Context, Entity, Window};
+use gpui::{AppContext, Context, Entity, Window};
 #[cfg(test)]
 use nyaterm_terminal::TerminalScreen;
 use nyaterm_terminal::TerminalSnapshot;
@@ -608,8 +608,9 @@ impl NyaTermApp {
         if text.trim().is_empty() {
             self.shell
                 .set_status("visible terminal text is empty".to_string());
+            self.copy_text_with_feedback("copy-terminal-visible", String::new(), cx);
         } else {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.copy_text_with_feedback("copy-terminal-visible", text, cx);
             self.shell
                 .set_status("copied visible terminal text".to_string());
         }

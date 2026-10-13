@@ -509,6 +509,10 @@
     "switchTerminal": "Switch Terminal"
   },
   "common": {
+    "operationSucceeded": "Operation completed",
+    "nothingToCopy": "Nothing to copy",
+    "copyFailed": "Copy failed",
+    "operationFailed": "Operation failed",
     "add": "Add",
     "apply": "Apply",
     "cancel": "Cancel",

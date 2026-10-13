@@ -1,8 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{
-    ClipboardItem, Context, IntoElement as _, KeyDownEvent, PathPromptOptions, SharedString, Window,
-};
+use gpui::{Context, IntoElement as _, KeyDownEvent, PathPromptOptions, SharedString, Window};
 use nyaterm_core::SshKey;
 use nyaterm_ui::NyaDialogWindowExt as _;
 
@@ -450,9 +448,11 @@ impl NyaTermApp {
         if let Some((_, value, None)) = self.security.private_key_view()
             && !value.is_empty()
         {
-            cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
+            self.copy_text_with_feedback("copy-private-key", value.to_string(), cx);
             self.security.set_status(t!("common.copied").to_string());
             cx.notify();
+        } else {
+            self.copy_text_with_feedback("copy-private-key", String::new(), cx);
         }
     }
 
@@ -475,6 +475,7 @@ impl NyaTermApp {
         let request_key_id = key_id.clone();
         let location = SecurityStoreLocation::new(self.store_blocking_client());
         let scheduler = self.blocking_jobs.clone();
+        let origin_window = Some(window.window_handle());
         cx.spawn(async move |this, cx| {
             let task = scheduler.submit_task("ssh-public-key-copy", move |_| {
                 let store = location.open()?;
@@ -497,13 +498,25 @@ impl NyaTermApp {
                 }
                 match result {
                     Ok(public) => {
-                        cx.write_to_clipboard(ClipboardItem::new_string(public));
+                        this.copy_text_with_feedback_at(
+                            origin_window,
+                            "copy-public-key",
+                            public,
+                            cx,
+                        );
                         this.security.set_status(t!("common.copied").to_string());
                         this.shell.set_status(t!("common.copied").to_string());
                     }
                     Err(error) => {
                         this.security.set_status(error.clone());
                         this.shell.set_status(error);
+                        this.notify_operation_at(
+                            origin_window,
+                            "copy-public-key",
+                            nyaterm_ui::notification::NyaNotificationKind::Error,
+                            rust_i18n::t!("common.copyFailed").to_string(),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();

@@ -1,6 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{ClipboardItem, Context};
+use gpui::Context;
 use nyaterm_core::{AiAction, AiContext};
 use nyaterm_transport::{RecordingMode, RecordingStatus, SessionKind};
 use nyaterm_ui::NyaMenuItem;
@@ -73,7 +73,11 @@ impl NyaTermApp {
                     .icon("icons/copy.svg")
                     .shortcut(copy_sc)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(selected_for_copy.clone()));
+                        this.copy_text_with_feedback(
+                            "copy-terminal-selection",
+                            selected_for_copy.clone(),
+                            cx,
+                        );
                         this.shell
                             .set_status("copied terminal selection".to_string());
                         cx.notify();
