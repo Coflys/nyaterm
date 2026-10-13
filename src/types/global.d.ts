@@ -563,6 +563,8 @@ export interface SavedConnection {
   backspace_mode?: string;
   /** Telnet-only: bypass Telnet option negotiation for embedded/raw TCP CLIs. */
   raw_tcp_cli?: boolean;
+  /** Telnet-only: fixed NOP interval in seconds; defaults to 60, 0 disables it. */
+  keep_alive_interval?: number;
   /** Telnet-only: Enter send mode ("crlf", "cr", or "lf"). */
   enter_mode?: "crlf" | "cr" | "lf";
   /** Telnet-only: locally echo typed input when the remote does not echo. */

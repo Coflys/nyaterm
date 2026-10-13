@@ -464,6 +464,23 @@ mod tests {
     }
 
     #[test]
+    fn keep_alive_checks_do_not_extend_zmodem_drain_windows() {
+        let start = Instant::now();
+        let mut upload = ZmodemUploadDrain::new();
+        let mut download = ZmodemDownloadOoDrain::new();
+        upload.start(start);
+        download.start(start);
+        assert!(upload.is_suppressing(start + ZMODEM_FINISH_DRAIN_IDLE / 2));
+        assert!(download.is_suppressing(start + ZMODEM_FINISH_DRAIN_IDLE / 2));
+        let after = start + ZMODEM_FINISH_DRAIN_IDLE + Duration::from_millis(1);
+        assert!(!upload.is_suppressing(after));
+        assert!(!download.is_suppressing(after));
+        assert!(!upload.is_active());
+        assert!(!download.is_active());
+        assert_eq!(download.filter(b"OO", after), b"OO");
+    }
+
+    #[test]
     fn upload_drain_suppresses_residual_bytes_until_idle() {
         let mut drain = ZmodemUploadDrain::new();
         let start = Instant::now();

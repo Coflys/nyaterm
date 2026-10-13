@@ -202,6 +202,7 @@ fn prepare_nyaterm_json_session(
                     ai_execution_profile: AiExecutionProfile::Auto,
                     backspace_mode,
                     raw_tcp_cli: false,
+                    keep_alive_interval: crate::telnet::default_telnet_keep_alive_interval(),
                     enter_mode: "cr".to_string(),
                     local_echo: false,
                     local_line_edit: false,

@@ -31,6 +31,8 @@ pub struct TelnetSessionConfig {
     pub password: Option<String>,
     pub backspace_mode: String,
     pub raw_tcp_cli: bool,
+    /// Fixed NOP interval in seconds; zero disables keep-alive.
+    pub keep_alive_interval: u32,
     pub enter_mode: TelnetEnterMode,
     pub local_echo: bool,
     pub local_line_edit: bool,
@@ -52,6 +54,7 @@ impl Default for TelnetSessionConfig {
             password: None,
             backspace_mode: "del".to_string(),
             raw_tcp_cli: false,
+            keep_alive_interval: default_telnet_keep_alive_interval(),
             enter_mode: TelnetEnterMode::Cr,
             local_echo: false,
             local_line_edit: false,

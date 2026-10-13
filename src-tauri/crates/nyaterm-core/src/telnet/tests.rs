@@ -1,5 +1,54 @@
 #[cfg(test)]
 mod tests {
+    use super::{telnet_keep_alive_interval, tick_telnet_keep_alive};
+    use futures_util::FutureExt;
+
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_waits_full_interval_and_keeps_fixed_schedule() {
+        let mut timer = telnet_keep_alive_interval(&TelnetSessionConfig::default());
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_none());
+        tokio::time::advance(std::time::Duration::from_secs(59)).await;
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_none());
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_some());
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_none());
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_skips_missed_ticks_without_a_burst() {
+        let mut timer = telnet_keep_alive_interval(&TelnetSessionConfig {
+            keep_alive_interval: 10,
+            ..Default::default()
+        });
+        tokio::time::advance(std::time::Duration::from_secs(45)).await;
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_some());
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_none());
+        tokio::time::advance(std::time::Duration::from_secs(5)).await;
+        assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_disabled_and_raw_tcp_timers_stay_pending() {
+        for config in [
+            TelnetSessionConfig {
+                keep_alive_interval: 0,
+                ..Default::default()
+            },
+            TelnetSessionConfig {
+                raw_tcp_cli: true,
+                ..Default::default()
+            },
+        ] {
+            let mut timer = telnet_keep_alive_interval(&config);
+            assert!(timer.is_none());
+            assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_none());
+            tokio::time::advance(std::time::Duration::from_secs(600)).await;
+            assert!(tick_telnet_keep_alive(&mut timer).now_or_never().is_none());
+        }
+    }
+
     #[test]
     fn fragmented_iac_and_subnegotiation_preserve_only_application_bytes() {
         use super::{SB, SE, TelnetDecoder};

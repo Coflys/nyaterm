@@ -62,6 +62,8 @@ interface TelnetFormProps {
   setBackspaceMode: (v: string) => void;
   rawTcpCli: boolean;
   setRawTcpCli: (v: boolean) => void;
+  keepAliveInterval: number;
+  setKeepAliveInterval: (v: number) => void;
   enterMode: TelnetEnterMode;
   setEnterMode: (v: TelnetEnterMode) => void;
   localEcho: boolean;
@@ -116,6 +118,8 @@ export function TelnetForm({
   setBackspaceMode,
   rawTcpCli,
   setRawTcpCli,
+  keepAliveInterval,
+  setKeepAliveInterval,
   enterMode,
   setEnterMode,
   localEcho,
@@ -537,6 +541,33 @@ export function TelnetForm({
                 </div>
 
                 <div className="mt-3 grid gap-2">
+                  <div className="max-w-md space-y-1">
+                    <Label
+                      htmlFor="telnet-keep-alive"
+                      className="text-xs font-medium text-foreground/80"
+                    >
+                      {t("dialog.telnetKeepAliveInterval")}
+                    </Label>
+                    <NumberInput
+                      id="telnet-keep-alive"
+                      value={keepAliveInterval}
+                      onChange={(value) =>
+                        setKeepAliveInterval(
+                          Math.min(
+                            4_294_967_295,
+                            Math.max(0, Math.trunc(value)),
+                          ),
+                        )
+                      }
+                      min={0}
+                      max={4_294_967_295}
+                      step={1}
+                      disabled={rawTcpCli}
+                    />
+                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t("dialog.telnetKeepAliveIntervalDesc")}
+                    </p>
+                  </div>
                   {renderSwitchRow(
                     t("dialog.telnetRawTcpCli", "Embedded debug port / Raw TCP CLI"),
                     t("dialog.telnetRawTcpCliLongDesc"),

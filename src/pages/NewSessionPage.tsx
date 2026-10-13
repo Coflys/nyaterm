@@ -312,6 +312,7 @@ export default function NewSessionPage() {
   const [serialBackspaceMode, setSerialBackspaceMode] = useState("ctrl_h");
   const [telnetBackspaceMode, setTelnetBackspaceMode] = useState("del");
   const [telnetRawTcpCli, setTelnetRawTcpCli] = useState(false);
+  const [telnetKeepAliveInterval, setTelnetKeepAliveInterval] = useState(60);
   const [telnetEnterMode, setTelnetEnterMode] = useState<"crlf" | "cr" | "lf">("cr");
   const [telnetLocalEcho, setTelnetLocalEcho] = useState(false);
   const [telnetLocalLineEdit, setTelnetLocalLineEdit] = useState(false);
@@ -428,6 +429,7 @@ export default function NewSessionPage() {
           setHasPassword(found.auth?.has_password || false);
           setTelnetBackspaceMode(found.backspace_mode || "del");
           setTelnetRawTcpCli(found.raw_tcp_cli ?? false);
+          setTelnetKeepAliveInterval(found.keep_alive_interval ?? 60);
           setTelnetEnterMode(found.enter_mode || "cr");
           setTelnetLocalEcho(found.local_echo ?? false);
           setTelnetLocalLineEdit(found.local_line_edit ?? false);
@@ -571,6 +573,7 @@ export default function NewSessionPage() {
     setSerialBackspaceMode("ctrl_h");
     setTelnetBackspaceMode("del");
     setTelnetRawTcpCli(false);
+    setTelnetKeepAliveInterval(60);
     setTelnetEnterMode("cr");
     setTelnetLocalEcho(false);
     setTelnetLocalLineEdit(false);
@@ -1184,6 +1187,7 @@ export default function NewSessionPage() {
               network,
               backspace_mode: telnetBackspaceMode,
               raw_tcp_cli: telnetRawTcpCli,
+              keep_alive_interval: telnetKeepAliveInterval,
               enter_mode: telnetEnterMode,
               local_echo: telnetLocalEcho,
               local_line_edit: telnetLocalLineEdit,
@@ -1772,6 +1776,8 @@ export default function NewSessionPage() {
               setBackspaceMode={setTelnetBackspaceMode}
               rawTcpCli={telnetRawTcpCli}
               setRawTcpCli={setTelnetRawTcpCli}
+              keepAliveInterval={telnetKeepAliveInterval}
+              setKeepAliveInterval={setTelnetKeepAliveInterval}
               enterMode={telnetEnterMode}
               setEnterMode={setTelnetEnterMode}
               localEcho={telnetLocalEcho}

@@ -655,6 +655,20 @@ mod tests {
     }
 
     #[test]
+    fn nyaterm_json_telnet_import_defaults_keep_alive() {
+        let content =
+            r#"{"version":1,"sessions":[{"type":"telnet","name":"Legacy","host":"example.com"}]}"#;
+        let prepared = parse_nyaterm_json_content(content).expect("import telnet");
+        assert!(matches!(
+            prepared.connections[0].config,
+            ConnectionType::Telnet {
+                keep_alive_interval: 60,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn nyaterm_json_serial_flow_control_import_preserves_values_and_legacy_default() {
         for wire in [None, Some("none"), Some("software"), Some("hardware")] {
             let mut session = serde_json::json!({

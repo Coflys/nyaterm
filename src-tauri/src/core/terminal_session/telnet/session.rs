@@ -291,9 +291,35 @@ async fn telnet_session_task(
     if auto_login.lock().await.is_none() {
         arm_telnet_startup_timer(&pending_startup, &mut startup_deadline);
     }
+    let mut keep_alive = telnet_keep_alive_interval(&config);
 
     loop {
         tokio::select! {
+            _ = tick_telnet_keep_alive(&mut keep_alive) => {
+                let now = std::time::Instant::now();
+                if zmodem_state.lock().await.is_some()
+                    || zmodem_upload_drain.lock().await.is_suppressing(now)
+                    || zmodem_download_oo_drain.lock().await.is_suppressing(now)
+                {
+                    continue;
+                }
+                if let Err(e) = writer.write_all(&TELNET_NOP).await {
+                    log_rate_limited(StructuredLog {
+                        level: StructuredLogLevel::Warn,
+                        domain: "session.lifecycle".to_string(),
+                        event: "telnet.keep_alive_write_error".to_string(),
+                        message: "Telnet keep-alive write error".to_string(),
+                        ids: Some(serde_json::json!({
+                            "session_id": session_id.clone(),
+                            "connection_id": connection_id.clone(),
+                        })),
+                        data: Some(serde_json::json!({ "session_type": "Telnet" })),
+                        error: Some(serde_json::json!({ "message": e.to_string() })),
+                        client_timestamp: None,
+                    });
+                    break;
+                }
+            }
             Some(neg_data) = negotiate_rx.recv() => {
                 if let Err(e) = writer.write_all(&neg_data).await {
                     log_rate_limited(StructuredLog {

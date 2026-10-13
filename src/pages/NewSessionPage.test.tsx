@@ -654,6 +654,72 @@ describe("NewSessionPage", () => {
     });
   });
 
+  it("defaults a new Telnet connection to a 60 second keep-alive", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<NewSessionPage />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Telnet" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    await waitFor(() =>
+      expect(telnetFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ keepAliveInterval: 60 }),
+      ),
+    );
+  });
+
+  it.each([undefined, 0, 120])(
+    "loads and saves Telnet keep-alive %s without losing zero",
+    async (interval) => {
+      const implementation = invokeMock.getMockImplementation()!;
+      invokeMock.mockImplementation((command: string, ...args: unknown[]) =>
+        command === "get_saved_connections"
+          ? Promise.resolve([
+              { ...telnetConnection, keep_alive_interval: interval },
+            ])
+          : implementation(command, ...args),
+      );
+      window.history.replaceState({}, "", `/?edit=${telnetConnection.id}`);
+      render(<NewSessionPage />);
+      await waitFor(() =>
+        expect(telnetFormMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({ keepAliveInterval: interval ?? 60 }),
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_connection",
+          expect.objectContaining({
+            connection: expect.objectContaining({
+              keep_alive_interval: interval ?? 60,
+            }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it("saves a changed Telnet keep-alive interval", async () => {
+    window.history.replaceState({}, "", `/?edit=${telnetConnection.id}`);
+    render(<NewSessionPage />);
+    await waitFor(() =>
+      expect(telnetFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ keepAliveInterval: 60 }),
+      ),
+    );
+    act(() => telnetFormMock.mock.lastCall![0].setKeepAliveInterval(17));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({ keep_alive_interval: 17 }),
+        }),
+      ),
+    );
+  });
+
   it("clears only the account reference when switching to Manual", async () => {
     window.history.replaceState({}, "", `/?edit=${sshConnection.id}`);
     render(<NewSessionPage />);

@@ -673,6 +673,11 @@ pub enum ConnectionType {
         #[serde(default, skip_serializing_if = "is_false")]
         raw_tcp_cli: bool,
         #[serde(
+            default = "crate::telnet::default_telnet_keep_alive_interval",
+            skip_serializing_if = "is_default_telnet_keep_alive_interval"
+        )]
+        keep_alive_interval: u32,
+        #[serde(
             default = "default_telnet_enter_mode",
             skip_serializing_if = "is_default_telnet_enter_mode"
         )]
@@ -768,6 +773,11 @@ fn default_backspace_mode_ssh() -> String {
 fn default_telnet_port() -> u16 {
     23
 }
+
+fn is_default_telnet_keep_alive_interval(value: &u32) -> bool {
+    *value == crate::telnet::default_telnet_keep_alive_interval()
+}
+
 fn default_rdp_port() -> u16 {
     3389
 }
@@ -2681,6 +2691,7 @@ mod tests {
         let ConnectionType::Telnet {
             username,
             raw_tcp_cli,
+            keep_alive_interval,
             enter_mode,
             local_echo,
             local_line_edit,
@@ -2695,12 +2706,33 @@ mod tests {
 
         assert!(username.is_empty());
         assert!(!raw_tcp_cli);
+        assert_eq!(keep_alive_interval, 60);
         assert_eq!(enter_mode, "cr");
         assert!(!local_echo);
         assert!(!local_line_edit);
         assert!(!force_character_at_a_time);
         assert!(send_naws);
         assert!(send_sga);
+    }
+
+    #[test]
+    fn telnet_keep_alive_roundtrip_preserves_zero_and_custom_intervals() {
+        for interval in [0, 1, 60, 120, u32::MAX] {
+            let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+                "id": "telnet", "name": "Telnet", "type": "telnet",
+                "host": "example.com", "keep_alive_interval": interval
+            }))
+            .expect("connection");
+            let encoded = serde_json::to_value(&connection).expect("serialize");
+            if interval == 60 {
+                // Keep legacy default serialization stable for backup/sync hashes.
+                assert!(encoded.get("keep_alive_interval").is_none());
+            } else {
+                assert_eq!(encoded["keep_alive_interval"], interval);
+            }
+            let restored: SavedConnection = serde_json::from_value(encoded).expect("restore");
+            assert_eq!(restored.config, connection.config);
+        }
     }
 
     #[test]

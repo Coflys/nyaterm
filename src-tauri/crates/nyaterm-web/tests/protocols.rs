@@ -507,8 +507,137 @@ async fn jump() -> (u16, tokio::task::JoinHandle<()>) {
     )
 }
 
+// Keep protocol cases in one test: storage and encryption keys are process-wide.
+async fn assert_telnet_keep_alive(app: Router, state: Arc<State>, owner: String, csrf: String) {
+    let mut bytes = [0; 2];
+
+    for saved in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut args = json!({"type":"telnet", "host":"127.0.0.1",
+            "port":listener.local_addr().unwrap().port(), "name":"Keep-alive",
+            "keep_alive_interval":1, "encoding":"GBK", "auto_login":{"enabled":false}});
+        if saved {
+            let connection_id = command(
+                &app,
+                &state,
+                &owner,
+                &csrf,
+                "save_connection",
+                json!({"connection": args}),
+            )
+            .await;
+            args = json!({"type":"telnet", "connectionId": connection_id});
+        }
+        // A reconnect creates a fresh timer and leaves no writes from the old session.
+        for reconnect in [false, true] {
+            let id = create(&app, &state, &owner, &csrf, args.clone()).await;
+            let (mut peer, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(600), peer.read_exact(&mut bytes))
+                    .await
+                    .is_err(),
+                "no immediate NOP"
+            );
+            let session = state.sessions.lock().await[&id].clone();
+            session
+                .input
+                .send(nyaterm_core::ssh::terminal::Command::RawInput(
+                    b"ok".to_vec(),
+                ))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_millis(300), peer.read_exact(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(&bytes, b"ok");
+            // Input at ~600 ms must not postpone the first NOP to ~1600 ms.
+            tokio::time::timeout(Duration::from_millis(700), peer.read_exact(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(bytes, [0xff, 0xf1]);
+            tokio::time::timeout(Duration::from_millis(1200), peer.read_exact(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(bytes, [0xff, 0xf1]);
+            if reconnect {
+                drop(peer); // Remote EOF ends the timer and removes the session.
+            } else {
+                command(
+                    &app,
+                    &state,
+                    &owner,
+                    &csrf,
+                    "close_session",
+                    json!({"sessionId":id}),
+                )
+                .await;
+                let n = tokio::time::timeout(Duration::from_secs(2), peer.read(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(n, 0, "closed sessions send no more NOPs");
+            }
+            wait_removed(&state, &id).await;
+        }
+    }
+
+    for (interval, raw) in [(0, false), (1, true)] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let id = create(
+            &app,
+            &state,
+            &owner,
+            &csrf,
+            json!({"type":"telnet", "host":"127.0.0.1",
+            "port":listener.local_addr().unwrap().port(), "keep_alive_interval":interval,
+            "raw_tcp_cli":raw, "auto_login":{"enabled":false}}),
+        )
+        .await;
+        let (mut peer, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1200), peer.read_exact(&mut bytes))
+                .await
+                .is_err()
+        );
+        let session = state.sessions.lock().await[&id].clone();
+        session
+            .input
+            .send(nyaterm_core::ssh::terminal::Command::RawInput(
+                b"ok".to_vec(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), peer.read_exact(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            &bytes, b"ok",
+            "disabled timers do not busy-loop or block input"
+        );
+        session.cancel.cancel();
+        wait_removed(&state, &id).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), peer.read(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+    }
+}
+
 #[tokio::test]
-async fn web_telnet_vnc_proxy_and_lifecycle() {
+async fn web_telnet_vnc_proxy_keep_alive_and_lifecycle() {
     let data = tempfile::tempdir().unwrap();
     nyaterm_core::storage::init(data.path()).unwrap();
     nyaterm_core::utils::crypto::set_server_key_material([41; 32]);
@@ -521,6 +650,7 @@ async fn web_telnet_vnc_proxy_and_lifecycle() {
     let serving = tokio::spawn(axum::serve(listener, app.clone()).into_future());
     let (owner, csrf) = login(&app, &state).await;
     let (other, other_csrf) = login(&app, &state).await;
+    assert_telnet_keep_alive(app.clone(), state.clone(), owner.clone(), csrf.clone()).await;
     let (port, echo_task) = echo().await;
     let saved = command(&app,&state,&owner,&csrf,"save_connection",json!({"connection":{"id":"","name":"GBK Telnet","type":"telnet","host":"127.0.0.1","port":port,"encoding":"GBK","enter_mode":"crlf","auto_login":{"enabled":false}}})).await;
     let id = create(
