@@ -5,9 +5,7 @@ use gpui::{
     ScrollWheelEvent, SharedString, div, point, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{
-    NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement, NyaScrollable as _,
-};
+use nyaterm_ui::{NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::session_kind_label;
@@ -887,7 +885,8 @@ impl NyaTermApp {
             .w_full()
             .flex()
             .items_center()
-            // Tauri tab-strip-scroll: horizontal overflow instead of clipping tabs.
+            // Keep tab overflow scrollable without painting a scrollbar over the tabs;
+            // the wheel handler and open-tabs menu provide overflow navigation.
             .overflow_x_scroll()
             .overflow_y_hidden()
             .track_scroll(&tab_scroll)
@@ -1267,8 +1266,7 @@ impl NyaTermApp {
                     });
                 });
             })
-            .child(tabs)
-            .horizontal_scrollbar(&tab_scroll);
+            .child(tabs);
 
         div()
             .h(px(36.)) // Tauri TabBar: h-9
