@@ -206,6 +206,10 @@ pub struct SelectionSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSnapshotRow {
+    /// Empty row discarded by a local clear, retaining its host coordinates.
+    pub cleared: bool,
+    /// Line number relative to the last local clear, independent of host rows.
+    pub display_line_number: Option<usize>,
     pub line_id: Option<TerminalLineId>,
     pub revision: u64,
     pub cells: Box<[RenderCell]>,
@@ -271,6 +275,22 @@ pub struct TerminalSnapshot {
 }
 
 impl TerminalSnapshot {
+    /// Presentation-only displacement; protocol and selection coordinates stay intact.
+    pub fn leading_cleared_rows(&self, viewport_anchor_row: usize) -> usize {
+        let count = self
+            .rows()
+            .iter()
+            .skip(viewport_anchor_row)
+            .take(self.viewport_rows.saturating_sub(1))
+            .take_while(|row| row.cleared)
+            .count();
+        if self.cursor.visible {
+            count.min(self.cursor.row.saturating_sub(viewport_anchor_row))
+        } else {
+            count
+        }
+    }
+
     pub fn from_rows(
         meta: TerminalSnapshotMeta,
         rows: impl Into<Arc<[Arc<TerminalSnapshotRow>]>>,
@@ -377,6 +397,8 @@ const TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT: usize = 8_192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TerminalSnapshotRowCacheKey {
+    cleared: bool,
+    display_line_number: Option<usize>,
     cols: usize,
     revision: u64,
     signature: u64,
@@ -485,6 +507,7 @@ impl Dimensions for TermSize {
 
 #[derive(Debug, Clone, Default)]
 struct LineMetadata {
+    cleared: bool,
     command_anchor: bool,
     timestamp_ms: Option<u64>,
     signature: Option<u64>,
@@ -497,6 +520,9 @@ struct LineMetadata {
 
 #[derive(Debug, Default)]
 struct ScreenLineState {
+    /// Logical first retained input row after a local clear.
+    clear_line_origin: Option<i64>,
+    last_cursor_line: Option<i64>,
     command_navigation: command_navigation::CommandNavigationState,
     pending_command_prompt: Option<i64>,
     epoch: u64,
@@ -825,6 +851,10 @@ impl TerminalCore {
         if self.cols != old_cols {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
+            self.primary_lines.clear_line_origin = None;
+            self.alternate_lines.clear_line_origin = None;
+            self.primary_lines.last_cursor_line = None;
+            self.alternate_lines.last_cursor_line = None;
             self.primary_lines.command_navigation = Default::default();
             self.alternate_lines.command_navigation = Default::default();
             self.primary_lines.pending_command_prompt = None;
@@ -842,19 +872,29 @@ impl TerminalCore {
             self.clear_snapshot_row_cache();
         }
         if let Some(timestamps) = timestamps {
-            for (line, timestamp_ms) in reflow_timestamps::restore(&self.term, timestamps) {
+            for (line, metadata) in reflow_timestamps::restore(&self.term, timestamps) {
                 let signature = line_signature(&self.term, line, self.cols);
                 let revision = self.allocate_line_revision();
                 let logical_line = self.active_line_state().logical_line(line);
                 self.active_line_state_mut().metadata.insert(
                     logical_line,
                     LineMetadata {
-                        timestamp_ms: Some(timestamp_ms),
+                        timestamp_ms: metadata.timestamp_ms,
+                        cleared: metadata.cleared,
                         signature: Some(signature),
                         revision: Some(revision),
                         ..LineMetadata::default()
                     },
                 );
+                if let Some(number) = metadata.display_line_number {
+                    let origin = logical_line.saturating_sub(number.saturating_sub(1) as i64);
+                    let state = self.active_line_state_mut();
+                    state.clear_line_origin = Some(
+                        state
+                            .clear_line_origin
+                            .map_or(origin, |old| old.min(origin)),
+                    );
+                }
             }
         }
         self.stamp_changed_lines();
@@ -1123,13 +1163,28 @@ impl TerminalCore {
         self.drain_alacritty_events();
         self.sync_presentation_state();
         let origin = self.active_line_state().logical_origin;
-        self.active_line_state_mut().metadata.retain(|line, _| {
-            *line >= origin.saturating_add(start as i64)
-                && *line <= origin.saturating_add(end as i64)
-        });
         self.graphics.clear_screen(self.active_graphics_screen());
         self.clear_snapshot_row_cache();
         self.stamp_changed_lines();
+        // Retain the cleared signatures so subsequent damage scans do not turn
+        // erased rows into fresh output. A host rewrite restores normal metadata.
+        for row in 0..self.rows {
+            if row < start || row > end {
+                let line = origin.saturating_add(row as i64);
+                let signature = line_signature(&self.term, Line(row as i32), self.cols);
+                let revision = self.allocate_line_revision();
+                self.active_line_state_mut().metadata.insert(
+                    line,
+                    LineMetadata {
+                        cleared: true,
+                        signature: Some(signature),
+                        revision: Some(revision),
+                        ..LineMetadata::default()
+                    },
+                );
+            }
+        }
+        self.active_line_state_mut().clear_line_origin = Some(origin.saturating_add(start as i64));
         self.retain_active_presentation_range();
     }
 
@@ -1670,6 +1725,18 @@ impl TerminalCore {
 
     fn stamp_changed_lines(&mut self) {
         self.sync_presentation_state();
+        let cursor = self.term.grid().cursor.point.line;
+        let state = self.active_line_state_mut();
+        let cursor = state.logical_line(cursor);
+        if state.clear_line_origin.is_some() {
+            // Hard line breaks produce real blank output even when their cells
+            // match the erased padding. Cursor coordinates stay host-owned.
+            let first = state.last_cursor_line.unwrap_or(cursor).min(cursor);
+            for (_, metadata) in state.metadata.range_mut(first..=cursor) {
+                metadata.cleared = false;
+            }
+        }
+        state.last_cursor_line = Some(cursor);
         let scrolled_rows = {
             let state = self.active_line_state_mut();
             std::mem::take(&mut state.pending_scroll_rows)
@@ -1729,7 +1796,33 @@ impl TerminalCore {
             history_changed,
             lines: damaged_lines.into_boxed_slice(),
         };
+        self.discard_cleared_history();
         if history_changed {
+            self.retain_active_presentation_range();
+        }
+    }
+
+    fn discard_cleared_history(&mut self) {
+        if self.alternate_screen() || self.active_line_state().clear_line_origin.is_none() {
+            return;
+        }
+        let history = self.term.grid().history_size();
+        let state = self.active_line_state();
+        let discarded = (self.term.topmost_line().0..0)
+            .take_while(|line| {
+                state
+                    .metadata
+                    .get(&state.logical_line(Line(*line)))
+                    .is_some_and(|metadata| metadata.cleared)
+            })
+            .count();
+        if discarded > 0 {
+            // Shrink only the oldest history, never live rows or saved cursors.
+            // Restore the configured capacity immediately so real output retains
+            // the normal scrollback limit. Logical line IDs remain unchanged.
+            self.term.grid_mut().update_history(history - discarded);
+            self.term.grid_mut().update_history(self.scrollback_limit);
+            self.last_damage_summary.history_changed = true;
             self.retain_active_presentation_range();
         }
     }
@@ -1753,7 +1846,8 @@ impl TerminalCore {
             .metadata
             .get(&logical_line)
             .is_none_or(|metadata| {
-                metadata.signature != Some(signature) || metadata.timestamp_ms.is_none()
+                metadata.signature != Some(signature)
+                    || (!metadata.cleared && metadata.timestamp_ms.is_none())
             });
         let revision = should_revise.then(|| self.allocate_line_revision());
         let metadata = self
@@ -1762,10 +1856,18 @@ impl TerminalCore {
             .entry(logical_line)
             .or_default();
         if let Some(revision) = revision {
+            metadata.cleared = false;
             metadata.timestamp_ms = Some(now_ms);
             metadata.revision = Some(revision);
         }
         metadata.signature = Some(signature);
+        if should_revise {
+            let state = self.active_line_state_mut();
+            if let Some(origin) = state.clear_line_origin.as_mut() {
+                // Absolute host rewrites above the retained input are real output.
+                *origin = (*origin).min(logical_line);
+            }
+        }
     }
 
     fn allocate_line_revision(&mut self) -> u64 {
@@ -1809,6 +1911,10 @@ impl TerminalCore {
         if reset_generation != self.consumed_reset_generation {
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
+            self.primary_lines.clear_line_origin = None;
+            self.alternate_lines.clear_line_origin = None;
+            self.primary_lines.last_cursor_line = None;
+            self.alternate_lines.last_cursor_line = None;
             self.primary_lines.command_navigation = Default::default();
             self.alternate_lines.command_navigation = Default::default();
             self.primary_lines.pending_command_prompt = None;
@@ -1863,6 +1969,8 @@ impl TerminalCore {
         graphics: &mut TerminalGraphicsState,
     ) {
         if generation != state.consumed_generation {
+            state.clear_line_origin = None;
+            state.last_cursor_line = None;
             state.metadata.clear();
             state.command_navigation = Default::default();
             state.pending_command_prompt = None;
@@ -2108,11 +2216,17 @@ fn snapshot_window_from_term(
             })
             .unwrap_or(0);
         let timestamp_ms = metadata.and_then(|metadata| metadata.timestamp_ms);
+        let cleared = metadata.is_some_and(|metadata| metadata.cleared);
         let command_mark = metadata.and_then(|metadata| metadata.command_mark);
         let line_id = line_in_grid.map(|line| TerminalLineId {
             epoch: line_state.epoch,
             logical_line: line_state.logical_line(line),
         });
+        let display_line_number = line_state
+            .clear_line_origin
+            .zip(line_id)
+            .and_then(|(origin, id)| usize::try_from(id.logical_line - origin).ok())
+            .map(|line| line.saturating_add(1));
         let shell_input = line_state.shell_input_kind(line_id.map(|id| id.logical_line));
         let shell_input_columns = shell_input.and_then(|kind| {
             if kind == ShellInputLineKind::Active
@@ -2144,6 +2258,8 @@ fn snapshot_window_from_term(
                     .contains(Flags::WRAPLINE)
         });
         let key = TerminalSnapshotRowCacheKey {
+            cleared,
+            display_line_number,
             cols,
             revision,
             signature,
@@ -2172,6 +2288,8 @@ fn snapshot_window_from_term(
                 line_in_grid,
                 cols,
                 SnapshotRowMetadata {
+                    cleared,
+                    display_line_number,
                     revision,
                     signature,
                     timestamp_ms,
@@ -2246,6 +2364,8 @@ fn snapshot_window_from_term(
 }
 
 struct SnapshotRowMetadata {
+    cleared: bool,
+    display_line_number: Option<usize>,
     revision: u64,
     signature: u64,
     timestamp_ms: Option<u64>,
@@ -2264,6 +2384,8 @@ fn snapshot_row_from_term(
     metadata: SnapshotRowMetadata,
 ) -> TerminalSnapshotRow {
     let SnapshotRowMetadata {
+        cleared,
+        display_line_number,
         revision,
         signature,
         timestamp_ms,
@@ -2305,6 +2427,8 @@ fn snapshot_row_from_term(
     }
     text.truncate(text.trim_end().len());
     TerminalSnapshotRow {
+        cleared,
+        display_line_number,
         line_id,
         revision,
         styled_spans: compress_render_row(&cells).into_boxed_slice(),

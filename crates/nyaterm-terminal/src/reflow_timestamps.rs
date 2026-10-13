@@ -9,7 +9,14 @@ use crate::{NyaTermEventProxy, ScreenLineState, render_cell_width};
 
 struct RowTimestamp {
     byte_start: usize,
-    timestamp_ms: Option<u64>,
+    metadata: ReflowRowMetadata,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ReflowRowMetadata {
+    pub timestamp_ms: Option<u64>,
+    pub cleared: bool,
+    pub display_line_number: Option<usize>,
 }
 
 pub(crate) struct ReflowTimestamps {
@@ -74,12 +81,20 @@ pub(crate) fn capture(term: &Term<NyaTermEventProxy>, state: &ScreenLineState) -
         let timestamps = line
             .rows
             .into_iter()
-            .map(|(line, byte_start)| RowTimestamp {
-                byte_start,
-                timestamp_ms: state
-                    .metadata
-                    .get(&state.logical_line(line))
-                    .and_then(|metadata| metadata.timestamp_ms),
+            .map(|(line, byte_start)| {
+                let logical = state.logical_line(line);
+                let metadata = state.metadata.get(&logical);
+                RowTimestamp {
+                    byte_start,
+                    metadata: ReflowRowMetadata {
+                        timestamp_ms: metadata.and_then(|metadata| metadata.timestamp_ms),
+                        cleared: metadata.is_some_and(|metadata| metadata.cleared),
+                        display_line_number: state
+                            .clear_line_origin
+                            .and_then(|origin| usize::try_from(logical - origin).ok())
+                            .map(|line| line.saturating_add(1)),
+                    },
+                }
             })
             .collect();
         lines.entry(line.text).or_default().push(CapturedLine {
@@ -93,7 +108,7 @@ pub(crate) fn capture(term: &Term<NyaTermEventProxy>, state: &ScreenLineState) -
 pub(crate) fn restore(
     term: &Term<NyaTermEventProxy>,
     mut timestamps: ReflowTimestamps,
-) -> Vec<(Line, u64)> {
+) -> Vec<(Line, ReflowRowMetadata)> {
     let mut restored = Vec::new();
     for line in text_lines(term).into_iter().rev() {
         let mut old = timestamps.lines.get_mut(&line.text).and_then(Vec::pop);
@@ -122,8 +137,12 @@ pub(crate) fn restore(
                 .rows
                 .partition_point(|row| row.byte_start <= byte_start + byte_offset)
                 .saturating_sub(1);
-            if let Some(timestamp_ms) = old.rows[index].timestamp_ms {
-                restored.push((line, timestamp_ms));
+            let metadata = old.rows[index].metadata;
+            if metadata.timestamp_ms.is_some()
+                || metadata.cleared
+                || metadata.display_line_number.is_some()
+            {
+                restored.push((line, metadata));
             }
         }
     }

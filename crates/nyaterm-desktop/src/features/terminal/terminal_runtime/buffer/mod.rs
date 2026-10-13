@@ -901,24 +901,8 @@ impl NyaTermApp {
                 }
             }
             TerminalFrameEvent::ClearExceptInput(snapshot) => {
-                // Readline shells can repaint their input after the local clear.
-                // Windows local shells retain the ConPTY host's physical cursor.
-                let redraw = self
-                    .session
-                    .metadata(&snapshot.session_id)
-                    .is_some_and(|metadata| {
-                        !metadata.disconnected
-                            && match &metadata.launch_config {
-                                crate::models::SessionLaunchConfig::Ssh(config) => {
-                                    !config.is_network_device()
-                                }
-                                crate::models::SessionLaunchConfig::Local(_) => !cfg!(windows),
-                                _ => false,
-                            }
-                    });
-                if redraw {
-                    let _ = self.write_session_raw_input_recorded(&snapshot.session_id, &[0x0c]);
-                }
+                // This is a local presentation operation. A shell redraw (Ctrl+L)
+                // can archive the retained prompt again and recreate scrollback.
                 if let Some(view) = self.terminal.view.views.get_mut(&snapshot.session_id) {
                     view.clear_presentation_except_input(snapshot.revision, &snapshot.snapshot);
                 }

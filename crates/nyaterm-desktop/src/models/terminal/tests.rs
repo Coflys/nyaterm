@@ -1196,6 +1196,45 @@ fn clear_except_input_is_ordered_between_output_frames() {
 }
 
 #[test]
+fn clear_all_frames_keep_real_history_and_rebase_gutter_line_numbers() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.submit_output(
+        "clear-session",
+        b"old\r\n\x1b[24;1Hprompt> draft".to_vec(),
+        "UTF-8",
+        1000,
+    );
+    pipeline.clear_session_except_input("clear-session");
+    pipeline.submit_output("clear-session", b"!\r\nnext".to_vec(), "UTF-8", 1000);
+    pipeline.flush_for_test();
+    let mut events = VecDeque::new();
+    pipeline.drain_events_into(&mut events, usize::MAX);
+    let clear_index = events
+        .iter()
+        .position(|event| matches!(event, TerminalFrameEvent::ClearExceptInput(_)))
+        .unwrap();
+    let TerminalFrameEvent::ClearExceptInput(clear) = &events[clear_index] else {
+        unreachable!()
+    };
+    assert_eq!(clear.snapshot.scrollback_len, 0);
+    assert_eq!(clear.snapshot.rows()[23].display_line_number, Some(1));
+    let later = events
+        .iter()
+        .skip(clear_index + 1)
+        .find_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => frame.snapshot.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(later.scrollback_len, 0);
+    assert_eq!(later.total_rows, 24);
+    assert_eq!(later.rows()[22].text, "prompt> draft!");
+    assert_eq!(later.rows()[22].display_line_number, Some(1));
+    assert_eq!(later.rows()[23].text, "next");
+    assert_eq!(later.rows()[23].display_line_number, Some(2));
+}
+
+#[test]
 fn clear_presentation_keeps_terminal_protocol_and_stream_state() {
     let mut view = TerminalViewState::new();
     view.screen.advance(b"\x1b[?2004hprompt> draft");

@@ -2190,7 +2190,7 @@ impl TerminalSurface {
             .h_full()
             .py(px(TERMINAL_SCROLLBAR_TRACK_PADDING_Y))
             .pr(px(TERMINAL_SCROLLBAR_TRACK_PADDING_RIGHT))
-            .opacity(if show { 1.0 } else { 0.35 })
+            .when(!show, |this| this.invisible())
             .child(
                 div()
                     .id(SharedString::from(track_id))
@@ -2537,7 +2537,8 @@ impl Render for TerminalSurface {
                 snapshot_rows: snapshot.row_count(),
                 viewport_rows: self.viewport_rows,
                 cell_height: cell_h,
-            }) - viewport_anchor_row as f32 * cell_h;
+            }) - (viewport_anchor_row + snapshot.leading_cleared_rows(viewport_anchor_row)) as f32
+                * cell_h;
         if terminal_geometry_diagnostics_enabled() {
             tracing::info!(
                 diagnostic = "terminal_surface_geometry",

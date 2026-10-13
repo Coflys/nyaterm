@@ -17,6 +17,7 @@ use nyaterm_store::{StoreDomain, store_request};
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
+use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
 use crate::models::{CommandSuggestionItem, CommandSuggestionState};
 use crate::terminal::terminal_byte_index_for_cell_col;
 
@@ -1278,6 +1279,15 @@ impl NyaTermApp {
     ) -> Option<SuggestionOverlayPlacement> {
         let bounds = self.terminal_surface_bounds_for_session(session_id)?;
         let insets = self.terminal_content_insets_for_bounds(session_id, bounds);
+        let offset = self.terminal_display_offset_for_session(session_id);
+        let snapshot = self.terminal_snapshot_for_session(session_id, offset);
+        let anchor = terminal_snapshot_anchor_row_for_display_offset(
+            &snapshot,
+            offset,
+            self.terminal_viewport_rows_for_session(session_id),
+            self.terminal_scrollback_len_for_session(session_id),
+        );
+        let cursor_row = cursor_row.saturating_sub(anchor + snapshot.leading_cleared_rows(anchor));
         suggestion_overlay_position(
             SuggestionOverlayGeometry {
                 bounds,

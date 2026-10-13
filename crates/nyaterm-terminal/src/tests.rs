@@ -908,6 +908,8 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
     conflicting.text = "zlpha".to_string();
     let conflicting = Arc::new(conflicting);
     let key = TerminalSnapshotRowCacheKey {
+        cleared: original.cleared,
+        display_line_number: original.display_line_number,
         cols: screen.cols(),
         revision: original.revision,
         signature: original.signature,
@@ -942,6 +944,8 @@ fn snapshot_row_cache_prunes_to_limit() {
     for signature in 0..=TERMINAL_SNAPSHOT_ROW_CACHE_LIMIT as u64 {
         cache.entries.insert(
             TerminalSnapshotRowCacheKey {
+                cleared: false,
+                display_line_number: None,
                 cols: 1,
                 revision: signature,
                 signature,
@@ -1405,6 +1409,15 @@ fn clear_except_input_keeps_bottom_prompt_at_host_cursor_coordinates() {
     let snapshot = screen.snapshot();
     assert_eq!(snapshot.cursor.row, 11);
     assert_eq!(snapshot.rows()[11].text, "root# draft");
+    assert_eq!(snapshot.leading_cleared_rows(0), 11);
+    assert!(
+        snapshot
+            .rows()
+            .iter()
+            .take(11)
+            .all(|row| row.cleared && row.timestamp_ms.is_none())
+    );
+    assert!(!snapshot.rows()[11].cleared);
     assert!(
         snapshot
             .rows()
@@ -1414,6 +1427,157 @@ fn clear_except_input_keeps_bottom_prompt_at_host_cursor_coordinates() {
     );
     screen.advance(b"!");
     assert_eq!(screen.snapshot().rows()[11].text, "root# draft!");
+}
+
+#[test]
+fn cleared_rows_follow_scrolling_and_host_rewrites() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.advance(b"\x1b[4;1Hroot# draft");
+    screen.clear_except_input();
+    screen.advance(b"!\r\nresult");
+    let snapshot = screen.snapshot();
+    assert_eq!(snapshot.leading_cleared_rows(0), 2);
+    assert!(
+        snapshot
+            .rows()
+            .iter()
+            .take(2)
+            .all(|row| row.cleared && row.timestamp_ms.is_none())
+    );
+    assert_eq!(snapshot.rows()[2].text, "root# draft!");
+    assert_eq!(snapshot.rows()[3].text, "result");
+    assert_eq!(screen.scrollback_len(), 0);
+    assert_eq!(snapshot.rows()[2].display_line_number, Some(1));
+    assert_eq!(snapshot.rows()[3].display_line_number, Some(2));
+    screen.advance(b"\x1b[Hnew");
+    let snapshot = screen.snapshot();
+    assert_eq!(snapshot.leading_cleared_rows(0), 0);
+    assert!(!snapshot.rows()[0].cleared);
+    assert!(snapshot.rows()[0].timestamp_ms.is_some());
+}
+
+#[test]
+fn cleared_rows_do_not_hide_an_absolute_cursor_move_or_survive_reset() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.advance(b"\x1b[4;1Hroot# draft");
+    screen.clear_except_input();
+    screen.advance(b"\x1b[H");
+    assert_eq!(screen.snapshot().leading_cleared_rows(0), 0);
+    screen.advance(b"\x1bc");
+    assert!(screen.snapshot().rows().iter().all(|row| !row.cleared));
+}
+
+#[test]
+fn clear_all_starts_numbering_at_one_and_scrolls_only_after_real_output_fills_viewport() {
+    for chunk_size in [1, 8, 128] {
+        let mut screen = TerminalScreen::new(20, 4);
+        screen.advance(b"old\r\nold\r\nold\r\nroot# draft");
+        screen.clear_except_input();
+        assert_eq!(screen.snapshot().rows()[3].display_line_number, Some(1));
+        let output = b"\r\ntwo\r\n\r\nfour";
+        for chunk in output.chunks(chunk_size) {
+            screen.advance(chunk);
+        }
+        assert_eq!(screen.scrollback_len(), 0, "chunk size {chunk_size}");
+        let snapshot = screen.snapshot();
+        assert_eq!(snapshot.scrollback_len, 0);
+        assert_eq!(snapshot.total_rows, 4);
+        assert_eq!(snapshot.leading_cleared_rows(0), 0);
+        assert_eq!(snapshot.rows()[0].text, "root# draft");
+        assert_eq!(snapshot.rows()[1].text, "two");
+        assert!(snapshot.rows()[2].text.is_empty());
+        assert!(
+            !snapshot.rows()[2].cleared,
+            "intentional blank output must survive"
+        );
+        for (index, row) in snapshot.rows().iter().enumerate() {
+            assert_eq!(row.display_line_number, Some(index + 1));
+        }
+        screen.advance(b"\r\nfive");
+        assert_eq!(screen.scrollback_len(), 1);
+        let top = screen.viewport_snapshot(1);
+        assert_eq!(top.rows()[0].text, "root# draft");
+        assert_eq!(top.rows()[0].display_line_number, Some(1));
+        assert_eq!(screen.snapshot().rows()[3].display_line_number, Some(5));
+        assert!(
+            screen
+                .all_text()
+                .unwrap()
+                .starts_with("root# draft\ntwo\n\nfour\nfive")
+        );
+    }
+}
+
+#[test]
+fn clear_all_preserves_new_blank_output_below_a_prompt_in_the_middle_of_the_screen() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.advance(b"\x1b[2;1Hroot# draft");
+    screen.clear_except_input();
+    screen.advance(b"\r\n\r\nthree");
+    let snapshot = screen.snapshot();
+    assert!(!snapshot.rows()[2].cleared);
+    assert_eq!(snapshot.rows()[2].display_line_number, Some(2));
+    screen.advance(b"\r\nfour\r\nfive");
+    assert_eq!(screen.scrollback_len(), 1);
+    assert_eq!(screen.viewport_snapshot(1).rows()[0].text, "root# draft");
+    assert_eq!(screen.viewport_snapshot(1).rows()[1].text, "");
+    assert!(!screen.viewport_snapshot(1).rows()[1].cleared);
+}
+
+#[test]
+fn clear_all_removes_old_history_again_and_keeps_the_configured_limit() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_scrollback_limit(2);
+    screen.advance(b"\x1b[4;1Hroot# draft");
+    screen.clear_except_input();
+    screen.advance(b"\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven");
+    assert_eq!(screen.scrollback_len(), 2);
+    assert_eq!(screen.snapshot().rows()[3].display_line_number, Some(7));
+    screen.clear_except_input();
+    assert_eq!(screen.scrollback_len(), 0);
+    assert_eq!(screen.snapshot().rows()[3].display_line_number, Some(1));
+    screen.advance(b"\r\neight");
+    assert_eq!(screen.scrollback_len(), 0);
+    assert_eq!(screen.snapshot().rows()[3].display_line_number, Some(2));
+}
+
+#[test]
+fn clear_all_survives_width_reflow_and_keeps_erased_rows_out_of_history() {
+    let mut screen = TerminalScreen::new(20, 6);
+    screen.advance(b"\x1b[6;1Hroot# draft");
+    screen.clear_except_input();
+    screen.advance(b"\r\ntwo");
+    for cols in [30, 16, 25] {
+        screen.resize(cols, 6);
+        assert_eq!(screen.scrollback_len(), 0);
+        let snapshot = screen.snapshot();
+        let prompt = snapshot
+            .rows()
+            .iter()
+            .position(|row| row.text == "root# draft")
+            .unwrap();
+        assert_eq!(snapshot.leading_cleared_rows(0), prompt);
+        assert_eq!(snapshot.rows()[prompt].display_line_number, Some(1));
+        assert_eq!(snapshot.rows()[prompt + 1].display_line_number, Some(2));
+    }
+    screen.advance(b"\r\nthree");
+    assert_eq!(screen.scrollback_len(), 0);
+    assert_eq!(
+        screen.snapshot().rows().last().unwrap().display_line_number,
+        Some(3)
+    );
+}
+
+#[test]
+fn host_redraw_after_clear_all_rebases_line_numbers_without_creating_history() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.advance(b"\x1b[4;1Hroot# draft");
+    screen.clear_except_input();
+    screen.advance(b"\x1b[H\x1b[0Jroot# draft");
+    assert_eq!(screen.scrollback_len(), 0);
+    assert_eq!(screen.snapshot().rows()[0].display_line_number, Some(1));
+    screen.advance(b"\r\ntwo");
+    assert_eq!(screen.snapshot().rows()[1].display_line_number, Some(2));
 }
 
 #[test]

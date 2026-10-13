@@ -168,6 +168,59 @@ fn painted_hit_test_grid_bounds_start_after_the_rendered_gutter() {
 }
 
 #[test]
+fn clear_all_paints_input_at_top_and_keeps_host_rows_for_hit_testing() {
+    let mut screen = TerminalScreen::new(40, 12);
+    screen.advance(b"\x1b[12;1Hroot# draft");
+    screen.clear_except_input();
+    for older_rows in [0, 16] {
+        let snapshot = Arc::new(screen.viewport_snapshot_with_window(0, older_rows, 16));
+        let mut cx = TestAppContext::single();
+        let surface = cx.new(|_| TerminalSurface::new("session"));
+        cx.update_entity(&surface, |surface, _cx| {
+            surface.show_line_numbers = true;
+            surface.show_timestamps = true;
+            surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+                snapshot.clone(),
+                TerminalScrollVisualState {
+                    session_id: "session".to_string(),
+                    scroll_offset: 0,
+                    scroll_residual_lines: 0.0,
+                    display_offset: 0,
+                    scrollback_len: 0,
+                    viewport_rows: 12,
+                    has_new_while_scrolled: false,
+                    performance_overlay: None,
+                    skipped_output_chars: 0,
+                },
+            ));
+        });
+        let window = cx.open_window(size(px(600.0), px(240.0)), {
+            let surface = surface.clone();
+            move |_window, _cx| TerminalSurfaceLayoutTestView {
+                surface,
+                mounted: true,
+            }
+        });
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        let geometry = cx.read_entity(&surface, |surface, _cx| {
+            surface.painted_hit_test_geometry.expect("painted geometry")
+        });
+        let anchor = snapshot.cursor.row - 11;
+        assert_eq!(geometry.viewport_anchor_row, anchor);
+        let cursor_y = geometry.visual_y_offset + snapshot.cursor.row as f32 * geometry.cell_height;
+        assert_eq!(cursor_y, 0.0);
+        let clicked_snapshot_row = ((geometry.cell_height * 0.5 - geometry.visual_y_offset)
+            / geometry.cell_height)
+            .floor() as usize;
+        assert_eq!(clicked_snapshot_row - geometry.viewport_anchor_row, 11);
+        assert_eq!(snapshot.line(clicked_snapshot_row), Some("root# draft"));
+    }
+}
+
+#[test]
 fn enriched_snapshot_keeps_existing_rows_at_the_same_pixel_height() {
     let mut screen = TerminalScreen::default();
     screen.advance_decoded_text(&terminal_test_output_lines(50));

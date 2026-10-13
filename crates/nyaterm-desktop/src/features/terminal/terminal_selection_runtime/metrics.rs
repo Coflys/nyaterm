@@ -560,7 +560,9 @@ impl NyaTermApp {
             snapshot_rows: snapshot.row_count(),
             viewport_rows,
             cell_height: fallback_cell_h,
-        });
+        }) - snapshot.leading_cleared_rows(fallback_viewport_anchor_row)
+            as f32
+            * fallback_cell_h;
         let gutter = terminal_gutter_metrics(
             fallback_cell_w,
             self.settings.summary().terminal_show_timestamps,
@@ -936,6 +938,51 @@ mod tests {
         assert_eq!(terminal_line_number_digits_for_end(10), 2);
         assert_eq!(terminal_line_number_digits_for_end(99_999), 5);
         assert_eq!(terminal_line_number_digits_for_end(100_000), 6);
+    }
+
+    #[test]
+    fn clear_all_hit_testing_maps_the_top_prompt_to_its_host_row() {
+        let mut terminal = TerminalScreen::new(40, 12);
+        terminal.advance(b"\x1b[12;1Hroot# draft");
+        terminal.clear_except_input();
+        let snapshot = std::sync::Arc::new(terminal.snapshot());
+        let geometry = TerminalHitTestGeometry {
+            bounds: gpui::bounds(
+                Point {
+                    x: px(0.0),
+                    y: px(0.0),
+                },
+                Size {
+                    width: px(320.0),
+                    height: px(192.0),
+                },
+            ),
+            visual_y_offset: -(snapshot.leading_cleared_rows(0) as f32) * 16.0,
+            snapshot,
+            cell_w: 8.0,
+            cell_h: 16.0,
+            padding_left: 0.0,
+            padding_top: 0.0,
+            gutter: 0.0,
+            rows: 12,
+            cols: 40,
+            display_offset: 0,
+            viewport_anchor_row: 0,
+            snapshot_rows: 12,
+            viewport_rows: 12,
+        };
+        let position = Point {
+            x: px(28.0),
+            y: px(8.0),
+        };
+        assert_eq!(
+            terminal_cell_for_visual_geometry(position, &geometry),
+            TerminalCellPos::new(11, 3)
+        );
+        assert_eq!(
+            terminal_snapshot_row_for_visual_geometry(position, &geometry),
+            11
+        );
     }
 
     #[test]

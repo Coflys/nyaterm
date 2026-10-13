@@ -395,7 +395,10 @@ pub(in crate::features) fn terminal_gutter_labels(
     } else {
         String::new()
     };
-    let line_number = if show_line_numbers && !wrapped {
+    let line_number = if show_line_numbers && !wrapped && !row.is_some_and(|row| row.cleared) {
+        let absolute_line_number = row
+            .and_then(|row| row.display_line_number)
+            .unwrap_or(absolute_line_number);
         format!("{absolute_line_number:>line_number_digits$}")
     } else {
         String::new()
@@ -629,6 +632,24 @@ mod tests {
         TerminalTimestampFormatter, format_history_timestamp_ms, terminal_gutter_labels,
         terminal_gutter_row_count, terminal_timestamp_format_width_chars,
     };
+
+    #[test]
+    fn gutter_omits_metadata_for_locally_cleared_rows() {
+        let mut terminal = TerminalScreen::new(20, 4);
+        terminal.advance(b"\x1b[4;1Hroot# draft");
+        terminal.clear_except_input();
+        let snapshot = terminal.snapshot();
+        let formatter = TerminalTimestampFormatter::new("HH:mm:ss");
+        for row in 0..3 {
+            let labels =
+                terminal_gutter_labels(snapshot.row(row), row + 1, true, true, 1, &formatter);
+            assert!(labels.timestamp.trim().is_empty());
+            assert!(labels.line_number.is_empty());
+        }
+        let labels = terminal_gutter_labels(snapshot.row(3), 4, true, true, 1, &formatter);
+        assert_eq!(labels.line_number, "1");
+        assert!(!labels.timestamp.trim().is_empty());
+    }
 
     #[test]
     fn gutter_omits_unused_screen_rows_even_when_they_have_timestamps() {
