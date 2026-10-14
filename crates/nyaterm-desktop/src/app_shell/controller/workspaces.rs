@@ -34,6 +34,7 @@ impl DesktopController {
             return;
         }
         self.screen_locked = locked;
+        self.request_native_menu_refresh(cx);
         for (id, entry) in &self.windows {
             if *id == source {
                 continue;
@@ -172,6 +173,7 @@ impl DesktopController {
             .borrow_mut()
             .take()
             .expect("window must construct its workspace shell");
+        self.request_native_menu_refresh(cx);
         self.windows.insert(
             workspace_id,
             WorkspaceWindow {

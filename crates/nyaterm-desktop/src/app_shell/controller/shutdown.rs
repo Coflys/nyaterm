@@ -79,6 +79,7 @@ impl DesktopController {
             return Err(StoreSubmitError::ShuttingDown);
         }
         self.closing_workspaces.insert(workspace_id);
+        self.request_native_menu_refresh(cx);
         self.tab_drag.cancel_workspace(workspace_id);
         cx.spawn(async move |this, cx| {
             let persistence = persistence_task.await;
@@ -235,6 +236,7 @@ impl DesktopController {
         })
         .detach();
         self.most_recent_workspace_id = next_recent;
+        self.request_native_menu_refresh(cx);
         self.device_windows = device_windows;
     }
 
@@ -341,6 +343,7 @@ impl DesktopController {
     }
 
     pub fn request_quit(&mut self, cx: &mut Context<Self>) {
+        self.request_native_menu_refresh(cx);
         self.tab_drag.cancel();
         if self.process_quitting {
             return;

@@ -1354,6 +1354,10 @@
     "wrongPassword": "Mot de passe incorrect. Réessayez."
   },
   "menu": {
+    "services": "Services",
+    "hide": "Masquer",
+    "hideOthers": "Masquer les autres",
+    "showAll": "Tout afficher",
     "about": "À propos",
     "autoTile": "Tout organiser automatiquement",
     "broadcastToAll": "Diffuser à tous",

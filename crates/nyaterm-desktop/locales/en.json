@@ -1354,6 +1354,10 @@
     "wrongPassword": "Wrong password. Try again."
   },
   "menu": {
+    "services": "Services",
+    "hide": "Hide",
+    "hideOthers": "Hide Others",
+    "showAll": "Show All",
     "about": "About",
     "autoTile": "Auto-tile All",
     "broadcastToAll": "Broadcast All",

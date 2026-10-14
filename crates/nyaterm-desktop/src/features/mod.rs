@@ -9,7 +9,7 @@ mod font_catalog;
 mod formatting;
 mod icons;
 mod inspector;
-mod layout;
+pub(crate) mod layout;
 mod mcp;
 mod notes;
 mod pages;

@@ -1354,6 +1354,10 @@
     "wrongPassword": "비밀번호가 틀렸습니다. 다시 시도하세요."
   },
   "menu": {
+    "services": "서비스",
+    "hide": "가리기",
+    "hideOthers": "기타 가리기",
+    "showAll": "모두 보기",
     "about": "정보",
     "autoTile": "모두 자동 분할",
     "broadcastToAll": "모두에게 방송",

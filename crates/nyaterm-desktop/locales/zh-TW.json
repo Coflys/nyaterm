@@ -1354,6 +1354,10 @@
     "wrongPassword": "密碼錯誤，請重試。"
   },
   "menu": {
+    "services": "服務",
+    "hide": "隱藏",
+    "hideOthers": "隱藏其他應用程式",
+    "showAll": "顯示全部",
     "about": "關於",
     "autoTile": "自動分割所有工作階段",
     "broadcastToAll": "廣播輸入到所有工作階段",

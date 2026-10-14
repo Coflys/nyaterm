@@ -1354,6 +1354,10 @@
     "wrongPassword": "密码错误，请重试。"
   },
   "menu": {
+    "services": "服务",
+    "hide": "隐藏",
+    "hideOthers": "隐藏其他应用",
+    "showAll": "显示全部",
     "about": "关于",
     "autoTile": "自动平铺所有会话",
     "broadcastToAll": "广播输入到所有会话",
