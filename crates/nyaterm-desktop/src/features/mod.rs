@@ -54,6 +54,7 @@ pub(crate) fn init(cx: &mut gpui::App) {
 
 pub(crate) fn init_protection_key_bindings(cx: &mut gpui::App) {
     terminal::init_key_bindings(cx);
+    remote_desktop::init_key_bindings(cx);
     view_widgets::init_child_window_key_bindings(cx);
 }
 
