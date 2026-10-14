@@ -615,6 +615,15 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        self.end_terminal_selection_drag(true, cx);
+    }
+
+    pub(in crate::features) fn cancel_terminal_selection_drag(&mut self, cx: &mut Context<Self>) {
+        // Keep the selected range, but cancellation must not copy to the clipboard.
+        self.end_terminal_selection_drag(false, cx);
+    }
+
+    fn end_terminal_selection_drag(&mut self, copy_on_select: bool, cx: &mut Context<Self>) {
         self.stop_terminal_selection_autoscroll();
         let previous_session_id = self
             .terminal
@@ -633,7 +642,7 @@ impl NyaTermApp {
                 }
             }
             LostTerminalSelectionRecovery::Committed => {
-                if self.settings.summary().interaction_copy_on_select {
+                if copy_on_select && self.settings.summary().interaction_copy_on_select {
                     let _ = self.copy_terminal_selection(cx);
                 } else {
                     self.shell.set_status("selection ready".to_string());
@@ -1247,8 +1256,8 @@ mod tests {
     use std::time::Duration;
 
     use gpui::{
-        AppContext as _, Bounds, Context, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-        MouseUpEvent, Point, Size, TestAppContext, px,
+        AppContext as _, Bounds, ClipboardItem, Context, Modifiers, MouseButton, MouseDownEvent,
+        MouseMoveEvent, MouseUpEvent, Point, Size, TestAppContext, px,
     };
     use nyaterm_terminal::TerminalScreen;
     use nyaterm_terminal::selection::{TerminalCellSide, TerminalSelectionEndpoint};
@@ -1658,6 +1667,43 @@ mod tests {
             assert_eq!(selection.anchor, anchor);
             assert_eq!(selection.head.position, TerminalBufferCellPos::new(1, 1));
             assert_eq!(selection.head.side, TerminalCellSide::Left);
+        });
+    }
+
+    #[test]
+    fn pointer_cancel_keeps_selection_without_copying_on_select() {
+        let dir = TestConfigDir::new("nyaterm-selection-pointer-cancel");
+        let mut cx = TestAppContext::single();
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        app.update(&mut cx, |app, cx| {
+            seed_click_selection_fixture(app);
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_copy_on_select = true;
+            app.settings.replace_summary(settings);
+            let selection = TerminalSelection {
+                anchor: TerminalSelectionEndpoint::new(
+                    TerminalBufferCellPos::new(0, 0),
+                    TerminalCellSide::Left,
+                ),
+                head: TerminalSelectionEndpoint::new(
+                    TerminalBufferCellPos::new(0, 2),
+                    TerminalCellSide::Right,
+                ),
+                all_buffer: false,
+            };
+            app.terminal.selection.selection = Some(selection);
+            app.terminal.selection.session_id = Some("s1".into());
+            app.terminal.selection.dragging = true;
+            cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+            app.cancel_terminal_selection_drag(cx);
+            assert!(!app.terminal.selection.dragging);
+            assert_eq!(app.terminal.selection.selection, Some(selection));
+            assert_eq!(
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .as_deref(),
+                Some("unchanged")
+            );
         });
     }
 

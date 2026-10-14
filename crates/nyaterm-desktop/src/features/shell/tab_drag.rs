@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, Context, IntoElement as _, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent,
-    Pixels, Point, Styled as _, Window, canvas,
+    Pixels, Point, PointerCancelEvent, Styled as _, Window, canvas,
 };
 
 use super::tab_mouse::SessionTabDragPayload;
@@ -78,27 +78,20 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn cancel_session_tab_drag_on_escape(
-        &self,
+    pub(in crate::features) fn cancel_internal_drag_on_escape(
+        &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if event.keystroke.key != "escape" {
+        if event.keystroke.key != "escape" || !cx.has_internal_drag() {
             return false;
         }
-        let cancelled = self.desktop_controller.as_ref().is_some_and(|controller| {
-            controller
-                .update(cx, |controller, _| {
-                    controller.update_tab_drag(|drag| drag.cancel())
-                })
-                .unwrap_or(false)
-        });
-        if cancelled {
-            cx.stop_active_drag(window);
-            cx.stop_propagation();
-        }
-        cancelled
+        cx.stop_active_drag(window);
+        self.cancel_pointer_interactions(window, cx);
+        cx.refresh_windows();
+        cx.stop_propagation();
+        true
     }
 
     pub(in crate::features) fn install_session_tab_drag_listeners(
@@ -106,6 +99,12 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let app = cx.entity().downgrade();
+        window.on_mouse_event(move |_: &PointerCancelEvent, phase, window, cx| {
+            if phase.capture() {
+                let _ = app.update(cx, |app, cx| app.cancel_pointer_interactions(window, cx));
+            }
+        });
         let Some(controller) = self.desktop_controller.clone() else {
             return;
         };

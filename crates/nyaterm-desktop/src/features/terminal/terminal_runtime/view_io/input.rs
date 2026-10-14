@@ -789,6 +789,32 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn cancel_terminal_mouse_report(
+        &mut self,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if let (Some(button), Some(session_id), Some((col, row))) = (
+            self.terminal.selection.mouse_report_button,
+            self.terminal.selection.mouse_report_session_id.clone(),
+            self.terminal.selection.mouse_report_position,
+        ) {
+            self.maybe_send_mouse_report_for_session(
+                TerminalMouseReportRequest {
+                    session_id: &session_id,
+                    button,
+                    col,
+                    row,
+                    press: false,
+                    motion: false,
+                    modifiers,
+                },
+                cx,
+            );
+        }
+        self.clear_terminal_mouse_report_capture();
+    }
+
     fn clear_terminal_mouse_report_capture(&mut self) {
         self.terminal.selection.mouse_report_button = None;
         self.terminal.selection.mouse_report_session_id = None;

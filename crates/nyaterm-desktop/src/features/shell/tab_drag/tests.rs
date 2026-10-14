@@ -2,8 +2,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, Render, TestAppContext,
-    Window, div, point, prelude::*, px,
+    AppContext as _, Context, Entity, InputEvent as _, IntoElement, Modifiers, MouseButton,
+    PointerCancelEvent, PointerCancelReason, Render, TestAppContext, Window, div, point,
+    prelude::*, px,
 };
 use nyaterm_core::{
     AppRuntime, RuntimeMode, StartWorkspaceMode, WorkspaceId, test_support::TestTempDir,
@@ -57,7 +58,7 @@ impl Render for DragFixture {
             .child(layer)
             .capture_key_down(move |event, window, cx| {
                 key_app.update(cx, |app, cx| {
-                    app.cancel_session_tab_drag_on_escape(event, window, cx);
+                    app.cancel_internal_drag_on_escape(event, window, cx);
                 });
             });
         if self.is_target {
@@ -169,11 +170,92 @@ fn tab_drag_escape_cancels_before_release_and_unrelated_drags_stay_unrelated() {
         assert!(cx.has_active_drag());
         assert!(controller.read(cx).tab_drag_source().is_none());
     });
+    cx.simulate_keystrokes("escape");
+    cx.read(|cx| {
+        assert!(!cx.has_active_drag());
+        assert!(controller.read(cx).tab_drag_source().is_none());
+    });
     cx.simulate_mouse_up(
         point(px(-30.), px(50.)),
         MouseButton::Left,
         Modifiers::default(),
     );
+}
+
+#[test]
+fn pointer_cancel_clears_hover_and_resize_without_detaching_or_removing_the_tab() {
+    use crate::features::commands::{QuickCommandDropPosition, QuickCommandDropTarget};
+    use crate::models::PanelResizeSide;
+
+    for reason in [
+        PointerCancelReason::CaptureLost,
+        PointerCancelReason::CancelMode,
+    ] {
+        let root = TestTempDir::new("nyaterm-tab-pointer-cancel");
+        let app_root = TestTempDir::new("nyaterm-tab-pointer-cancel-app");
+        let mut cx = TestAppContext::single();
+        let controller = controller(&root, &mut cx);
+        let app = app_with_visible_local_session(&mut cx, app_root.path(), "tab");
+        app.update(&mut cx, |app, _| {
+            app.desktop_controller = Some(controller.downgrade())
+        });
+        let fixture_app = app.clone();
+        let fixture_controller = controller.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| DragFixture {
+            app: fixture_app,
+            controller: fixture_controller,
+            is_target: false,
+            release_seen: Rc::new(Cell::new(None)),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(
+            point(px(20.), px(16.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(-30.), px(16.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        app.update(cx, |app, _| {
+            app.commands.set_quick_drop_target(QuickCommandDropTarget {
+                id: "target".into(),
+                position: QuickCommandDropPosition::Before,
+            });
+            app.terminal
+                .set_terminal_file_drop_hover(Some("tab".into()));
+            app.transfer.set_browser_external_drop_hover(true);
+            app.shell
+                .panels
+                .start_resize(PanelResizeSide::Left, px(20.));
+        });
+        cx.update(|window, cx| {
+            window.dispatch_event(PointerCancelEvent { reason }.to_platform_input(), cx);
+            assert!(!cx.has_active_drag());
+            assert!(controller.read(cx).tab_drag_source().is_none());
+            app.update(cx, |app, _| {
+                assert!(!app.has_drop_hover());
+                assert!(app.commands.quick_drop_target().is_none());
+                assert!(app.shell.panels.update_resize(px(50.)).is_none());
+                assert_eq!(app.live_session_count(), 1);
+                assert_eq!(app.session.active_id(), Some("tab"));
+            });
+        });
+        cx.simulate_mouse_up(
+            point(px(-30.), px(16.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(cx.windows().len(), 1);
+            assert!(controller.read(cx).tab_drag_source().is_none());
+            assert_eq!(app.read(cx).live_session_count(), 1);
+        });
+    }
 }
 
 #[test]
