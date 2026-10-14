@@ -1,7 +1,5 @@
 mod discovery;
 pub(in crate::features) mod server;
-#[cfg(windows)]
-mod windows_acl;
 
 use self::server::{McpHostEvent, McpHostRuntime, rpc_failure};
 use super::NyaTermApp;

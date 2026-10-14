@@ -947,6 +947,77 @@ impl RemoteFileService {
         }
     }
 
+    /// Sync an external edit to an existing remote file. Shell backends must
+    /// restore and verify the original ownership and mode before replacing it.
+    pub fn upload_remote_edit_with_progress_and_control_options<F>(
+        &self,
+        local_path: impl Into<PathBuf>,
+        remote_path: &RemoteFilePath,
+        control: SftpTransferControl,
+        mut options: SftpTransferOptions,
+        mut progress: F,
+    ) -> anyhow::Result<SftpTransferSummary>
+    where
+        F: FnMut(SftpTransferProgress) + Send + 'static,
+    {
+        let local_path = local_path.into();
+        // A configured mode for new uploads must not change an edited file's mode.
+        options.default_file_mode = None;
+        match self.backend()? {
+            RemoteFileBackendKind::Sftp => self
+                .sftp()?
+                .upload_remote_file_with_progress_and_control_options(
+                    local_path,
+                    remote_path,
+                    control,
+                    options,
+                    progress,
+                ),
+            kind => {
+                control.wait_if_paused_blocking()?;
+                let shell = self.shell(kind);
+                let bytes = fs::read(&local_path)?;
+                let properties = shell_editor_properties(&shell, remote_path)?;
+                anyhow::ensure!(
+                    properties.file_type == SftpFileType::File,
+                    "External edit sync requires an existing regular file"
+                );
+                let temporary = format!(
+                    "{}.nyaterm-edit-{}",
+                    remote_path.display_path,
+                    uuid::Uuid::new_v4().simple()
+                );
+                let command = shell_editor_upload_command(
+                    &properties,
+                    &temporary,
+                    &remote_path.display_path,
+                    bytes.len(),
+                )?;
+                control.wait_if_paused_blocking()?;
+                let byte_count = bytes.len() as u64;
+                if let Err(error) = shell.exec_ok(command, Some(bytes)) {
+                    let _ = shell.exec(format!("rm -f -- {}", shell_quote(&temporary)), None);
+                    return Err(error);
+                }
+                let summary = SftpTransferSummary {
+                    remote_path: remote_path.display_path.clone(),
+                    local_path,
+                    bytes: byte_count,
+                    skipped: false,
+                };
+                progress(SftpTransferProgress {
+                    remote_path: summary.remote_path.clone(),
+                    local_path: summary.local_path.clone(),
+                    bytes_transferred: summary.bytes,
+                    total_bytes: Some(summary.bytes),
+                    item_count_completed: Some(1),
+                    item_count_total: Some(1),
+                });
+                Ok(summary)
+            }
+        }
+    }
+
     pub fn upload_path_with_progress_and_path_options<F>(
         &self,
         local_path: impl Into<PathBuf>,
@@ -1961,6 +2032,20 @@ fn shell_editor_replace_command(
     ))
 }
 
+fn shell_editor_upload_command(
+    properties: &SftpFileProperties,
+    temporary: &str,
+    target: &str,
+    byte_count: usize,
+) -> anyhow::Result<String> {
+    let replace = shell_editor_replace_command(properties, temporary, target)?;
+    Ok(format!(
+        "umask 077; cat > {} && test $(wc -c < {}) -eq {byte_count} && {replace}",
+        shell_quote(temporary),
+        shell_quote(temporary),
+    ))
+}
+
 fn write_shell_text_document(
     shell: &ShellRemote,
     path: &RemoteFilePath,
@@ -2076,13 +2161,8 @@ fn write_shell_text(
         path.display_path,
         uuid::Uuid::new_v4().simple()
     );
-    let replace = shell_editor_replace_command(&properties, &temporary, &path.display_path)?;
-    let command = format!(
-        "umask 077; cat > {} && test $(wc -c < {}) -eq {} && {replace}",
-        shell_quote(&temporary),
-        shell_quote(&temporary),
-        content.len()
-    );
+    let command =
+        shell_editor_upload_command(&properties, &temporary, &path.display_path, content.len())?;
     if let Err(error) = shell.exec_ok(command, Some(content.as_bytes().to_vec())) {
         let _ = shell.exec(format!("rm -f -- {}", shell_quote(&temporary)), None);
         return Err(error);

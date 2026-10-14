@@ -1,4 +1,4 @@
-use crate::remote_file::shell_editor_replace_command;
+use crate::remote_file::{shell_editor_replace_command, shell_editor_upload_command};
 use crate::sftp::{SftpFileProperties, SftpFileType};
 
 fn properties(uid: u32, gid: u32, mode: u32) -> SftpFileProperties {
@@ -32,18 +32,22 @@ fn shell_editor_save_refuses_missing_original_attributes() {
             _ => unreachable!(),
         }
         assert!(shell_editor_replace_command(&attrs, "/tmp/edit", "/tmp/original").is_err());
+        assert!(shell_editor_upload_command(&attrs, "/tmp/edit", "/tmp/original", 3).is_err());
     }
 }
 
 #[cfg(unix)]
 mod posix {
     use std::fs;
+    use std::io::Write;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::os::unix::process::CommandExt;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     use crate::remote_file::editor_save_tests::properties;
-    use crate::remote_file::shell_editor_replace_command;
+    use crate::remote_file::{shell_editor_replace_command, shell_editor_upload_command};
+
+    const UPLOAD_BYTES: &[u8] = b"new\0data";
 
     fn run_replace(
         uid: u32,
@@ -52,6 +56,18 @@ mod posix {
         prefix: &str,
         as_unprivileged: bool,
         succeeds: bool,
+    ) {
+        run_save(uid, gid, mode, prefix, as_unprivileged, succeeds, None);
+    }
+
+    fn run_save(
+        uid: u32,
+        gid: u32,
+        mode: u32,
+        prefix: &str,
+        as_unprivileged: bool,
+        succeeds: bool,
+        upload_size: Option<usize>,
     ) {
         let directory = tempfile::tempdir().unwrap();
         // Quoting and glob expansion must be safe even for shell metacharacters.
@@ -80,18 +96,36 @@ mod posix {
                 .unwrap();
             assert!(status.success());
         }
-        let command = shell_editor_replace_command(
-            &properties(uid, gid, mode),
-            temporary.to_str().unwrap(),
-            original.to_str().unwrap(),
-        )
+        let attrs = properties(uid, gid, mode);
+        let command = if let Some(size) = upload_size {
+            shell_editor_upload_command(
+                &attrs,
+                temporary.to_str().unwrap(),
+                original.to_str().unwrap(),
+                size,
+            )
+        } else {
+            shell_editor_replace_command(
+                &attrs,
+                temporary.to_str().unwrap(),
+                original.to_str().unwrap(),
+            )
+        }
         .unwrap();
         let mut process = Command::new("sh");
         process.arg("-c").arg(format!("{prefix}\n{command}"));
         if as_unprivileged {
             process.uid(65534).gid(65534);
         }
-        let output = process.output().unwrap();
+        process
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = process.spawn().unwrap();
+        if upload_size.is_some() {
+            child.stdin.take().unwrap().write_all(UPLOAD_BYTES).unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
         assert_eq!(
             output.status.success(),
             succeeds,
@@ -99,7 +133,12 @@ mod posix {
             String::from_utf8_lossy(&output.stderr)
         );
         if succeeds {
-            assert_eq!(fs::read(&original).unwrap(), b"new");
+            let expected = if upload_size.is_some() {
+                UPLOAD_BYTES
+            } else {
+                b"new"
+            };
+            assert_eq!(fs::read(&original).unwrap(), expected);
             assert!(!temporary.exists());
             let metadata = fs::metadata(&original).unwrap();
             assert_eq!((metadata.uid(), metadata.gid()), (uid, gid));
@@ -146,5 +185,68 @@ mod posix {
         run_replace(65534, 65534, 0o6755, "", false, true);
         run_replace(65534, 65534, 0o644, "", true, true);
         run_replace(0, 0, 0o644, "", true, false);
+    }
+
+    #[test]
+    fn shell_external_edit_upload_preserves_metadata_and_binary_contents() {
+        // SAFETY: getuid/getgid only read process identity.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        run_save(
+            uid,
+            gid,
+            0o755,
+            "chown() { return 1; }",
+            false,
+            true,
+            Some(UPLOAD_BYTES.len()),
+        );
+        // SAFETY: geteuid only reads process identity.
+        if unsafe { libc::geteuid() } == 0 {
+            run_save(
+                65534,
+                65534,
+                0o6755,
+                "",
+                false,
+                true,
+                Some(UPLOAD_BYTES.len()),
+            );
+            run_save(0, 0, 0o644, "", true, false, Some(UPLOAD_BYTES.len()));
+        }
+    }
+
+    #[test]
+    fn shell_external_edit_upload_keeps_original_on_incomplete_write_or_attribute_failure() {
+        // SAFETY: getuid/getgid only read process identity.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        run_save(
+            uid,
+            gid,
+            0o755,
+            "",
+            false,
+            false,
+            Some(UPLOAD_BYTES.len() + 1),
+        );
+        for prefix in ["chmod() { return 1; }", "chmod() { return 0; }"] {
+            run_save(
+                uid,
+                gid,
+                0o755,
+                prefix,
+                false,
+                false,
+                Some(UPLOAD_BYTES.len()),
+            );
+        }
+        run_save(
+            uid.wrapping_add(1),
+            gid,
+            0o755,
+            "chown() { return 0; }",
+            false,
+            false,
+            Some(UPLOAD_BYTES.len()),
+        );
     }
 }
