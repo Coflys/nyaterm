@@ -1178,6 +1178,7 @@ pub(super) async fn ssh_io_loop(
     encoding: String,
     diagnostics: Option<SshDiagnosticContext>,
 ) {
+    let mut encoding = nyaterm_core::terminal_encoding::session_encoding_label(&encoding);
     let backspace_as_bs = backspace_mode == "ctrl_h";
     let output_event = format!("terminal-output-{}", session_id);
     let cwd_event = format!("cwd-changed-{}", session_id);
@@ -1293,6 +1294,19 @@ pub(super) async fn ssh_io_loop(
                     }
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();
+                    }
+                    Some(SessionCommand::GetEncoding { reply }) => {
+                        let _ = reply.send(encoding.clone());
+                    }
+                    Some(SessionCommand::SetEncoding { encoding: requested, reply }) => {
+                        let result = if let Some(next) = nyaterm_core::terminal_encoding::supported_session_encoding(&requested) {
+                            output_decoder.reset(next);
+                            encoding = next.to_string();
+                            Ok(encoding.clone())
+                        } else {
+                            Err(format!("Unsupported terminal encoding: {requested}"))
+                        };
+                        let _ = reply.send(result);
                     }
                     Some(SessionCommand::Write { data, raw, origin, .. }) => {
                         if zmodem_transfer.is_some()
@@ -1713,6 +1727,12 @@ async fn run_sftp_only_session_commands(
             command = cmd_rx.recv() => match command {
                 Some(SessionCommand::AttachConfirmed { ack }) => {
                     let _ = ack.send(());
+                }
+                Some(SessionCommand::GetEncoding { reply }) => {
+                    drop(reply);
+                }
+                Some(SessionCommand::SetEncoding { reply, .. }) => {
+                    let _ = reply.send(Err("Terminal encoding is unavailable for SFTP-only sessions".to_string()));
                 }
                 Some(SessionCommand::CaptureExec { result_tx, .. }) => {
                     drop(result_tx);

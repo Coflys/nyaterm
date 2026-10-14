@@ -16,9 +16,11 @@ use crate::utils::fuzzy::{
     FuzzyCandidateResult, FuzzyResult, FuzzySearchCandidate,
     fuzzy_search_candidates as fuzzy_search_candidate_items, fuzzy_search_items,
 };
+use nyaterm_core::terminal_encoding::supported_session_encoding;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1006,6 +1008,44 @@ pub async fn write_bytes_to_session(
             },
         )
         .await
+}
+
+#[tauri::command]
+pub async fn get_session_encoding(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<String> {
+    let (reply, result) = oneshot::channel();
+    state
+        .send_command(&session_id, SessionCommand::GetEncoding { reply })
+        .await?;
+    result
+        .await
+        .map_err(|error| AppError::Channel(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn set_session_encoding(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    encoding: String,
+) -> AppResult<String> {
+    let encoding = supported_session_encoding(&encoding)
+        .ok_or_else(|| AppError::Config(format!("Unsupported terminal encoding: {encoding}")))?;
+    let (reply, result) = oneshot::channel();
+    state
+        .send_command(
+            &session_id,
+            SessionCommand::SetEncoding {
+                encoding: encoding.to_string(),
+                reply,
+            },
+        )
+        .await?;
+    result
+        .await
+        .map_err(|error| AppError::Channel(error.to_string()))?
+        .map_err(AppError::Config)
 }
 
 #[tauri::command]

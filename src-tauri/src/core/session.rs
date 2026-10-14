@@ -252,6 +252,13 @@ pub enum SessionCommand {
         origin: InputOrigin,
         sensitivity: InputSensitivity,
     },
+    /// Effective encoding of this interactive terminal (not saved settings).
+    GetEncoding { reply: oneshot::Sender<String> },
+    /// Switch future text input and output, acknowledged after both paths update.
+    SetEncoding {
+        encoding: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// Temporarily stop reading output from the underlying terminal source.
     PauseOutput,
     /// Resume reading output from the underlying terminal source.
@@ -932,6 +939,15 @@ impl SessionManager {
                     "Terminal input is unavailable for SFTP-only sessions".to_string(),
                 ));
             }
+            if matches!(
+                cmd,
+                SessionCommand::GetEncoding { .. } | SessionCommand::SetEncoding { .. }
+            ) && handle.info.ssh_runtime_mode == Some(SshRuntimeMode::Sftp)
+            {
+                return Err(AppError::Config(
+                    "Terminal encoding is unavailable for SFTP-only sessions".to_string(),
+                ));
+            }
             if let SessionCommand::Write {
                 origin,
                 sensitivity,
@@ -1598,6 +1614,101 @@ mod tests {
             .await
             .expect_err("SFTP-only sessions must reject terminal input");
 
+        assert!(error.to_string().contains("SFTP-only"));
+    }
+
+    #[tokio::test]
+    async fn encoding_commands_are_routed_only_to_the_selected_session() {
+        let manager = SessionManager::new();
+        let (first_tx, mut first_rx) = session_command_channel("encoding-first");
+        let (second_tx, mut second_rx) = session_command_channel("encoding-second");
+        manager
+            .add_session(test_handle_with_sender(
+                "encoding-first",
+                SessionType::Local,
+                false,
+                first_tx,
+            ))
+            .await;
+        manager
+            .add_session(test_handle_with_sender(
+                "encoding-second",
+                SessionType::SSH,
+                false,
+                second_tx,
+            ))
+            .await;
+
+        let (reply, result) = tokio::sync::oneshot::channel();
+        manager
+            .send_command("encoding-first", SessionCommand::GetEncoding { reply })
+            .await
+            .unwrap();
+        if let Some(SessionCommand::GetEncoding { reply }) = first_rx.recv().await {
+            let _ = reply.send("UTF-8".to_string());
+        } else {
+            panic!("expected GetEncoding");
+        }
+        assert_eq!(result.await.unwrap(), "UTF-8");
+
+        let (reply, result) = tokio::sync::oneshot::channel();
+        manager
+            .send_command(
+                "encoding-first",
+                SessionCommand::SetEncoding {
+                    encoding: "GBK".to_string(),
+                    reply,
+                },
+            )
+            .await
+            .unwrap();
+        if let Some(SessionCommand::SetEncoding { encoding, reply }) = first_rx.recv().await {
+            assert_eq!(encoding, "GBK");
+            let _ = reply.send(Ok(encoding));
+        } else {
+            panic!("expected SetEncoding");
+        }
+        assert_eq!(result.await.unwrap().unwrap(), "GBK");
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+
+        manager.remove_session("encoding-first").await;
+        let (reply, _result) = tokio::sync::oneshot::channel();
+        assert!(matches!(
+            manager
+                .send_command("encoding-first", SessionCommand::GetEncoding { reply })
+                .await,
+            Err(crate::error::AppError::SessionNotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn sftp_only_session_rejects_encoding_queries_and_changes() {
+        let manager = SessionManager::new();
+        let mut handle = test_handle("encoding-sftp", SessionType::SSH, false);
+        handle.info.ssh_runtime_mode = Some(crate::config::SshRuntimeMode::Sftp);
+        manager.add_session(handle).await;
+
+        let (reply, _result) = tokio::sync::oneshot::channel();
+        let error = manager
+            .send_command("encoding-sftp", SessionCommand::GetEncoding { reply })
+            .await
+            .expect_err("SFTP-only session cannot report terminal encoding");
+        assert!(error.to_string().contains("SFTP-only"));
+
+        let (reply, _result) = tokio::sync::oneshot::channel();
+        let error = manager
+            .send_command(
+                "encoding-sftp",
+                SessionCommand::SetEncoding {
+                    encoding: "GBK".into(),
+                    reply,
+                },
+            )
+            .await
+            .expect_err("SFTP-only session cannot change terminal encoding");
         assert!(error.to_string().contains("SFTP-only"));
     }
 
