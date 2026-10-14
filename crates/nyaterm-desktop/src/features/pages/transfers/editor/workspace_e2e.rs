@@ -77,7 +77,7 @@ fn shell_external_edit_downloads_into_private_workspace_and_preserves_remote_met
         let before = service.file_properties(&remote_path.display_path)?;
         // Cover the built-in save as well as the external edit replacement.
         service.write_text_file(&remote_path.display_path, "original", None, None, true)?;
-        let workspace = prepare_external_edit_workspace(&local_path)?;
+        let _workspace = prepare_external_edit_workspace(&local_path)?;
         service.download_remote_file_with_progress_and_control_options(
             &remote_path,
             &local_path,
@@ -124,7 +124,6 @@ fn shell_external_edit_downloads_into_private_workspace_and_preserves_remote_met
                 .all(|entry| !entry.name.contains(".nyaterm-edit-")),
             "Remote temporary file was not removed"
         );
-        drop(workspace);
         Ok(())
     })();
     let cleanup = service.delete_path(&remote_dir);

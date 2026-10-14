@@ -117,7 +117,7 @@ mod tests {
         fs::create_dir(root.path())?;
         let directory = root.join(format!("{WORKSPACE_PREFIX}{}", uuid::Uuid::new_v4()));
         let target = directory.join("example.txt");
-        let workspace = prepare_workspace_in(&root, &target)?;
+        let _workspace = prepare_workspace_in(&root, &target)?;
         assert!(directory.is_dir());
         assert!(!target.exists());
         #[cfg(unix)]
@@ -138,7 +138,6 @@ mod tests {
         assert_eq!(fs::read(&target)?, b"downloaded");
         assert!(prepare_workspace_in(&root, &target).is_err());
         assert_eq!(fs::read(&target)?, b"downloaded");
-        drop(workspace);
         Ok(())
     }
 

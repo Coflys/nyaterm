@@ -21,7 +21,7 @@ pub use revision::{
     RemoteTextDocument, RemoteTextGeneration, RemoteTextMetadata, RemoteTextRevision,
     RemoteTextWriteResult,
 };
-use shell::{ShellRemote, shell_quote};
+use shell::{ShellRemote, shell_quote, shell_quote_path};
 
 pub const REMOTE_FILE_MANAGER_UNAVAILABLE: &str =
     "Terminal connection is working, but the remote file manager could not be initialized";
@@ -353,10 +353,8 @@ impl RemoteFileService {
         match self.backend()? {
             RemoteFileBackendKind::Sftp => self.sftp()?.create_dir_path(path, mode),
             kind => {
-                let path = shell_quote(path.as_ref());
-                let mode = mode.map_or(String::new(), |mode| {
-                    format!(" && chmod {mode:o} -- {path}")
-                });
+                let path = shell_quote_path(path.as_ref());
+                let mode = mode.map_or(String::new(), |mode| format!(" && chmod {mode:o} {path}"));
                 self.shell(kind)
                     .exec_ok(format!("mkdir -p -- {path}{mode}"), None)?;
                 Ok(())
@@ -368,10 +366,8 @@ impl RemoteFileService {
         match self.backend()? {
             RemoteFileBackendKind::Sftp => self.sftp()?.create_file_path(path, mode),
             kind => {
-                let path = shell_quote(path.as_ref());
-                let mode = mode.map_or(String::new(), |mode| {
-                    format!(" && chmod {mode:o} -- {path}")
-                });
+                let path = shell_quote_path(path.as_ref());
+                let mode = mode.map_or(String::new(), |mode| format!(" && chmod {mode:o} {path}"));
                 self.shell(kind)
                     .exec_ok(format!(": > {path}{mode}"), None)?;
                 Ok(())
@@ -1522,7 +1518,7 @@ where
         control.wait_if_paused_blocking()?;
         if let Some(mode) = transfer_options.default_file_mode {
             service.shell(kind).exec_ok(
-                format!("chmod {mode:o} -- {}", shell_quote(remote_path)),
+                format!("chmod {mode:o} {}", shell_quote_path(remote_path)),
                 None,
             )?;
         }
@@ -1689,7 +1685,7 @@ fn list_shell_dir(
         RemoteFileBackendKind::ScpNormal => parse_normal_listing(
             path,
             &shell.exec_ok(
-                format!("LC_ALL=C ls -la -- {}", shell_quote(&path.display_path)),
+                format!("LC_ALL=C ls -la {}", shell_quote_path(&path.display_path)),
                 None,
             )?,
         ),
@@ -1848,7 +1844,7 @@ fn normal_shell_properties(
     path: &RemoteFilePath,
 ) -> anyhow::Result<SftpFileProperties> {
     let output = shell.exec_ok(
-        format!("LC_ALL=C ls -ld -- {}", shell_quote(&path.display_path)),
+        format!("LC_ALL=C ls -ld {}", shell_quote_path(&path.display_path)),
         None,
     )?;
     let line = String::from_utf8_lossy(&output)
@@ -1905,7 +1901,7 @@ fn update_shell_attributes(
     let recursive = if update.recursive { "-R " } else { "" };
     if let Some(mode) = update.mode {
         shell.exec_ok(
-            format!("chmod {recursive}{mode:o} -- {}", shell_quote(path)),
+            format!("chmod {recursive}{mode:o} {}", shell_quote_path(path)),
             None,
         )?;
     }
@@ -1916,9 +1912,9 @@ fn update_shell_attributes(
     {
         shell.exec_ok(
             format!(
-                "chown {recursive}{} -- {}",
+                "chown {recursive}-- {} {}",
                 shell_quote(owner),
-                shell_quote(path)
+                shell_quote_path(path)
             ),
             None,
         )?;
@@ -1930,9 +1926,9 @@ fn update_shell_attributes(
     {
         shell.exec_ok(
             format!(
-                "chgrp {recursive}{} -- {}",
+                "chgrp {recursive}-- {} {}",
                 shell_quote(group),
-                shell_quote(path)
+                shell_quote_path(path)
             ),
             None,
         )?;
@@ -1993,7 +1989,7 @@ fn shell_editor_properties(
         // The normal backend has no stat dependency. Use numeric ls output
         // for saving while retaining owner/group names in property views.
         let output = shell.exec_ok(
-            format!("LC_ALL=C ls -ldn -- {}", shell_quote(&path.display_path)),
+            format!("LC_ALL=C ls -ldn {}", shell_quote_path(&path.display_path)),
             None,
         )?;
         let line = String::from_utf8_lossy(&output);
@@ -2014,21 +2010,21 @@ fn shell_editor_replace_command(
     else {
         anyhow::bail!("Remote save refused: original ownership or permissions are unavailable");
     };
-    let temporary = shell_quote(temporary);
-    let target = shell_quote(target);
+    let temporary = shell_quote_path(temporary);
+    let target = shell_quote_path(target);
     let mode = mode & 0o7777;
     let symbolic = format_permissions(SftpFileType::File, mode);
     // Skip a no-op chown, restore mode after chown clears special bits, and
     // verify both before mv. A rejected or ignored attribute change must not
     // replace the original. Numeric ls works in both shell backends.
     Ok(format!(
-        "(attrs=$(LC_ALL=C ls -ldn -- {temporary}) && \
+        "(attrs=$(LC_ALL=C ls -ldn {temporary}) && \
          set -f && set -- $attrs && \
-         (test \"$3:$4\" = '{uid}:{gid}' || chown {uid}:{gid} -- {temporary})) && \
-         chmod {mode:o} -- {temporary} && \
-         (attrs=$(LC_ALL=C ls -ldn -- {temporary}) && set -f && set -- $attrs && \
+         (test \"$3:$4\" = '{uid}:{gid}' || chown {uid}:{gid} {temporary})) && \
+         chmod {mode:o} {temporary} && \
+         (attrs=$(LC_ALL=C ls -ldn {temporary}) && set -f && set -- $attrs && \
          case \"$1\" in '{symbolic}'*) test \"$3:$4\" = '{uid}:{gid}' ;; *) false ;; esac) && \
-         mv -f -- {temporary} {target}"
+         mv -f {temporary} {target}"
     ))
 }
 

@@ -69,10 +69,33 @@ mod posix {
         succeeds: bool,
         upload_size: Option<usize>,
     ) {
+        run_save_with_paths(
+            &properties(uid, gid, mode),
+            prefix,
+            as_unprivileged,
+            succeeds,
+            upload_size,
+            false,
+        );
+    }
+
+    fn run_save_with_paths(
+        attrs: &crate::sftp::SftpFileProperties,
+        prefix: &str,
+        as_unprivileged: bool,
+        succeeds: bool,
+        upload_size: Option<usize>,
+        relative_dash_paths: bool,
+    ) {
+        let (uid, gid, mode) = (
+            attrs.uid.unwrap(),
+            attrs.gid.unwrap(),
+            attrs.permissions.unwrap(),
+        );
         let directory = tempfile::tempdir().unwrap();
         // Quoting and glob expansion must be safe even for shell metacharacters.
-        let original = directory.path().join("original ' $file [*].txt");
-        let temporary = directory.path().join("temporary ' $file [*].txt");
+        let original = directory.path().join("-original ' $file [*].txt");
+        let temporary = directory.path().join("-temporary ' $file [*].txt");
         fs::write(&original, b"old").unwrap();
         fs::write(&temporary, b"new").unwrap();
         fs::set_permissions(&original, fs::Permissions::from_mode(mode)).unwrap();
@@ -96,23 +119,22 @@ mod posix {
                 .unwrap();
             assert!(status.success());
         }
-        let attrs = properties(uid, gid, mode);
-        let command = if let Some(size) = upload_size {
-            shell_editor_upload_command(
-                &attrs,
-                temporary.to_str().unwrap(),
-                original.to_str().unwrap(),
-                size,
+        let (temporary_path, original_path) = if relative_dash_paths {
+            (
+                temporary.file_name().unwrap().to_str().unwrap(),
+                original.file_name().unwrap().to_str().unwrap(),
             )
         } else {
-            shell_editor_replace_command(
-                &attrs,
-                temporary.to_str().unwrap(),
-                original.to_str().unwrap(),
-            )
+            (temporary.to_str().unwrap(), original.to_str().unwrap())
+        };
+        let command = if let Some(size) = upload_size {
+            shell_editor_upload_command(attrs, temporary_path, original_path, size)
+        } else {
+            shell_editor_replace_command(attrs, temporary_path, original_path)
         }
         .unwrap();
         let mut process = Command::new("sh");
+        process.current_dir(directory.path());
         process.arg("-c").arg(format!("{prefix}\n{command}"));
         if as_unprivileged {
             process.uid(65534).gid(65534);
@@ -159,6 +181,49 @@ mod posix {
         // SAFETY: getuid/getgid only read process identity.
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
         run_replace(uid, gid, 0o755, "chown() { return 1; }", false, true);
+    }
+
+    #[test]
+    fn shell_editor_save_and_upload_handle_relative_dash_paths_with_posix_operands() {
+        // Reject extra operands so GNU option permutation cannot hide a
+        // post-mode/owner `--` on Linux. The native tools still do the work.
+        let prefix = concat!(
+            "ls() { test \"$#\" -eq 2 && command ls \"$@\"; }\n",
+            "chmod() { test \"$#\" -eq 2 && command chmod \"$@\"; }\n",
+            "chown() { test \"$#\" -eq 2 && command chown \"$@\"; }\n",
+            "mv() { test \"$#\" -eq 3 && command mv \"$@\"; }",
+        );
+        // SAFETY: getuid/getgid/geteuid only read process identity.
+        let (uid, gid, euid) = unsafe { (libc::getuid(), libc::getgid(), libc::geteuid()) };
+        for upload_size in [None, Some(UPLOAD_BYTES.len())] {
+            run_save_with_paths(
+                &properties(uid, gid, 0o755),
+                prefix,
+                false,
+                true,
+                upload_size,
+                true,
+            );
+            if euid == 0 {
+                // Exercise the real chown branch and special-bit restoration.
+                run_save_with_paths(
+                    &properties(65534, 65534, 0o6755),
+                    prefix,
+                    false,
+                    true,
+                    upload_size,
+                    true,
+                );
+            }
+            run_save_with_paths(
+                &properties(uid.wrapping_add(1), gid, 0o755),
+                "chown() { return 0; }",
+                false,
+                false,
+                upload_size,
+                true,
+            );
+        }
     }
 
     #[test]
