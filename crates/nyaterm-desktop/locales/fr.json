@@ -1350,6 +1350,7 @@
     "passwordPlaceholder": "Mot de passe de déverrouillage",
     "title": "Verrouillé",
     "unlock": "Déverrouiller",
+    "unlocking": "Déverrouillage…",
     "unlockFailed": "Échec du déverrouillage",
     "wrongPassword": "Mot de passe incorrect. Réessayez."
   },

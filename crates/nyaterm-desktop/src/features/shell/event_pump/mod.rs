@@ -473,12 +473,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         self.security.remember_screen_lock_focus(window.focused(cx));
-        let lock_status = if self.settings.summary().has_master_password {
-            "Enter the master password to unlock.".to_string()
-        } else {
-            "No master password is configured.".to_string()
-        };
-        self.security.activate_screen_lock(lock_status);
+        self.security.activate_idle_screen_lock();
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status(format!(
             "screen locked after {} minute(s) idle",

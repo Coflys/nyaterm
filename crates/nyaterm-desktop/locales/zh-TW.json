@@ -1350,6 +1350,7 @@
     "passwordPlaceholder": "請輸入解鎖密碼",
     "title": "應用程式已鎖定",
     "unlock": "解鎖",
+    "unlocking": "正在解鎖…",
     "unlockFailed": "解鎖失敗",
     "wrongPassword": "密碼錯誤，請重試。"
   },

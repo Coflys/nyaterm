@@ -37,13 +37,8 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        let lock_status = if self.settings.summary().has_master_password {
-            t!("lockScreen.passwordPlaceholder").to_string()
-        } else {
-            String::new()
-        };
         self.security.remember_screen_lock_focus(window.focused(cx));
-        self.security.activate_screen_lock(lock_status);
+        self.security.activate_screen_lock(String::new());
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status("screen locked".to_string());
         if self.settings.summary().has_master_password {
@@ -91,13 +86,18 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn submit_lock_unlock(&mut self, cx: &mut Context<Self>) {
+        if !self.security.screen_locked() {
+            return;
+        }
         if !self.settings.summary().has_master_password {
             self.unlock_app(cx);
             return;
         }
 
-        let password: nyaterm_core::SecretString =
-            self.security.screen_lock_password_draft().to_owned().into();
+        let Some((request_id, password)) = self.security.begin_screen_lock_unlock() else {
+            return;
+        };
+        cx.notify();
         let request_password = password.clone();
         self.submit_store_request(
             0,
@@ -105,6 +105,9 @@ impl NyaTermApp {
                 store.verify_master_password(request_password.expose_secret())
             }),
             move |this, event, cx| {
+                if !this.security.finish_screen_lock_unlock(request_id) {
+                    return;
+                }
                 match event.outcome {
                     Ok(true)
                         if this.security.screen_lock_password_draft()
@@ -119,7 +122,7 @@ impl NyaTermApp {
                     {
                         let status = t!("lockScreen.wrongPassword").to_string();
                         this.security.clear_screen_lock_password_with_status(status);
-                        this.reset_text_input("lock-screen.password", "", cx);
+                        this.clear_lock_password_input(cx);
                         this.shell.set_status("screen unlock rejected".to_string());
                     }
                     Ok(false) => {}
@@ -129,7 +132,7 @@ impl NyaTermApp {
                     {
                         let status = format!("{}: {error}", t!("lockScreen.unlockFailed"));
                         this.security.clear_screen_lock_password_with_status(status);
-                        this.reset_text_input("lock-screen.password", "", cx);
+                        this.clear_lock_password_input(cx);
                         this.shell.set_status("screen unlock failed".to_string());
                     }
                     Err(_) => {}
@@ -153,10 +156,11 @@ impl NyaTermApp {
         match keystroke.key.as_str() {
             "enter" => self.submit_lock_unlock(cx),
             "escape" if !self.settings.summary().has_master_password => self.unlock_app(cx),
+            "escape" if self.security.screen_lock_unlock_busy() => {}
             "escape" => {
-                let status = t!("lockScreen.passwordPlaceholder").to_string();
-                self.security.clear_screen_lock_password_with_status(status);
-                self.reset_text_input("lock-screen.password", "", cx);
+                self.security
+                    .clear_screen_lock_password_with_status(String::new());
+                self.clear_lock_password_input(cx);
                 cx.notify();
             }
             _ => return false,
@@ -164,13 +168,20 @@ impl NyaTermApp {
         true
     }
 
+    pub(in crate::features) fn clear_lock_password_input(&mut self, cx: &mut Context<Self>) {
+        // Programmatic clearing must preserve the rejection message until the
+        // user starts typing, rather than emitting a fresh password edit.
+        self.text_input("lock-screen.password", "", TextInputSetup::masked(), cx)
+            .update(cx, |input, cx| input.set_content_silent("", cx));
+    }
+
     pub(in crate::features) fn apply_lock_password_input(
         &mut self,
         text: String,
         cx: &mut Context<Self>,
     ) {
-        let status = t!("lockScreen.passwordPlaceholder").to_string();
-        self.security.set_screen_lock_password_draft(text, status);
+        self.security
+            .set_screen_lock_password_draft(text, String::new());
         cx.notify();
     }
 

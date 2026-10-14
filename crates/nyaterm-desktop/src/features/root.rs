@@ -918,10 +918,9 @@ impl NyaTermApp {
                 |this| this.child(passive_overlay_layer(self.modal_owner_scrim())),
             )
             .when(overlay.locked, |this| {
-                this.child(full_window_overlay_layer(
-                    "lock-screen-input-layer",
-                    self.lock_screen_overlay(window, cx),
-                ))
+                // The lock screen owns its input boundary so Windows caption
+                // presses can reach the native window procedure and start a drag.
+                this.child(passive_overlay_layer(self.lock_screen_overlay(window, cx)))
             })
             // Background SSH operations can request credentials while another
             // overlay is open, so authentication must be the topmost overlay.

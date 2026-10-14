@@ -1350,6 +1350,7 @@
     "passwordPlaceholder": "ロック解除パスワード",
     "title": "ロック中",
     "unlock": "ロック解除",
+    "unlocking": "ロック解除中…",
     "unlockFailed": "ロック解除に失敗しました",
     "wrongPassword": "パスワードが違います。もう一度お試しください。"
   },

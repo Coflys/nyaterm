@@ -144,9 +144,12 @@ struct SecurityUnlockState {
 /// secrets while the rest of the application remains usable.
 struct SecurityScreenLockState {
     locked: bool,
+    idle: bool,
     restore_focus: Option<FocusHandle>,
     password_draft: SecretString,
     status: String,
+    unlock_request_id: u64,
+    unlock_busy: bool,
     focus: FocusHandle,
     last_user_activity_at: Instant,
 }
@@ -204,9 +207,12 @@ impl SecurityFeatureState {
             },
             screen_lock: SecurityScreenLockState {
                 locked: false,
+                idle: false,
                 restore_focus: None,
                 password_draft: SecretString::default(),
                 status: String::new(),
+                unlock_request_id: 0,
+                unlock_busy: false,
                 focus: focus.screen_lock,
                 last_user_activity_at: Instant::now(),
             },
@@ -419,6 +425,35 @@ impl SecurityFeatureState {
         &self.screen_lock.status
     }
 
+    pub(in crate::features) fn screen_lock_is_idle(&self) -> bool {
+        self.screen_lock.idle
+    }
+
+    pub(in crate::features) fn screen_lock_unlock_busy(&self) -> bool {
+        self.screen_lock.unlock_busy
+    }
+
+    pub(in crate::features) fn begin_screen_lock_unlock(&mut self) -> Option<(u64, SecretString)> {
+        if !self.screen_lock.locked || self.screen_lock.unlock_busy {
+            return None;
+        }
+        self.screen_lock.unlock_request_id = self.screen_lock.unlock_request_id.wrapping_add(1);
+        self.screen_lock.unlock_busy = true;
+        self.screen_lock.status.clear();
+        Some((
+            self.screen_lock.unlock_request_id,
+            self.screen_lock.password_draft.clone(),
+        ))
+    }
+
+    pub(in crate::features) fn finish_screen_lock_unlock(&mut self, request_id: u64) -> bool {
+        if !self.screen_lock.unlock_busy || self.screen_lock.unlock_request_id != request_id {
+            return false;
+        }
+        self.screen_lock.unlock_busy = false;
+        true
+    }
+
     pub(in crate::features) fn screen_lock_focus(&self) -> &FocusHandle {
         &self.screen_lock.focus
     }
@@ -429,8 +464,15 @@ impl SecurityFeatureState {
 
     pub(in crate::features) fn activate_screen_lock(&mut self, status: String) {
         self.screen_lock.locked = true;
+        self.screen_lock.idle = false;
+        self.screen_lock.unlock_busy = false;
         self.screen_lock.password_draft.expose_secret_mut().clear();
         self.screen_lock.status = status;
+    }
+
+    pub(in crate::features) fn activate_idle_screen_lock(&mut self) {
+        self.activate_screen_lock(String::new());
+        self.screen_lock.idle = true;
     }
 
     pub(in crate::features) fn remember_screen_lock_focus(&mut self, focus: Option<FocusHandle>) {
@@ -445,6 +487,8 @@ impl SecurityFeatureState {
 
     pub(in crate::features) fn deactivate_screen_lock(&mut self) {
         self.screen_lock.locked = false;
+        self.screen_lock.idle = false;
+        self.screen_lock.unlock_busy = false;
         self.screen_lock.password_draft.expose_secret_mut().clear();
         self.screen_lock.status.clear();
         self.screen_lock.last_user_activity_at = Instant::now();
@@ -1667,6 +1711,50 @@ mod tests {
             security.private_key_view(),
             Some(("second", "new secret", None))
         );
+    }
+
+    #[test]
+    fn only_idle_lock_shows_the_inactivity_reason() {
+        let mut security = security_state();
+        security.activate_idle_screen_lock();
+        assert!(security.screen_lock_is_idle());
+        security.activate_screen_lock(String::new());
+        assert!(!security.screen_lock_is_idle());
+        security.activate_idle_screen_lock();
+        security.deactivate_screen_lock();
+        assert!(!security.screen_lock_is_idle());
+    }
+
+    #[test]
+    fn screen_unlock_allows_one_verification_at_a_time() {
+        let mut security = security_state();
+        assert!(security.begin_screen_lock_unlock().is_none());
+        security.activate_screen_lock(String::new());
+        security.set_screen_lock_password_draft("draft".to_string(), "rejected".to_string());
+        let (request_id, _) = security.begin_screen_lock_unlock().unwrap();
+        assert!(security.screen_lock_unlock_busy());
+        assert!(security.screen_lock_status().is_empty());
+        assert!(security.begin_screen_lock_unlock().is_none());
+        assert!(!security.finish_screen_lock_unlock(request_id.wrapping_add(1)));
+        assert!(security.screen_lock_unlock_busy());
+        assert!(security.finish_screen_lock_unlock(request_id));
+        assert!(!security.screen_lock_unlock_busy());
+        assert!(security.begin_screen_lock_unlock().is_some());
+    }
+
+    #[test]
+    fn relocking_invalidates_a_pending_screen_unlock_reply() {
+        let mut security = security_state();
+        security.activate_screen_lock(String::new());
+        let (old_request_id, _) = security.begin_screen_lock_unlock().unwrap();
+        security.deactivate_screen_lock();
+        assert!(!security.finish_screen_lock_unlock(old_request_id));
+        security.activate_screen_lock(String::new());
+        let (new_request_id, _) = security.begin_screen_lock_unlock().unwrap();
+        assert!(!security.finish_screen_lock_unlock(old_request_id));
+        assert!(security.screen_locked());
+        assert!(security.screen_lock_unlock_busy());
+        assert!(security.finish_screen_lock_unlock(new_request_id));
     }
 
     #[test]

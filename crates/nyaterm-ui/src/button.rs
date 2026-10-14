@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString,
-    Styled as _, Window, prelude::FluentBuilder as _,
+    AnyElement, App, ClickEvent, FontWeight, Hsla, IntoElement, ParentElement as _, Pixels,
+    RenderOnce, SharedString, Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Disableable, Icon, Selectable, Sizable};
@@ -23,6 +23,9 @@ pub struct NyaButton {
     content: Option<AnyElement>,
     variant: NyaButtonVariant,
     height: Option<Pixels>,
+    text_color: Option<Hsla>,
+    text_size: Option<Pixels>,
+    font_weight: Option<FontWeight>,
     small: bool,
     compact: bool,
     full_width: bool,
@@ -43,6 +46,9 @@ impl NyaButton {
             content: None,
             variant: NyaButtonVariant::Secondary,
             height: None,
+            text_color: None,
+            text_size: None,
+            font_weight: None,
             small: false,
             compact: false,
             full_width: false,
@@ -72,6 +78,21 @@ impl NyaButton {
 
     pub fn height(mut self, height: Pixels) -> Self {
         self.height = Some(height);
+        self
+    }
+
+    pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.text_color = Some(color.into());
+        self
+    }
+
+    pub fn text_size(mut self, size: Pixels) -> Self {
+        self.text_size = Some(size);
+        self
+    }
+
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.font_weight = Some(weight);
         self
     }
 
@@ -137,7 +158,23 @@ impl RenderOnce for NyaButton {
                 focus
             });
         }
-        let mut button = Button::new(self.id).label(self.label).loading(self.loading);
+        let mut button = Button::new(self.id).loading(self.loading);
+        if self.text_color.is_some() || self.text_size.is_some() || self.font_weight.is_some() {
+            // Kit's label container sets its own size. Style the label itself,
+            // retaining one visible label and its accessible name.
+            button = button.accessibility_label(self.label.clone()).child(
+                div()
+                    .min_w_0()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .when_some(self.text_color, |this, color| this.text_color(color))
+                    .when_some(self.text_size, |this, size| this.text_size(size))
+                    .when_some(self.font_weight, |this, weight| this.font_weight(weight))
+                    .child(self.label),
+            );
+        } else {
+            button = button.label(self.label);
+        }
         if let Some(icon_path) = self.icon_path {
             button = button.icon(Icon::default().path(icon_path));
         }
@@ -170,6 +207,9 @@ impl RenderOnce for NyaButton {
         }
         if let Some(height) = self.height {
             button = button.h(height);
+        }
+        if let Some(color) = self.text_color {
+            button = button.text_color(color);
         }
         button.disabled(self.disabled).render(window, cx)
     }

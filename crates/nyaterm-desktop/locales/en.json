@@ -1350,6 +1350,7 @@
     "passwordPlaceholder": "Unlock password",
     "title": "Locked",
     "unlock": "Unlock",
+    "unlocking": "Unlocking…",
     "unlockFailed": "Unlock failed",
     "wrongPassword": "Wrong password. Try again."
   },
