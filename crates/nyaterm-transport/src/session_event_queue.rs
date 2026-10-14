@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::{SessionDrain, SessionDrainStats, SessionEvent, SessionEventConsumerId};
@@ -287,10 +287,40 @@ impl SessionEventQueue {
         max_output_bytes: Option<usize>,
         timeout: Duration,
     ) -> SessionDrain {
-        let wait_started = Instant::now();
-        let Ok(mut inner) = self.shared.inner.lock() else {
+        let Ok(inner) = self.shared.inner.lock() else {
             return SessionDrain::default();
         };
+        let Some(mut inner) = self.wait_for_consumer(inner, consumer_id, timeout) else {
+            return SessionDrain::default();
+        };
+        let drain = inner.drain_for_consumer(consumer_id, max_events, max_output_bytes);
+        let resumed = inner.resume_output_if_below_low_watermark();
+        drop(inner);
+        if resumed {
+            self.shared.output_space.notify_all();
+        }
+        drain
+    }
+
+    pub(super) fn wait_for_events_for_consumer(
+        &self,
+        consumer_id: SessionEventConsumerId,
+        timeout: Duration,
+    ) -> bool {
+        let Ok(inner) = self.shared.inner.lock() else {
+            return false;
+        };
+        self.wait_for_consumer(inner, consumer_id, timeout)
+            .is_some_and(|inner| inner.has_event_for_consumer(consumer_id))
+    }
+
+    fn wait_for_consumer<'a>(
+        &self,
+        mut inner: MutexGuard<'a, SessionEventQueueInner>,
+        consumer_id: SessionEventConsumerId,
+        timeout: Duration,
+    ) -> Option<MutexGuard<'a, SessionEventQueueInner>> {
+        let wait_started = Instant::now();
         while !inner.has_event_for_consumer(consumer_id) && !inner.closed {
             let remaining = timeout.saturating_sub(wait_started.elapsed());
             if remaining.is_zero() {
@@ -299,7 +329,7 @@ impl SessionEventQueue {
             inner.consumer_wait_started();
             let waited = self.shared.ready.wait_timeout(inner, remaining);
             let Ok((mut waited, wait_result)) = waited else {
-                return SessionDrain::default();
+                return None;
             };
             waited.consumer_wait_finished();
             inner = waited;
@@ -307,13 +337,7 @@ impl SessionEventQueue {
                 break;
             }
         }
-        let drain = inner.drain_for_consumer(consumer_id, max_events, max_output_bytes);
-        let resumed = inner.resume_output_if_below_low_watermark();
-        drop(inner);
-        if resumed {
-            self.shared.output_space.notify_all();
-        }
-        drain
+        Some(inner)
     }
 
     #[cfg(test)]

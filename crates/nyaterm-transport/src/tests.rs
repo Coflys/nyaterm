@@ -2185,6 +2185,95 @@ fn session_event_queue_keeps_sessions_separate() {
 }
 
 #[test]
+fn consumer_wait_wakes_for_assigned_output_without_removing_events() {
+    let queue = SessionEventQueue::new();
+    let consumer_id = SessionEventConsumerId(1);
+    queue.assign_consumer("assigned", consumer_id);
+    queue.push(SessionEvent::Output {
+        session_id: "other".into(),
+        data: b"unrelated".to_vec(),
+    });
+    let waiter_queue = queue.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let ready = waiter_queue.wait_for_events_for_consumer(consumer_id, Duration::from_secs(30));
+        done_tx.send(ready).expect("report readiness");
+    });
+    wait_for_queue_state(
+        || queue.waiting_consumers() == 1,
+        "the assigned consumer to park",
+    );
+    queue.push(SessionEvent::Output {
+        session_id: "assigned".into(),
+        data: b"ready".to_vec(),
+    });
+    let ready = done_rx.recv_timeout(Duration::from_secs(5));
+    queue.close();
+    waiter.join().expect("readiness waiter");
+    assert!(ready.expect("assigned output must wake the consumer"));
+    let drain = queue.drain(8);
+    assert!(matches!(
+        drain.events.as_slice(),
+        [SessionEvent::Output { session_id: first, data: first_data },
+         SessionEvent::Output { session_id: second, data: second_data }]
+            if first == "other" && first_data == b"unrelated"
+                && second == "assigned" && second_data == b"ready"
+    ));
+}
+
+#[test]
+fn consumer_readiness_does_not_reserve_events_across_reassignment() {
+    let queue = SessionEventQueue::new();
+    let source = SessionEventConsumerId(1);
+    let target = SessionEventConsumerId(2);
+    queue.assign_consumer("moved", source);
+    for data in [b"before".as_slice(), b"after"] {
+        queue.push(SessionEvent::Output {
+            session_id: "moved".into(),
+            data: data.to_vec(),
+        });
+    }
+    assert!(queue.wait_for_events_for_consumer(source, Duration::ZERO));
+    queue.clear_consumer("moved", source);
+    queue.assign_consumer("moved", target);
+    assert!(
+        queue
+            .drain_blocking_for_consumer_with_output_budget(source, 8, Some(1024), Duration::ZERO)
+            .events
+            .is_empty()
+    );
+    assert!(queue.wait_for_events_for_consumer(target, Duration::ZERO));
+    let drain =
+        queue.drain_blocking_for_consumer_with_output_budget(target, 8, Some(1024), Duration::ZERO);
+    assert!(matches!(
+        drain.events.as_slice(),
+        [SessionEvent::Output { data: first, .. }, SessionEvent::Output { data: second, .. }]
+            if first == b"before" && second == b"after"
+    ));
+}
+
+#[test]
+fn consumer_wait_returns_false_on_timeout_and_wakes_on_close() {
+    let queue = SessionEventQueue::new();
+    let consumer_id = SessionEventConsumerId(1);
+    assert!(!queue.wait_for_events_for_consumer(consumer_id, Duration::from_millis(20)));
+    let waiter_queue = queue.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let ready = waiter_queue.wait_for_events_for_consumer(consumer_id, Duration::from_secs(30));
+        done_tx.send(ready).expect("report closed queue");
+    });
+    wait_for_queue_state(
+        || queue.waiting_consumers() == 1,
+        "the idle consumer to park",
+    );
+    queue.close();
+    let ready = done_rx.recv_timeout(Duration::from_secs(5));
+    waiter.join().expect("closed queue waiter");
+    assert!(!ready.expect("closing the queue must wake the consumer"));
+}
+
+#[test]
 fn session_event_consumers_only_drain_assigned_sessions_and_follow_reassignment() {
     let queue = SessionEventQueue::new();
     let first = SessionEventConsumerId(1);

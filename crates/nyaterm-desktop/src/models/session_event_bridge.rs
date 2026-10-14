@@ -651,10 +651,6 @@ fn run_session_event_bridge(
         HashMap::new();
     let mut source_drain_backpressured = false;
     while !state.stop.load(Ordering::Relaxed) {
-        let Ok(_transfer_gate) = state.transfer_gate.lock() else {
-            thread::sleep(SESSION_EVENT_BRIDGE_IDLE_SLEEP);
-            continue;
-        };
         source_drain_backpressured = bridge_should_pause_source_drain(
             frame_pipeline.queued_output_bytes(),
             state.ui_queue.queued_output_bytes(),
@@ -664,21 +660,37 @@ fn run_session_event_bridge(
             thread::sleep(SESSION_EVENT_BRIDGE_BUSY_SLEEP);
             continue;
         }
-        // Park on the queue rather than polling it: a PTY read wakes this
-        // thread directly, so the first hop of the echo path no longer spends
-        // an arbitrary slice of the poll interval waiting to notice.
+        // Never hold the transfer gate while waiting or sleeping: repeatedly
+        // reacquiring it after an idle wait can starve a workspace transfer.
+        // Waiting leaves events queued, so a transfer can still change their
+        // owner before the non-blocking drain below.
+        if !session_manager
+            .wait_for_events_for_consumer(consumer_id, SESSION_EVENT_BRIDGE_WAIT_TIMEOUT)
+        {
+            continue;
+        }
+        if state.stop.load(Ordering::Acquire) {
+            break;
+        }
+        let Ok(transfer_gate) = state.transfer_gate.lock() else {
+            thread::sleep(SESSION_EVENT_BRIDGE_IDLE_SLEEP);
+            continue;
+        };
+        // Keep dequeue, routing and frame submission inside the same handoff
+        // boundary. A pause must see every event already removed from transport.
         let Ok(drain) = session_manager.drain_events_blocking_for_consumer_with_output_budget(
             consumer_id,
             SESSION_EVENT_BRIDGE_DRAIN_BATCH,
             SESSION_EVENT_BRIDGE_OUTPUT_BUDGET,
-            SESSION_EVENT_BRIDGE_WAIT_TIMEOUT,
+            Duration::ZERO,
         ) else {
+            drop(transfer_gate);
             thread::sleep(SESSION_EVENT_BRIDGE_IDLE_SLEEP);
             continue;
         };
         state.update_source_stats(&drain.stats);
         if drain.events.is_empty() {
-            // The park above already absorbed the idle wait.
+            // Ownership may have changed since readiness was observed.
             continue;
         }
         let mut pending_direct_outputs = Vec::new();
@@ -921,8 +933,8 @@ fn bridge_consume_sideband_probe(
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
     use super::{
@@ -930,16 +942,76 @@ mod tests {
         SESSION_EVENT_BRIDGE_DIRECT_OUTPUT_LOW_WATERMARK,
         SESSION_EVENT_BRIDGE_SIDEBAND_PROBE_EVENTS, SESSION_EVENT_BRIDGE_SIDEBAND_PROBE_WINDOW,
         SESSION_EVENT_BRIDGE_UI_OUTPUT_LIMIT, SESSION_EVENT_BRIDGE_UI_OUTPUT_LOW_WATERMARK,
-        SessionEventBridgeControl, SessionEventBridgeQueue, SessionEventBridgeSidebandProbe,
-        SessionEventBridgeState, bridge_arm_sideband_probe, bridge_consume_sideband_probe,
-        bridge_output_can_go_direct, bridge_output_is_backpressured,
+        SessionEventBridge, SessionEventBridgeControl, SessionEventBridgeQueue,
+        SessionEventBridgeSidebandProbe, SessionEventBridgeState, bridge_arm_sideband_probe,
+        bridge_consume_sideband_probe, bridge_output_can_go_direct, bridge_output_is_backpressured,
         bridge_output_may_contain_sideband_trigger, bridge_route_event,
         bridge_should_pause_source_drain, bridge_sideband_probe_active,
         flush_bridge_direct_outputs,
     };
     use crate::models::recording::RecordingWritePipeline;
     use crate::models::terminal::{TerminalFrameOutputSubmission, TerminalFramePipeline};
-    use nyaterm_transport::SessionEvent;
+    use nyaterm_transport::{SessionEvent, SessionManager};
+
+    #[test]
+    fn repeated_transfers_finish_while_both_event_bridges_are_idle() {
+        assert_repeated_transfers_finish(false);
+    }
+
+    #[test]
+    fn repeated_transfers_finish_while_both_event_bridges_are_backpressured() {
+        assert_repeated_transfers_finish(true);
+    }
+
+    fn assert_repeated_transfers_finish(backpressured: bool) {
+        let manager = Arc::new(SessionManager::new());
+        let source = SessionEventBridge::spawn(
+            Arc::clone(&manager),
+            TerminalFramePipeline::default(),
+            None,
+            "UTF-8".into(),
+            1000,
+        );
+        let target = SessionEventBridge::spawn(
+            manager,
+            TerminalFramePipeline::default(),
+            None,
+            "UTF-8".into(),
+            1000,
+        );
+        source.claim_session("moved");
+        if backpressured {
+            for bridge in [&source, &target] {
+                bridge.state.ui_queue.push(SessionEvent::Output {
+                    session_id: "unmoved".into(),
+                    data: vec![b'x'; SESSION_EVENT_BRIDGE_UI_OUTPUT_LIMIT],
+                });
+            }
+        }
+        let source_state = Arc::clone(&source.state);
+        let target_state = Arc::clone(&target.state);
+        // Let idle workers enter their event waits before competing for the
+        // transfer gate. The old loop kept the gate locked throughout each wait.
+        std::thread::sleep(Duration::from_millis(20));
+        let (done_tx, done_rx) = mpsc::channel();
+        let mover = std::thread::spawn(move || {
+            let ids = vec!["moved".to_string()];
+            for _ in 0..64 {
+                assert!(source.pause_sessions_for_transfer(&ids).is_empty());
+                target.claim_session("moved");
+                assert!(target.pause_sessions_for_transfer(&ids).is_empty());
+                source.claim_session("moved");
+            }
+            done_tx.send(()).expect("report completed transfers");
+        });
+        let completed = done_rx.recv_timeout(Duration::from_secs(5));
+        // Stop both workers even on timeout, so a regression cannot leave the
+        // test itself stuck in a starved lock acquisition or worker join.
+        source_state.stop.store(true, Ordering::Release);
+        target_state.stop.store(true, Ordering::Release);
+        mover.join().expect("transfer worker");
+        completed.expect("event waits and backpressure must not starve workspace transfers");
+    }
 
     struct BridgeFixture {
         state: SessionEventBridgeState,

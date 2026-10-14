@@ -1465,6 +1465,18 @@ impl SessionManager {
         ))
     }
 
+    /// Wait without removing events so a caller can acquire its handoff lock
+    /// before draining. Readiness does not reserve events: the subsequent drain
+    /// must check current consumer ownership again.
+    pub fn wait_for_events_for_consumer(
+        &self,
+        consumer_id: SessionEventConsumerId,
+        timeout: Duration,
+    ) -> bool {
+        self.event_queue
+            .wait_for_events_for_consumer(consumer_id, timeout)
+    }
+
     pub fn drain_events_blocking_for_consumer_with_output_budget(
         &self,
         consumer_id: SessionEventConsumerId,
