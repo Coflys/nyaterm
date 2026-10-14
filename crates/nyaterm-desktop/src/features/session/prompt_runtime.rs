@@ -56,6 +56,7 @@ impl NyaTermApp {
         &mut self,
         request_id: String,
         choice: HostKeyPromptChoice,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let request = match self.session.prompts.take_host_key_resolution(&request_id) {
@@ -80,6 +81,7 @@ impl NyaTermApp {
             HostKeyPromptChoice::Accept => format!("accepted SSH host key for {host}"),
             HostKeyPromptChoice::Reject => format!("rejected SSH host key for {host}"),
         });
+        self.focus_active_workspace_surface(window, cx);
         cx.notify();
     }
 

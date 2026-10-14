@@ -1067,3 +1067,95 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod focus_tests {
+    use std::time::Instant;
+
+    use gpui::TestAppContext;
+    use nyaterm_core::AiExecutionProfile;
+    use nyaterm_transport::{SessionInfo, SessionKind};
+
+    use super::super::PendingSessionStartRegistration;
+    use crate::features::runtime_jobs::{SessionStartResult, SessionStartSuccess};
+    use crate::features::test_support::{
+        app_with_visible_local_session, session_focus_test_window,
+    };
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::TestConfigDir;
+
+    #[test]
+    fn background_ssh_completion_preserves_input_focus_and_user_tab_selection() {
+        for switch_tab in [false, true] {
+            let root = TestConfigDir::new("nyaterm-background-ssh-focus");
+            let mut cx = TestAppContext::single();
+            let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+            let cx = session_focus_test_window(&mut cx, &app);
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let request_id = app.register_pending_session_start(
+                        PendingSessionStartRegistration {
+                            connection_name: "SSH".into(),
+                            launch_config: Some(SessionLaunchConfig::Ssh(Box::default())),
+                            kind: SessionKind::Ssh,
+                            ai_execution_profile: AiExecutionProfile::Posix,
+                            custom_name: None,
+                            tab_color: None,
+                            locked: false,
+                            after_session_id: Some("source".into()),
+                            insert_index: None,
+                            seed_output: None,
+                            startup_command: None,
+                            multiplex_key: None,
+                            source_connection_id: None,
+                            reconnect_session_id: None,
+                            workspace_split: None,
+                            tab_placement: None,
+                            status_message: "connecting".into(),
+                            append_start_log: false,
+                        },
+                        cx,
+                    );
+                    if switch_tab {
+                        app.activate_session_id("source", cx);
+                    }
+                    window.focus(app.session.prompt_credential_focus(), cx);
+                    let now = Instant::now();
+                    // Drive the real completion callback without a network connection.
+                    app.apply_session_start_event(
+                        SessionStartResult {
+                            request_id,
+                            connection_name: "SSH".into(),
+                            kind: SessionKind::Ssh,
+                            worker_started_at: now,
+                            worker_finished_at: now,
+                            result: Ok(SessionStartSuccess {
+                                session_info: SessionInfo {
+                                    id: "new-ssh".into(),
+                                    name: "SSH".into(),
+                                    kind: SessionKind::Ssh,
+                                    working_dir: None,
+                                    cols: 80,
+                                    rows: 24,
+                                },
+                                multiplex_handle: None,
+                                launch_config: Some(SessionLaunchConfig::Ssh(Box::default())),
+                                cleanup: None,
+                            }),
+                        },
+                        cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let app = app.read(cx);
+                assert!(app.session.prompt_credential_focus().is_focused(window));
+                assert_eq!(
+                    app.session.active_id(),
+                    Some(if switch_tab { "source" } else { "new-ssh" }),
+                );
+            });
+        }
+    }
+}

@@ -12,8 +12,8 @@ use nyaterm_transport::{
 };
 
 use crate::features::runtime_jobs::SessionStartResult;
-use crate::features::session::HostKeyPromptIssue;
-use crate::features::test_support::app_with_visible_local_session;
+use crate::features::session::{HostKeyPromptChoice, HostKeyPromptIssue};
+use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
 use crate::models::{
     SessionEventBridge, SessionLaunchConfig, SessionRuntimeMetadata, StartupCommandAction,
     TabActionsSubmenu, TerminalFramePipeline, WorkspaceSplitDirection,
@@ -30,6 +30,50 @@ use super::{
     SessionFeatureFocus, SessionFeatureState, SessionPromptState, SessionStartEventRequest,
     SessionStartFeatureState,
 };
+
+#[test]
+fn host_key_prompt_accept_and_reject_restore_terminal_input_focus() {
+    let root = TestConfigDir::new("nyaterm-host-key-focus");
+    let mut cx = TestAppContext::single();
+    let app = app_with_visible_local_session(&mut cx, root.path(), "terminal");
+    let cx = session_focus_test_window(&mut cx, &app);
+
+    for choice in [HostKeyPromptChoice::Accept, HostKeyPromptChoice::Reject] {
+        let (response_tx, response_rx) = mpsc::channel();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.session.prompts.active_host_key_prompt = Some(HostKeyPromptRequest {
+                    id: "host-key".into(),
+                    host_key: SshHostKey {
+                        host: "example.test".into(),
+                        port: 22,
+                        host_identifier: "example.test".into(),
+                        key_type: "ssh-ed25519".into(),
+                        key_base64: "test-key".into(),
+                        fingerprint: "SHA256:test".into(),
+                    },
+                    issue: HostKeyPromptIssue::Unknown,
+                    response_tx,
+                });
+                window.focus(app.session.dialog_tab_actions_focus(), cx);
+
+                // A stale button must leave the prompt and its focus untouched.
+                app.resolve_host_key_prompt("stale".into(), choice, window, cx);
+                assert!(app.session.dialog_tab_actions_focus().is_focused(window));
+                assert!(response_rx.try_recv().is_err());
+
+                app.resolve_host_key_prompt("host-key".into(), choice, window, cx);
+                assert_eq!(response_rx.try_recv().unwrap(), choice);
+                assert!(app.session.prompt_active_host_key().is_none());
+                assert!(app.terminal.input_focus().is_focused(window));
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(app.read(cx).terminal.input_focus().is_focused(window));
+        });
+    }
+}
 
 #[test]
 fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_completes() {

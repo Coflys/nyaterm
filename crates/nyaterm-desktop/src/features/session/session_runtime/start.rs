@@ -24,7 +24,7 @@ use nyaterm_transport::{
 use rust_i18n::t;
 
 use super::super::NativeHostKeyVerifier;
-use super::PendingSessionStartRegistration;
+use super::{PendingSessionStartRegistration, SessionStartFocusTarget};
 use crate::features::formatting::{non_empty_string, parse_telnet_enter_mode};
 use crate::features::{
     NyaTermApp, runtime_jobs::SessionStartSuccess, runtime_jobs::submit_session_start_job,
@@ -32,12 +32,6 @@ use crate::features::{
     session::NativeOtpProvider, session::SavedConnectionStartOptions,
 };
 use crate::models::SessionLaunchConfig;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SessionStartFocusTarget {
-    Terminal,
-    RemoteDesktop,
-}
 
 fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarget {
     match config {
@@ -176,7 +170,7 @@ impl NyaTermApp {
         self.focus_user_started_session_surface(focus_target, window, cx);
     }
 
-    fn focus_user_started_session_surface(
+    pub(in crate::features::session) fn focus_user_started_session_surface(
         &self,
         target: SessionStartFocusTarget,
         window: &mut Window,

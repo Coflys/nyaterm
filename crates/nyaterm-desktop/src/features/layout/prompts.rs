@@ -228,10 +228,11 @@ impl NyaTermApp {
                         palette,
                         format!("host-key-reject-{reject_id}"),
                         t!("settings.hostKeyVerifyReject"),
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             this.resolve_host_key_prompt(
                                 reject_id.clone(),
                                 HostKeyPromptChoice::Reject,
+                                window,
                                 cx,
                             );
                         }),
@@ -241,10 +242,11 @@ impl NyaTermApp {
                         format!("host-key-accept-{accept_id}"),
                         t!("settings.hostKeyVerifyAccept"),
                         changed,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             this.resolve_host_key_prompt(
                                 accept_id.clone(),
                                 HostKeyPromptChoice::Accept,
+                                window,
                                 cx,
                             );
                         }),
