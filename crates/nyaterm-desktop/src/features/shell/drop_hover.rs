@@ -83,6 +83,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn clear_drop_hover(&mut self, cx: &mut Context<Self>) {
         let mut dirty = self.terminal.clear_terminal_file_drop_hover();
+        dirty |= self.terminal.clear_terminal_window_drop();
         let transfer_dirty = self.transfer.set_browser_external_drop_hover(false);
         dirty |= transfer_dirty;
         dirty |= self.session.clear_tab_drag();

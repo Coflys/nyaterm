@@ -471,6 +471,7 @@ impl NyaTermApp {
         let hover_card_id = format!("session-tab-hover-card-{session_id}");
         let tab = div()
             .id(SharedString::from(format!("session-tab-{session_id}")))
+            .debug_selector(|| format!("session-tab-{session_id}"))
             .group(tab_group_name.clone())
             // HoverCard adds trigger-host elements between this tab and
             // the 36px strip. Keep the tab's old explicit strip height so
