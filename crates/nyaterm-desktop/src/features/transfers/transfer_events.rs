@@ -137,13 +137,21 @@ impl NyaTermApp {
     /// and `runtime_quiet_tick_allowed` had to carry a `transfer` term to keep
     /// that wait short.
     ///
-    /// `update_in` rather than `update`: the handler opens dialogs and external
-    /// editor windows, so it needs the `Window` the app entity is rendered in.
+    /// Pin the owning window: child windows also read the app entity, so GPUI's
+    /// current-window association changes as they render. Using that association
+    /// would terminate the transfer event loop after the upload prompt closes.
     pub(in crate::features) fn start_transfer_event_drain(&mut self, cx: &mut Context<Self>) {
         let Some(mut rx) = self.transfer.take_transfer_event_receiver() else {
             return;
         };
+        let owner_window = self.shell.main_window().map(Into::into);
         cx.spawn(async move |this, cx| {
+            let Some(owner_window) = owner_window.or_else(|| {
+                this.update_in(cx, |_, window, _| window.window_handle())
+                    .ok()
+            }) else {
+                return;
+            };
             while let Some(first) = rx.next().await {
                 // Progress is already throttled per job at the source, but each job
                 // gets its own 50ms phase and those phases stagger, so N concurrent
@@ -209,25 +217,28 @@ impl NyaTermApp {
                     }
                 }
                 let batch = coalesced;
-                if this
-                    .update_in(cx, |this, window, cx| {
-                        // One transaction, one notify, however many events it took.
-                        #[cfg(test)]
-                        this.transfer.note_ui_batch(batch.len());
-                        let mut dirty = false;
-                        for event in batch {
-                            dirty |= this.apply_transfer_event(event, window, cx);
-                        }
-                        if dirty {
-                            // Only the transfers panel. An app-wide notify here would
-                            // repaint the whole shell twenty times a second for a
-                            // progress bar, which is the pump this batching exists to
-                            // remove; `set_snapshot` notifies the panel and nothing
-                            // else. Events that change something outside the panel
-                            // still notify the app from their own handlers.
-                            this.flush_transfer_panel_snapshot(cx);
-                        }
+                if owner_window
+                    .update(cx, |_, window, cx| {
+                        this.update(cx, |this, cx| {
+                            // One transaction, one notify, however many events it took.
+                            #[cfg(test)]
+                            this.transfer.note_ui_batch(batch.len());
+                            let mut dirty = false;
+                            for event in batch {
+                                dirty |= this.apply_transfer_event(event, window, cx);
+                            }
+                            if dirty {
+                                // Only the transfers panel. An app-wide notify here would
+                                // repaint the whole shell twenty times a second for a
+                                // progress bar, which is the pump this batching exists to
+                                // remove; `set_snapshot` notifies the panel and nothing
+                                // else. Events that change something outside the panel
+                                // still notify the app from their own handlers.
+                                this.flush_transfer_panel_snapshot(cx);
+                            }
+                        })
                     })
+                    .and_then(|result| result)
                     .is_err()
                 {
                     break;
@@ -1491,6 +1502,70 @@ mod tests {
         TRANSFER_UI_COALESCE_WINDOW, transfer_event_needs_browser_context,
         transfer_event_needs_ui_refresh, transfer_navigation_job_is_stale,
     };
+
+    #[test]
+    fn closing_shared_app_child_window_keeps_transfer_events_alive() {
+        let test_dir = TestConfigDir::new("nyaterm-transfer-child-close");
+        let mut cx = TestAppContext::single();
+        let (app, main) = hosted(&mut cx, test_dir.path());
+        let mut main = main.clone();
+        let sender = main.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer.enqueue_transfer_job(running_job("upload"));
+                let mut listing = running_job("listing");
+                listing.kind = TransferJobKind::ListChildren {
+                    remote_path: "/remote".into(),
+                };
+                app.transfer.enqueue_transfer_job(listing);
+                app.start_transfer_event_drain(cx);
+                app.transfer.transfer_event_sender()
+            })
+        });
+        main.run_until_parked();
+
+        // Like the upload prompt, the child reads the shared app while rendering, then closes.
+        let child_app = app.clone();
+        let (_, child) = cx.add_window_view(move |_, _| AppHost { app: child_app });
+        child.run_until_parked();
+        child.update(|window, _| window.remove_window());
+        sender
+            .unbounded_send(TransferJobResult {
+                id: "upload".into(),
+                event: TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(
+                    SftpTransferSummary {
+                        remote_path: "/remote/upload".into(),
+                        local_path: PathBuf::from("/local/upload"),
+                        bytes: 3,
+                        skipped: false,
+                    },
+                ))),
+            })
+            .unwrap();
+        main.run_until_parked();
+        assert!(
+            !sender.is_closed(),
+            "closing a child window must not terminate the transfer event loop"
+        );
+        sender
+            .unbounded_send(TransferJobResult {
+                id: "listing".into(),
+                event: TransferJobEvent::Finished(Ok(TransferJobOutput::ChildEntries {
+                    remote_path: "/remote".into(),
+                    entries: Vec::new(),
+                })),
+            })
+            .unwrap();
+        main.run_until_parked();
+        main.update(|_, cx| {
+            let transfer = &app.read(cx).transfer;
+            assert_eq!(
+                transfer.transfer_job("upload").unwrap().status,
+                TransferJobStatus::Completed
+            );
+            // Directory listings are internal jobs removed by the event handler on completion.
+            assert!(transfer.transfer_job("listing").is_none());
+        });
+    }
 
     #[test]
     fn skipped_job_does_not_cancel_other_batch_jobs() {
