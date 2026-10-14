@@ -2345,3 +2345,37 @@ fn utf8_mouse_coordinates_are_protocol_bytes_in_legacy_charset_sessions() {
         );
     }
 }
+
+#[test]
+fn tab_cell_materializes_stop_columns_for_paint() {
+    // The alacritty fork's `put_tab` keeps the literal tab in the starting cell
+    // and leaves blank cells up to the next tab stop. The GPUI paint layer relies
+    // on these exact columns: the tab span covers the tab cell plus the blanks,
+    // so colored spans after it start at the stop. Changing tab handling in the
+    // grid invalidates that contract.
+    let mut screen = TerminalScreen::new(40, 2);
+    screen.advance(b"System load:  \t\x1b[0;33;40m0.33\x1b[0m");
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+
+    assert_eq!(row.cells[14].text(), "\t");
+    assert!(row.cells[15].text().is_empty());
+    assert_eq!(
+        &row.cells[16..20]
+            .iter()
+            .map(|c| c.text())
+            .collect::<String>(),
+        "0.33"
+    );
+    assert!(
+        row.cells[16..20]
+            .iter()
+            .all(|cell| cell.style.fg == Some(3) && cell.style.bg == Some(0))
+    );
+
+    // Span accounting must count the tab cell and the following blank as two
+    // columns, so the colored span's background starts at the tab stop.
+    assert_eq!(row.styled_spans[0].text, "System load:  \t ");
+    assert_eq!(row.styled_spans[1].text, "0.33");
+    assert_eq!(row.styled_spans[1].style.bg, Some(0));
+}

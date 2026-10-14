@@ -1,6 +1,52 @@
 use crate::keywords::{CompiledKeywordRule, keyword_highlight_spans_compiled};
 use crate::types::TerminalHighlightSpan;
 use crate::{resolve_cell_bg, resolve_cell_fg};
+use nyaterm_terminal::{
+    TERMINAL_TAB_STOP_WIDTH, terminal_char_cell_width, terminal_is_zero_width_mark,
+};
+
+/// The grid materializes a tab as blank cells up to the next tab stop, but the
+/// ANSI fast path only sees the raw escape text. Without expanding tabs here,
+/// background ranges computed from ANSI spans land one column short per tab and
+/// disagree with the grid-anchored cell path — the first paint then differs from
+/// every repaint.
+fn expand_ansi_tabs(ansi: &[nyaterm_terminal::StyledSpan]) -> Vec<nyaterm_terminal::StyledSpan> {
+    if !ansi.iter().any(|span| span.text.contains('\t')) {
+        return ansi.to_vec();
+    }
+    let mut out = Vec::with_capacity(ansi.len());
+    let mut col = 0usize;
+    for span in ansi {
+        if !span.text.contains('\t') {
+            col += span
+                .text
+                .chars()
+                .filter(|ch| !terminal_is_zero_width_mark(*ch))
+                .map(terminal_char_cell_width)
+                .sum::<usize>();
+            out.push(span.clone());
+            continue;
+        }
+        let mut text = String::with_capacity(span.text.len());
+        for ch in span.text.chars() {
+            if ch == '\t' {
+                let next = (col / TERMINAL_TAB_STOP_WIDTH + 1) * TERMINAL_TAB_STOP_WIDTH;
+                text.extend(std::iter::repeat_n(' ', next - col));
+                col = next;
+            } else {
+                text.push(ch);
+                if !terminal_is_zero_width_mark(ch) {
+                    col += terminal_char_cell_width(ch);
+                }
+            }
+        }
+        out.push(nyaterm_terminal::StyledSpan {
+            text,
+            style: span.style,
+        });
+    }
+    out
+}
 
 pub(super) fn ansi_to_highlight_spans_compiled(
     ansi: &[nyaterm_terminal::StyledSpan],
@@ -8,6 +54,7 @@ pub(super) fn ansi_to_highlight_spans_compiled(
     compiled_keyword_rules: &[CompiledKeywordRule],
     bold_default_foreground: bool,
 ) -> Vec<TerminalHighlightSpan> {
+    let ansi = &expand_ansi_tabs(ansi);
     // Build plain line for keyword overlay, then prefer keyword fg over default ANSI fg.
     let line: String = ansi.iter().map(|s| s.text.as_str()).collect();
     let keyword = keyword_highlight_spans_compiled(&line, compiled_keyword_rules);
@@ -232,5 +279,54 @@ mod tests {
         assert_eq!(highlighted[0].text, "界 ");
         assert_eq!(highlighted[1].text, "ERROR");
         assert_eq!(highlighted[1].color, Some(keyword_color));
+    }
+
+    #[test]
+    fn tab_expands_to_stop_columns_like_the_grid() {
+        // The grid materializes a tab as blank cells up to the next stop and
+        // keeps the literal tab in the starting cell. The ANSI fast path only
+        // sees raw escape text, so it must expand the tab itself — otherwise
+        // background ranges drift one column per tab and disagree with the
+        // grid-anchored cell path.
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        let ansi = vec![
+            nyaterm_terminal::StyledSpan {
+                text: "System load:  \t".to_string(),
+                style: nyaterm_terminal::CellStyle::default(),
+            },
+            nyaterm_terminal::StyledSpan {
+                text: "0.33".to_string(),
+                style: nyaterm_terminal::CellStyle {
+                    fg: Some(3),
+                    bg: Some(0),
+                    ..nyaterm_terminal::CellStyle::default()
+                },
+            },
+        ];
+
+        let highlighted = ansi_to_highlight_spans_compiled(&ansi, palette, &[], false);
+
+        assert!(!highlighted.iter().any(|span| span.text.contains('\t')));
+        // Tab at column 14 jumps to the stop at 16: both columns must be
+        // materialized so the colored span starts exactly at the stop.
+        assert_eq!(highlighted[0].text, "System load:    ");
+        assert_eq!(highlighted[1].text, "0.33");
+        assert!(highlighted[1].bg.is_some());
+    }
+
+    #[test]
+    fn tab_expansion_tracks_wide_characters() {
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        let ansi = vec![nyaterm_terminal::StyledSpan {
+            // `界` occupies two columns, so the tab starts at column 3 and
+            // must stop at column 8.
+            text: "a界\tX".to_string(),
+            style: nyaterm_terminal::CellStyle::default(),
+        }];
+
+        let highlighted = ansi_to_highlight_spans_compiled(&ansi, palette, &[], false);
+
+        assert_eq!(highlighted.len(), 1);
+        assert_eq!(highlighted[0].text, format!("a界{}X", " ".repeat(5)));
     }
 }

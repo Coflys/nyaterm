@@ -1,5 +1,11 @@
 use unicode_width::UnicodeWidthChar;
 
+/// Columns per tab stop (xterm default). The grid materializes a tab as blank
+/// cells up to the next stop — see `put_tab` in the alacritty fork, which also
+/// keeps the literal `\t` in the starting cell. Every paint path must agree on
+/// these columns, otherwise backgrounds and shaped text drift apart.
+pub const TERMINAL_TAB_STOP_WIDTH: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalTextCell {
     pub text: String,
