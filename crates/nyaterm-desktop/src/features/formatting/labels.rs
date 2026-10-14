@@ -395,13 +395,15 @@ pub(in crate::features) fn terminal_gutter_labels(
     } else {
         String::new()
     };
-    let line_number = if show_line_numbers && !wrapped && !row.is_some_and(|row| row.cleared) {
+    let line_number = if !show_line_numbers || row.is_some_and(|row| row.cleared) {
+        String::new()
+    } else if wrapped {
+        format!("{:>line_number_digits$}", "-")
+    } else {
         let absolute_line_number = row
             .and_then(|row| row.display_line_number)
             .unwrap_or(absolute_line_number);
         format!("{absolute_line_number:>line_number_digits$}")
-    } else {
-        String::new()
     };
     TerminalGutterLabels {
         timestamp,
@@ -783,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn soft_wrapped_output_shows_timestamps_on_every_row_and_preserves_line_numbers() {
+    fn soft_wrapped_output_shows_timestamps_and_right_aligned_continuation_dashes() {
         let formatter = TerminalTimestampFormatter::new("HH:mm:ss");
 
         for output in [b"abcdefgh".as_slice(), b"abcdefghijkl".as_slice()] {
@@ -800,7 +802,10 @@ mod tests {
                     terminal_gutter_labels(Some(row), 37 + row_index, true, true, 3, &formatter);
 
                 assert_eq!(labels.timestamp, formatter.format(timestamp));
-                assert_eq!(labels.line_number, if row_index == 0 { " 37" } else { "" });
+                assert_eq!(
+                    labels.line_number,
+                    if row_index == 0 { " 37" } else { "  -" }
+                );
             }
         }
     }
@@ -819,7 +824,7 @@ mod tests {
                 terminal_gutter_labels(Some(&row), row_index + 1, true, true, 1, &formatter);
 
             assert_eq!(labels.timestamp, formatter.format(timestamp));
-            assert_eq!(labels.line_number, if row_index == 0 { "1" } else { "" });
+            assert_eq!(labels.line_number, if row_index == 0 { "1" } else { "-" });
         }
     }
 
@@ -857,10 +862,12 @@ mod tests {
                         assert_eq!(labels.timestamp, expected_timestamp);
                         assert_eq!(
                             labels.line_number,
-                            if show_line_numbers && !snapshot_row.is_some_and(|row| row.wrapped) {
-                                "  2"
-                            } else {
+                            if !show_line_numbers {
                                 ""
+                            } else if snapshot_row.is_some_and(|row| row.wrapped) {
+                                "  -"
+                            } else {
+                                "  2"
                             }
                         );
                     }
