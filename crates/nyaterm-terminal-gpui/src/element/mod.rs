@@ -133,10 +133,10 @@ struct CachedTerminalPaintRow {
 }
 
 #[derive(Debug, Clone)]
-struct TerminalRowBackgroundRange {
-    bg: u32,
-    start: usize,
-    end: usize,
+pub(super) struct TerminalRowBackgroundRange {
+    pub(super) bg: u32,
+    pub(super) start: usize,
+    pub(super) end: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -900,11 +900,20 @@ fn terminal_ansi_spans_are_plain(ansi_spans: Option<&[nyaterm_terminal::StyledSp
 /// itself. The filler is a space: it advances the glyph index without painting,
 /// and the cell's own background is drawn as a rect underneath either way.
 fn pad_wide_cells(text: &str) -> String {
-    if !text.chars().any(|ch| terminal_char_cell_width(ch) > 1) {
+    // A tab glyph has no defined advance in terminal fonts, so it must be
+    // painted as a plain space; see `append_padded_wide_cells` for details.
+    if !text
+        .chars()
+        .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+    {
         return text.to_string();
     }
     let mut padded = String::with_capacity(text.len() + 4);
     for ch in text.chars() {
+        if ch == '\t' {
+            padded.push(' ');
+            continue;
+        }
         padded.push(ch);
         if terminal_is_zero_width_mark(ch) {
             continue;
@@ -918,11 +927,22 @@ fn pad_wide_cells(text: &str) -> String {
 
 fn append_padded_wide_cells(output: &mut String, input: &str) -> usize {
     let start_len = output.len();
-    if !input.chars().any(|ch| terminal_char_cell_width(ch) > 1) {
+    // A tab glyph has no defined advance in terminal fonts, so the shaper would
+    // place it at an arbitrary width and shift the rest of the run. The grid
+    // already materializes the stop as blank cells; painting the tab cell as a
+    // plain space keeps the shaped string aligned with the cell grid.
+    if !input
+        .chars()
+        .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+    {
         output.push_str(input);
         return output.len().saturating_sub(start_len);
     }
     for ch in input.chars() {
+        if ch == '\t' {
+            output.push(' ');
+            continue;
+        }
         output.push(ch);
         if terminal_is_zero_width_mark(ch) {
             continue;
@@ -969,6 +989,9 @@ fn append_terminal_glyph_span(
                     color: span.color.unwrap_or(default_fg),
                 });
             }
+            output.push(' ');
+        } else if ch == '\t' {
+            // Never feed a literal tab to the shaper; see append_padded_wide_cells.
             output.push(' ');
         } else {
             output.push(ch);
@@ -1047,7 +1070,7 @@ fn terminal_effective_keyword_rules_key(keyword_rules_key: u64, known_empty: boo
     if known_empty { 0 } else { keyword_rules_key }
 }
 
-fn terminal_background_ranges_for_spans(
+pub(super) fn terminal_background_ranges_for_spans(
     spans: &[TerminalHighlightSpan],
 ) -> Vec<TerminalRowBackgroundRange> {
     let mut out = Vec::new();
@@ -1083,7 +1106,7 @@ fn terminal_background_ranges_for_spans(
     out
 }
 
-fn terminal_background_ranges_for_cells(
+pub(super) fn terminal_background_ranges_for_cells(
     cells: &[nyaterm_terminal::RenderCell],
     palette: nyaterm_ui::ThemePalette,
 ) -> Vec<TerminalRowBackgroundRange> {
@@ -2402,4 +2425,67 @@ fn terminal_layout_height_px(
     override_rows: Option<usize>,
 ) -> f32 {
     cell_height.max(1.0) * terminal_layout_rows(snapshot_rows, override_rows) as f32
+}
+
+#[cfg(test)]
+mod tab_paint_tests {
+    use super::{
+        TerminalHighlightSpan, append_padded_wide_cells, pad_wide_cells,
+        terminal_background_ranges_for_spans,
+    };
+
+    fn span(text: &str, bg: Option<u32>) -> TerminalHighlightSpan {
+        TerminalHighlightSpan {
+            text: text.to_string(),
+            color: None,
+            bg,
+            keyword: false,
+            underline: false,
+            strikeout: false,
+            bold: false,
+            italic: false,
+        }
+    }
+
+    #[test]
+    fn shaped_text_never_receives_literal_tab() {
+        // The grid keeps a literal `\t` in the tab cell (alacritty fork
+        // `put_tab`). Terminal fonts define no tab advance, so feeding it to
+        // the shaper shifts the rest of the run by an arbitrary width. Paint
+        // the cell as a plain space instead.
+        let mut output = String::new();
+        let len = append_padded_wide_cells(&mut output, "a\tb");
+        assert_eq!(output, "a b");
+        assert_eq!(len, 3);
+    }
+
+    #[test]
+    fn plain_row_fast_path_paints_tab_as_space() {
+        // `printf 'Name\tValue\n'` produces a default-styled row that takes the
+        // plain-row fast path (pad_wide_cells -> shape_line). The literal tab
+        // must never reach the shaper on this path either. The input is the
+        // materialized grid text: the tab cell plus the blank cells up to the
+        // stop (tab at col 4 jumps to col 8).
+        let padded = pad_wide_cells("Name\t   Value");
+        assert!(!padded.contains('\t'));
+        // One space for the tab cell plus the three materialized blanks puts
+        // the value at column 8.
+        assert_eq!(padded, "Name    Value");
+    }
+
+    #[test]
+    fn background_ranges_start_colored_span_at_tab_stop() {
+        // Snapshot spans carry the tab cell plus the blank cell the grid left
+        // behind, so the tab span covers two columns and the colored span
+        // starts on the stop — here col 16, matching the cell path.
+        let spans = vec![
+            span("System load:  \t ", None),
+            span("0.33", Some(0x0000_0000)),
+        ];
+        let ranges = terminal_background_ranges_for_spans(&spans);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 16);
+        assert_eq!(ranges[0].end, 20);
+    }
 }

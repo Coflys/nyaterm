@@ -372,3 +372,42 @@ fn kitty_keyboard_reports_alternate_keys_and_associated_text() {
         b"\x1b[97:65:97;2:3u".to_vec()
     );
 }
+
+#[test]
+fn snapshot_tab_spans_agree_with_cell_backgrounds() {
+    // The paint layer feeds `snapshot_row.styled_spans` (already materialized by
+    // the grid: a tab cell plus the blank cells up to the stop) into the span
+    // compiler. These real spans — not hand-built ones — must produce background
+    // ranges identical to the cell path, otherwise colored text drifts outside
+    // its background on repaint.
+    use crate::ansi::ansi_to_highlight_spans_compiled;
+    use crate::element::{
+        terminal_background_ranges_for_cells, terminal_background_ranges_for_spans,
+    };
+
+    let palette = nyaterm_ui::theme_palette("github-light");
+    let mut screen = nyaterm_terminal::TerminalScreen::new(40, 2);
+    screen.advance(b"System load:  \t\x1b[0;33;40m0.33\x1b[0m");
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+
+    // The real input: materialized snapshot spans ("System load:  \t " + "0.33").
+    let ansi = row.styled_spans.as_ref();
+    let spans = ansi_to_highlight_spans_compiled(ansi, palette, &[], false);
+    let span_ranges = terminal_background_ranges_for_spans(&spans);
+    let cell_ranges = terminal_background_ranges_for_cells(&row.cells, palette);
+
+    assert_eq!(span_ranges.len(), 1, "span path background ranges");
+    assert_eq!(cell_ranges.len(), 1, "cell path background ranges");
+    assert_eq!(
+        (span_ranges[0].start, span_ranges[0].end),
+        (16, 20),
+        "span path columns"
+    );
+    assert_eq!(
+        (cell_ranges[0].start, cell_ranges[0].end),
+        (16, 20),
+        "cell path columns"
+    );
+    assert_eq!(span_ranges[0].bg, cell_ranges[0].bg);
+}
