@@ -900,11 +900,20 @@ fn terminal_ansi_spans_are_plain(ansi_spans: Option<&[nyaterm_terminal::StyledSp
 /// itself. The filler is a space: it advances the glyph index without painting,
 /// and the cell's own background is drawn as a rect underneath either way.
 fn pad_wide_cells(text: &str) -> String {
-    if !text.chars().any(|ch| terminal_char_cell_width(ch) > 1) {
+    // A tab glyph has no defined advance in terminal fonts, so it must be
+    // painted as a plain space; see `append_padded_wide_cells` for details.
+    if !text
+        .chars()
+        .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+    {
         return text.to_string();
     }
     let mut padded = String::with_capacity(text.len() + 4);
     for ch in text.chars() {
+        if ch == '\t' {
+            padded.push(' ');
+            continue;
+        }
         padded.push(ch);
         if terminal_is_zero_width_mark(ch) {
             continue;
@@ -2421,7 +2430,8 @@ fn terminal_layout_height_px(
 #[cfg(test)]
 mod tab_paint_tests {
     use super::{
-        TerminalHighlightSpan, append_padded_wide_cells, terminal_background_ranges_for_spans,
+        TerminalHighlightSpan, append_padded_wide_cells, pad_wide_cells,
+        terminal_background_ranges_for_spans,
     };
 
     fn span(text: &str, bg: Option<u32>) -> TerminalHighlightSpan {
@@ -2447,6 +2457,20 @@ mod tab_paint_tests {
         let len = append_padded_wide_cells(&mut output, "a\tb");
         assert_eq!(output, "a b");
         assert_eq!(len, 3);
+    }
+
+    #[test]
+    fn plain_row_fast_path_paints_tab_as_space() {
+        // `printf 'Name\tValue\n'` produces a default-styled row that takes the
+        // plain-row fast path (pad_wide_cells -> shape_line). The literal tab
+        // must never reach the shaper on this path either. The input is the
+        // materialized grid text: the tab cell plus the blank cells up to the
+        // stop (tab at col 4 jumps to col 8).
+        let padded = pad_wide_cells("Name\t   Value");
+        assert!(!padded.contains('\t'));
+        // One space for the tab cell plus the three materialized blanks puts
+        // the value at column 8.
+        assert_eq!(padded, "Name    Value");
     }
 
     #[test]
