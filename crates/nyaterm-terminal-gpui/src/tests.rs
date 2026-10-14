@@ -372,3 +372,56 @@ fn kitty_keyboard_reports_alternate_keys_and_associated_text() {
         b"\x1b[97:65:97;2:3u".to_vec()
     );
 }
+
+#[test]
+fn ansi_and_cell_paint_paths_agree_on_tab_stop_rows() {
+    // The original bug: a repaint (snapshot cells) and the first paint (ANSI
+    // spans) computed different background ranges for the same row, so colored
+    // text drifted outside its background. Both paths must land the colored
+    // span on the tab stop. This is the motd `System load:` shape: a tab
+    // followed by an SGR color bar.
+    use crate::ansi::ansi_to_highlight_spans_compiled;
+    use crate::element::{
+        terminal_background_ranges_for_cells, terminal_background_ranges_for_spans,
+    };
+
+    let palette = nyaterm_ui::theme_palette("github-light");
+
+    let mut screen = nyaterm_terminal::TerminalScreen::new(40, 2);
+    screen.advance(b"System load:  \t\x1b[0;33;40m0.33\x1b[0m");
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+
+    let cell_ranges = terminal_background_ranges_for_cells(&row.cells, palette);
+
+    let ansi = vec![
+        nyaterm_terminal::StyledSpan {
+            text: "System load:  \t".to_string(),
+            style: nyaterm_terminal::CellStyle::default(),
+        },
+        nyaterm_terminal::StyledSpan {
+            text: "0.33".to_string(),
+            style: nyaterm_terminal::CellStyle {
+                fg: Some(3),
+                bg: Some(0),
+                ..nyaterm_terminal::CellStyle::default()
+            },
+        },
+    ];
+    let spans = ansi_to_highlight_spans_compiled(&ansi, palette, &[], false);
+    let span_ranges = terminal_background_ranges_for_spans(&spans);
+
+    assert_eq!(cell_ranges.len(), 1, "cell path background ranges");
+    assert_eq!(span_ranges.len(), 1, "ansi path background ranges");
+    assert_eq!(
+        (cell_ranges[0].start, cell_ranges[0].end),
+        (16, 20),
+        "cell path columns"
+    );
+    assert_eq!(
+        (span_ranges[0].start, span_ranges[0].end),
+        (16, 20),
+        "ansi path columns must match the cell path"
+    );
+    assert_eq!(span_ranges[0].bg, cell_ranges[0].bg);
+}

@@ -133,10 +133,10 @@ struct CachedTerminalPaintRow {
 }
 
 #[derive(Debug, Clone)]
-struct TerminalRowBackgroundRange {
-    bg: u32,
-    start: usize,
-    end: usize,
+pub(super) struct TerminalRowBackgroundRange {
+    pub(super) bg: u32,
+    pub(super) start: usize,
+    pub(super) end: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1061,7 +1061,7 @@ fn terminal_effective_keyword_rules_key(keyword_rules_key: u64, known_empty: boo
     if known_empty { 0 } else { keyword_rules_key }
 }
 
-fn terminal_background_ranges_for_spans(
+pub(super) fn terminal_background_ranges_for_spans(
     spans: &[TerminalHighlightSpan],
 ) -> Vec<TerminalRowBackgroundRange> {
     let mut out = Vec::new();
@@ -1097,7 +1097,7 @@ fn terminal_background_ranges_for_spans(
     out
 }
 
-fn terminal_background_ranges_for_cells(
+pub(super) fn terminal_background_ranges_for_cells(
     cells: &[nyaterm_terminal::RenderCell],
     palette: nyaterm_ui::ThemePalette,
 ) -> Vec<TerminalRowBackgroundRange> {
