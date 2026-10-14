@@ -25,9 +25,9 @@ mod reflow_timestamps;
 pub mod selection;
 mod sixel;
 pub use cells::{
-    TERMINAL_TAB_STOP_WIDTH, TerminalTextCell, terminal_byte_index_for_cell_col,
-    terminal_cell_col_for_byte_index, terminal_cell_count, terminal_char_cell_width,
-    terminal_is_zero_width_mark, terminal_text_cell_slice, terminal_text_cells,
+    TerminalTextCell, terminal_byte_index_for_cell_col, terminal_cell_col_for_byte_index,
+    terminal_cell_count, terminal_char_cell_width, terminal_is_zero_width_mark,
+    terminal_text_cell_slice, terminal_text_cells,
 };
 pub use encoding::SessionEncoding;
 
