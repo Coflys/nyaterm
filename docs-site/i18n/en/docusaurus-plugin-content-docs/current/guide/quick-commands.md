@@ -58,6 +58,32 @@ docker exec -it {{container_name}} bash
 
 When you run the command, NyaTerm opens a variable input dialog so the template can be completed before sending it.
 
+## Escape sequences and pauses
+
+These sequences in a command script are interpreted when it is sent:
+
+| Script | Sent |
+|--------|------|
+| `\r` | carriage return |
+| `\n` | line feed |
+| `\t` | tab |
+| `\p` | one second pause before the text that follows |
+| `\\` | a literal backslash |
+
+Any other backslash sequence is left alone, so `\d` in a regular expression and `C:\Users` in a Windows path arrive as typed. Write `\\` when you want one literal backslash.
+
+Device logins, serial menus, and older systems often need "send a chunk, wait a second, send the next one". Put `\p` between the chunks:
+
+```text
+admin\psecret\pdisplay version
+```
+
+This script sends `admin`, waits one second, sends `secret`, then waits another second before sending `display version`. Stacking `\p\p` waits two seconds.
+
+A paused script keeps going to the session you clicked the command in, rather than following a later focus change. With synchronized input, or with **Send to all sessions**, every session receives the same staged writes.
+
+`\n` and `\t` only affect the script itself: the execution mode still decides whether the last chunk gets a carriage return, and a script that already ends in `\r` or `\n` does not get another one.
+
 ## Categories, search, sorting, and view modes
 
 The Quick Commands panel supports these management patterns:

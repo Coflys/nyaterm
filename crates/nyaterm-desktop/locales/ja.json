@@ -1833,6 +1833,7 @@
     "emptyCommand": "コマンドが空です",
     "errorCommandRequired": "コマンドは必須です",
     "errorLabelRequired": "ラベルは必須です",
+    "escapeHint": "記述した順に送信します：\\r 復帰、\\n 改行、\\t タブ、\\p 1 秒待機、\\\\ バックスラッシュ 1 文字。それ以外のシーケンス（\\d、C:\\Users）はそのまま送信されます。",
     "executeHint": "クリックすると自動的に実行します。",
     "executeImmediately": "今すぐ実行",
     "executionMode": "モード",

@@ -5,6 +5,7 @@ use nyaterm_store::StoreDomain;
 use crate::features::NyaTermApp;
 use crate::models::QuickCommandVariablePromptState;
 
+use super::escapes::{QuickCommandChunk, plan_quick_command};
 use super::helpers::{
     ai_command_card_category_name, unique_quick_command_category_id, validated_quick_command_text,
 };
@@ -239,16 +240,29 @@ impl NyaTermApp {
         &mut self,
         command_id: String,
         label: String,
-        mut command_text: String,
+        command_text: String,
         execute: bool,
         send_to_all: bool,
         cx: &mut Context<Self>,
     ) {
-        if execute && !command_text.ends_with('\r') && !command_text.ends_with('\n') {
-            command_text.push('\r');
-        }
-        let command_bytes = command_text.into_bytes();
+        // `\r \n \t \p \\` are interpreted here rather than at save time: the
+        // stored script keeps the escapes, so what the panel shows is what the
+        // user wrote.
+        let mut chunks = plan_quick_command(&command_text, execute);
         self.queue_quick_command_use_count(command_id);
+
+        if chunks.len() > 1 {
+            self.send_staged_quick_command(label, chunks, execute, send_to_all, cx);
+            return;
+        }
+
+        // The common case is one chunk, which goes through the ordinary input
+        // path exactly as before. A lone chunk never carries a pause: `\p` only
+        // delays the chunk that follows it.
+        let Some(chunk) = chunks.pop() else {
+            return;
+        };
+        let command_bytes = chunk.bytes;
 
         if send_to_all {
             let sessions = self
@@ -296,6 +310,148 @@ impl NyaTermApp {
             cx.notify();
         }
     }
+
+    /// Send a script that `\p` split into several writes.
+    ///
+    /// The target sessions are pinned once, here, when the user runs the
+    /// command: the rest of the script must keep arriving at what was clicked
+    /// on rather than following the focus during the pauses.
+    fn send_staged_quick_command(
+        &mut self,
+        label: String,
+        chunks: Vec<QuickCommandChunk>,
+        execute: bool,
+        send_to_all: bool,
+        cx: &mut Context<Self>,
+    ) {
+        // The ordinary input path also refuses to write while a session is
+        // still coming up, so a staged script waits for it the same way.
+        let starting = !send_to_all
+            && (self.session.start_has_active_pending() || self.session.start_has_active_failed());
+        let targets = if send_to_all {
+            self.session
+                .ordered_sessions()
+                .into_iter()
+                .filter(|session| !self.session.is_disconnected(&session.id))
+                .map(|session| session.id)
+                .collect::<Vec<_>>()
+        } else if starting {
+            Vec::new()
+        } else {
+            let primary = self
+                .session
+                .active_id_owned()
+                .filter(|session_id| !self.session.is_disconnected(session_id));
+            match primary {
+                Some(session_id) => {
+                    let peers = self.sync_peer_session_ids(&session_id);
+                    std::iter::once(session_id).chain(peers).collect()
+                }
+                None => Vec::new(),
+            }
+        };
+        if targets.is_empty() {
+            if starting {
+                // Nothing to report: the panel already shows the connection.
+                return;
+            }
+            self.shell
+                .set_status("start a terminal session before using a quick command".to_string());
+            cx.notify();
+            return;
+        }
+
+        let steps = chunks.len();
+        self.shell
+            .set_status(format!("sending quick command '{label}' in {steps} steps"));
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let mut live = targets;
+            let total = live.len();
+            for chunk in chunks {
+                if !chunk.delay.is_zero() {
+                    cx.background_executor().timer(chunk.delay).await;
+                }
+                let Ok(survivors) = this.update(cx, |this, cx| {
+                    let survivors = this.write_quick_command_chunk(&live, &chunk.bytes, cx);
+                    cx.notify();
+                    survivors
+                }) else {
+                    // The window went away, so there is no one left to report to.
+                    return;
+                };
+                live = survivors;
+                if live.is_empty() {
+                    break;
+                }
+            }
+            let failed = total - live.len();
+            let delivered = live.len();
+            let _ = this.update(cx, |this, cx| {
+                this.shell.set_status(quick_command_delivery_status(
+                    &label,
+                    execute,
+                    send_to_all,
+                    delivered,
+                    failed,
+                ));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Write one staged chunk to every target that is still connected, and
+    /// return the ones that took it.
+    fn write_quick_command_chunk(
+        &mut self,
+        targets: &[String],
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> Vec<String> {
+        let mut survivors = Vec::with_capacity(targets.len());
+        for session_id in targets {
+            if self.session.is_disconnected(session_id) {
+                continue;
+            }
+            if self.write_session_input_recorded(session_id, bytes).is_ok() {
+                survivors.push(session_id.clone());
+            }
+        }
+        if !survivors.is_empty() {
+            // A chunk without a return key records nothing on its own, so a
+            // paused script still lands in history as one command line.
+            let session_refs: Vec<&str> = survivors.iter().map(String::as_str).collect();
+            self.record_command_history_for_sessions(&session_refs, bytes);
+            self.arm_terminal_input_wake(cx);
+        }
+        survivors
+    }
+}
+
+fn quick_command_delivery_status(
+    label: &str,
+    execute: bool,
+    send_to_all: bool,
+    delivered: usize,
+    failed: usize,
+) -> String {
+    if send_to_all {
+        return if failed == 0 {
+            format!("sent quick command '{label}' to {delivered} session(s)")
+        } else {
+            format!("sent quick command '{label}' to {delivered} session(s), {failed} failed")
+        };
+    }
+    if failed > 0 {
+        return format!("quick command '{label}' failed on {failed} session(s)");
+    }
+    if execute {
+        format!("ran quick command '{label}'")
+    } else {
+        format!("inserted quick command '{label}'")
+    }
 }
 
 fn quick_command_executes(command: &QuickCommand) -> bool {
@@ -306,7 +462,7 @@ fn quick_command_executes(command: &QuickCommand) -> bool {
 mod tests {
     use nyaterm_core::QuickCommand;
 
-    use super::quick_command_executes;
+    use super::{quick_command_delivery_status, quick_command_executes};
 
     fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
         QuickCommand {
@@ -341,5 +497,33 @@ mod tests {
             "execute"
         ))));
         assert!(quick_command_executes(&command_with_execution_mode(None)));
+    }
+
+    #[test]
+    fn staged_delivery_reports_broadcast_reach() {
+        assert_eq!(
+            quick_command_delivery_status("Login", true, true, 4, 0),
+            "sent quick command 'Login' to 4 session(s)"
+        );
+        assert_eq!(
+            quick_command_delivery_status("Login", true, true, 2, 1),
+            "sent quick command 'Login' to 2 session(s), 1 failed"
+        );
+    }
+
+    #[test]
+    fn staged_delivery_keeps_the_single_session_wording() {
+        assert_eq!(
+            quick_command_delivery_status("Login", true, false, 1, 0),
+            "ran quick command 'Login'"
+        );
+        assert_eq!(
+            quick_command_delivery_status("Login", false, false, 1, 0),
+            "inserted quick command 'Login'"
+        );
+        assert_eq!(
+            quick_command_delivery_status("Login", true, false, 0, 1),
+            "quick command 'Login' failed on 1 session(s)"
+        );
     }
 }

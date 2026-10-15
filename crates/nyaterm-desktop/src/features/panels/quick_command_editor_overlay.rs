@@ -66,6 +66,7 @@ impl NyaTermApp {
         let append_hint = t!("quickCommands.appendHint");
         let command_script_label = t!("quickCommands.commandScript");
         let command_placeholder = t!("quickCommands.commandPlaceholder");
+        let escape_hint = t!("quickCommands.escapeHint");
         let cancel_label = t!("common.cancel");
         let save_label = t!("common.save");
         let wide_fields = viewport_width >= 768.;
@@ -648,7 +649,14 @@ impl NyaTermApp {
                                     .min_h(px(196.))
                                     .flex()
                                     .flex_col()
-                                    .child(command_input),
+                                    .child(command_input)
+                                    .child(
+                                        div()
+                                            .mt_1()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(palette.text_muted))
+                                            .child(escape_hint),
+                                    ),
                             ),
                     )
                     .child(

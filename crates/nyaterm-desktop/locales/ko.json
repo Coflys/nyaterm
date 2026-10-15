@@ -1833,6 +1833,7 @@
     "emptyCommand": "빈 명령",
     "errorCommandRequired": "명령이 필요합니다",
     "errorLabelRequired": "레이블이 필요합니다",
+    "escapeHint": "작성한 순서대로 전송됩니다: \\r 캐리지 리턴, \\n 줄 바꿈, \\t 탭, \\p 1초 대기, \\\\ 백슬래시 1개. 그 밖의 시퀀스(\\d, C:\\Users)는 그대로 전송됩니다.",
     "executeHint": "클릭 시 자동으로 실행합니다.",
     "executeImmediately": "즉시 실행",
     "executionMode": "모드",
