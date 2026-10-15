@@ -29,6 +29,18 @@ export function sendTerminalClearInput(
   }
 }
 
+export function clearTerminalScreen(
+  terminal: Terminal,
+  options: { focus?: boolean } = {},
+): void {
+  terminal.clearSelection();
+  // Erase the visible screen without clearing scrollback or sending device input.
+  terminal.write("\x1b[2J");
+  if (options.focus) {
+    terminal.focus();
+  }
+}
+
 export function clearTerminalAll(
   terminal: Terminal,
   options: { shellRedraw?: boolean } = {},

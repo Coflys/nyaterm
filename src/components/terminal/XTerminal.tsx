@@ -1866,7 +1866,9 @@ export default function XTerminal({
       lineTimestampsRef.current = new Map();
       gutterLineOffsetRef.current = 0;
       clearTerminalAll(terminal, {
-        shellRedraw: sessionTypeRef.current !== "Local" || !isWindows,
+        shellRedraw:
+          sessionTypeRef.current !== "Serial" &&
+          (sessionTypeRef.current !== "Local" || !isWindows),
       });
       focusTerminal();
       requestGutterRefresh();
@@ -2831,6 +2833,7 @@ export default function XTerminal({
     terminalReady,
     performanceMode,
     sessionId,
+    sessionType,
     showGutter,
     showContentPadding,
     workspacePaddingSetting: terminalSettings.show_workspace_padding,
@@ -2964,6 +2967,7 @@ export default function XTerminal({
       >
         <TerminalContextMenu
           sessionId={sessionId}
+          sessionType={sessionType}
           sessionName={sessionName}
           appLocked={appLocked}
           terminalRef={terminalRef}

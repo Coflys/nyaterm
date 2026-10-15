@@ -8,6 +8,7 @@ import {
   resolveIndexedKeys,
 } from "@/lib/shortcutRegistry";
 import {
+  clearTerminalScreen,
   markTerminalUserInput,
   sendTerminalClearInput,
 } from "@/lib/terminalControlInput";
@@ -221,7 +222,11 @@ export function installXTerminalKeyboardController({
     }
     if (matchesKeyEvent(resolveShortcutKeys("terminal.clear", kb), e)) {
       e.preventDefault();
-      sendTerminalClearInput(terminal);
+      if (sessionTypeRef.current === "Serial") {
+        clearTerminalScreen(terminal);
+      } else {
+        sendTerminalClearInput(terminal);
+      }
       return false;
     }
     if (matchesKeyEvent(resolveShortcutKeys("terminal.pasteSelected", kb), e)) {
