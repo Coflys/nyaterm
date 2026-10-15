@@ -250,6 +250,7 @@ describe("browser backend boundary", () => {
         terminalReady: true,
         performanceMode: "normal",
         sessionId: "web-ssh",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
