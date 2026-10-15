@@ -233,6 +233,12 @@ pub fn apply_component_theme(
     // only on a light/dark flip, from the built-in palette rather than ours.
     Theme::sync_base(cx);
     refresh_nya_root_fonts(ui_font, cx);
+    // The assignments above changed the component colors but requested no
+    // repaint: `Theme::change` runs only on a light/dark flip, so a same-mode
+    // theme switch (dark -> dark) left already-rendered windows on the old
+    // palette until some unrelated relayout. Mirror `Theme::edit`, which
+    // refreshes every window after a theme write.
+    cx.refresh_windows();
 }
 
 #[cfg(test)]
