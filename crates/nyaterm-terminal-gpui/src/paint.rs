@@ -199,7 +199,7 @@ pub(super) fn apply_selection_range(
 pub(super) fn apply_search_ranges(
     spans: Vec<TerminalHighlightSpan>,
     ranges: &[(usize, usize)],
-    active: bool,
+    _active: bool,
     palette: nyaterm_ui::ThemePalette,
 ) -> Vec<TerminalHighlightSpan> {
     if ranges.is_empty() {
@@ -210,18 +210,8 @@ pub(super) fn apply_search_ranges(
     while flat.len() < max_end {
         flat.push(FlatTerminalCell::blank());
     }
-    // Tauri xterm find decorations: inactive selection-ish, active stronger accent.
-    let bg = if active {
-        // Mix selection with warning accent by using warning-ish selection.
-        palette.warning
-    } else {
-        palette.terminal_selection
-    };
-    let fg = if active {
-        Some(palette.terminal_bg)
-    } else {
-        None
-    };
+    // Active results use the same fill; the element paints their outline separately.
+    let bg = palette.terminal_find_bg;
     for &(start, end) in ranges {
         if start >= end {
             continue;
@@ -230,9 +220,6 @@ pub(super) fn apply_search_ranges(
         for idx in start..end {
             if let Some(cell) = flat.get_mut(idx) {
                 cell.bg = Some(bg);
-                if let Some(fg) = fg {
-                    cell.color = Some(fg);
-                }
                 cell.keyword = false;
             }
         }

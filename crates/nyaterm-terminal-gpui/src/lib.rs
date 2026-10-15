@@ -55,7 +55,9 @@ fn resolve_cell_fg(
     match style.fg {
         Some(index) if style.bold && index < 8 => palette.terminal_ansi_color(index + 8),
         Some(index) => palette.terminal_ansi_color(index),
-        None if style.bold && bold_default_foreground => palette.terminal_ansi_color(15),
+        None if style.bold && bold_default_foreground => {
+            palette.terminal_fg_intense.unwrap_or(palette.terminal_fg)
+        }
         None => palette.terminal_fg,
     }
 }

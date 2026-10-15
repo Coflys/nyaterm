@@ -121,7 +121,7 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .gap_3()
-            .bg(self.shell_terminal_surface_color(self.terminal_theme_palette().terminal_bg))
+            .bg(self.shell_terminal_surface_color(self.theme_palette().ui_terminal_bg))
             .child(connection_spinner(
                 SharedString::from("pending-workspace-spinner"),
                 rgb(palette.primary).into(),
@@ -155,7 +155,7 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .gap_3()
-            .bg(self.shell_terminal_surface_color(self.terminal_theme_palette().terminal_bg))
+            .bg(self.shell_terminal_surface_color(self.theme_palette().ui_terminal_bg))
             .child(
                 svg()
                     .size(px(32.))

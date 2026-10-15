@@ -578,6 +578,8 @@ impl NyaTermApp {
             self.apply_npu_search(text, cx);
         } else if id.starts_with("remote.process.") && id.ends_with(".nice") {
             self.apply_process_nice_input(text, cx);
+        } else if let Some(field) = id.strip_prefix("theme.designer.") {
+            self.edit_theme_designer(field, text, cx);
         } else if id.as_ref() == "settings.interaction.word-separators" {
             self.apply_interaction_word_separators(text, cx);
         } else if id.as_ref() == "settings.terminal.x11-display" {

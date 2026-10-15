@@ -19,7 +19,7 @@ use crate::features::{
         gpui_ui_font_fallback,
     },
 };
-use crate::theme::{APPEARANCE_THEME_IDS, ThemePalette, appearance_theme_label};
+use crate::theme::ThemePalette;
 use nyaterm_ui::NyaTooltip;
 
 use super::super::{settings_form_row, settings_form_section, settings_switch};
@@ -44,6 +44,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap_5()
+            .child(self.theme_designer_section(cx))
             .child(settings_form_section(
                 palette,
                 None,
@@ -674,11 +675,8 @@ impl SettingsPanel {
                 t!("settings.followUiTheme"),
             ));
         }
-        for theme_id in APPEARANCE_THEME_IDS {
-            options.push(NyaSelectOption::new(
-                *theme_id,
-                appearance_theme_label(theme_id),
-            ));
+        for (theme_id, name) in self.settings.theme_options.iter().cloned() {
+            options.push(NyaSelectOption::new(theme_id, name));
         }
         let selected = current
             .map(|theme| {

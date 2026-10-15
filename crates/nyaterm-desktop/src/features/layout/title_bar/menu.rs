@@ -377,12 +377,14 @@ impl NyaTermApp {
 
     fn title_theme_menu_items(&self, _cx: &App) -> Vec<TitleMenuDefinition> {
         let current = self.settings.summary().theme.as_str();
-        crate::theme::APPEARANCE_THEME_IDS
+        self.settings
+            .theme_options()
             .iter()
-            .map(|&theme| {
+            .cloned()
+            .map(|(theme, name)| {
                 let selected =
                     current == theme || (current == "catppuccin" && theme == "catppuccin-mocha");
-                TitleMenuDefinition::action(crate::theme::appearance_theme_label(theme))
+                TitleMenuDefinition::action(name)
                     .checked(selected)
                     .command(TitleMenuCommand::SetTheme(theme.to_string()))
             })
@@ -399,14 +401,20 @@ impl NyaTermApp {
                 .checked(current_theme.trim().is_empty())
                 .command(TitleMenuCommand::SetTerminalTheme(None)),
         ];
-        items.extend(crate::theme::APPEARANCE_THEME_IDS.iter().map(|&theme| {
-            TitleMenuDefinition::action(crate::theme::appearance_theme_label(theme))
-                .checked(
-                    current_theme == theme
-                        || (current_theme == "catppuccin" && theme == "catppuccin-mocha"),
-                )
-                .command(TitleMenuCommand::SetTerminalTheme(Some(theme.to_string())))
-        }));
+        items.extend(
+            self.settings
+                .theme_options()
+                .iter()
+                .cloned()
+                .map(|(theme, name)| {
+                    TitleMenuDefinition::action(name)
+                        .checked(
+                            current_theme == theme
+                                || (current_theme == "catppuccin" && theme == "catppuccin-mocha"),
+                        )
+                        .command(TitleMenuCommand::SetTerminalTheme(Some(theme.to_string())))
+                }),
+        );
         items
     }
 

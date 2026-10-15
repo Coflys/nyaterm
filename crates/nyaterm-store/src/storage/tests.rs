@@ -10,6 +10,70 @@ use nyaterm_core::{
 };
 
 #[test]
+fn custom_themes_preserve_tauri_records_and_unknown_data_when_saving_appearance() {
+    let dir = unique_temp_dir("custom-themes-compatibility");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let theme = nyaterm_core::themes::builtins()[0].copy_as_custom();
+    let mut raw = serde_json::to_value(&theme).unwrap();
+    raw["future"] = serde_json::json!({"keep":true});
+    raw["colors"]["terminal"]["future"] = serde_json::json!("keep");
+    raw["colors"]["terminal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("foregroundIntense");
+    let unsupported = serde_json::json!({"id":"future-theme", "format":99});
+    store
+        .save_settings_value(&serde_json::json!({"appearance":{
+            "theme":theme.id, "custom_themes":[raw,unsupported], "future":42
+        }}))
+        .unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    assert!(summary.custom_themes.resolve(&theme.id).is_some());
+    summary.ui_font_size = 18;
+    store.save_appearance_settings(&summary).unwrap();
+    let mut edited = summary.custom_themes.resolve(&theme.id).unwrap();
+    edited.colors.primary = "#123456".into();
+    summary.custom_themes.upsert(edited).unwrap();
+    store.save_appearance_settings(&summary).unwrap();
+    let result = store.load_settings_value().unwrap();
+    assert_eq!(
+        result["appearance"]["custom_themes"][0]["future"],
+        serde_json::json!({"keep":true})
+    );
+    assert_eq!(
+        result["appearance"]["custom_themes"][0]["colors"]["terminal"]["future"],
+        "keep"
+    );
+    assert_eq!(result["appearance"]["custom_themes"][1], unsupported);
+    assert_eq!(result["appearance"]["future"], 42);
+    let before = result.clone();
+    summary.custom_themes.0[0]["colors"]["primary"] = serde_json::json!("invalid");
+    assert!(store.save_appearance_settings(&summary).is_err());
+    assert_eq!(store.load_settings_value().unwrap(), before);
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn unsupported_catalog_shape_survives_unrelated_appearance_edits() {
+    let dir = unique_temp_dir("future-theme-catalog");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let future = serde_json::json!({"version":2,"records":[]});
+    store
+        .save_settings_value(&serde_json::json!({"appearance":{"custom_themes":future}}))
+        .unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    summary.ui_font_size = 19;
+    store.save_appearance_settings(&summary).unwrap();
+    assert_eq!(
+        store.load_settings_value().unwrap()["appearance"]["custom_themes"],
+        future
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn settings_migrate_right_click_and_lock_keys_without_losing_unknown_fields() {
     let dir = unique_temp_dir("settings-interaction-lock-migration");
     let store = ConnectionStore::open(&dir).expect("store");

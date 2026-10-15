@@ -25,7 +25,6 @@ use crate::models::{
     RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
     TerminalSelection, TerminalViewState,
 };
-use crate::theme::ThemePalette;
 
 pub(in crate::features) struct TerminalFeatureState {
     pub(super) search: TerminalSearchState,
@@ -185,7 +184,6 @@ pub(super) struct TerminalMenuState {
 
 /// Paint-time caches invalidated whenever appearance settings change.
 pub(super) struct TerminalPaintCacheState {
-    pub(super) cached_terminal_theme_palette: Option<(String, String, String, ThemePalette)>,
     pub(super) cached_keyword_highlight_rules: Option<Arc<Vec<ResolvedKeywordHighlightRule>>>,
 }
 
@@ -301,7 +299,6 @@ impl TerminalFeatureState {
                 action_link_hover_generation: 0,
             },
             paint: TerminalPaintCacheState {
-                cached_terminal_theme_palette: None,
                 cached_keyword_highlight_rules: None,
             },
             windows: TerminalWindowState {
@@ -548,29 +545,7 @@ impl TerminalFeatureState {
         self.paint.cached_keyword_highlight_rules = Some(rules);
     }
 
-    pub(in crate::features) fn cached_terminal_theme_palette(
-        &self,
-    ) -> Option<(&str, &str, &str, ThemePalette)> {
-        self.paint.cached_terminal_theme_palette.as_ref().map(
-            |(ui, terminal, contrast, palette)| {
-                (ui.as_str(), terminal.as_str(), contrast.as_str(), *palette)
-            },
-        )
-    }
-
-    pub(in crate::features) fn cache_terminal_theme_palette(
-        &mut self,
-        ui_theme: String,
-        terminal_theme: String,
-        contrast: String,
-        palette: ThemePalette,
-    ) {
-        self.paint.cached_terminal_theme_palette =
-            Some((ui_theme, terminal_theme, contrast, palette));
-    }
-
     pub(in crate::features) fn invalidate_paint_caches(&mut self) {
-        self.paint.cached_terminal_theme_palette = None;
         self.paint.cached_keyword_highlight_rules = None;
     }
 }

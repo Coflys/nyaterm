@@ -25,6 +25,10 @@ impl ConnectionStore {
         let value = self.load_settings_value()?;
         Ok(AppSettingsSummary {
             theme: json_string(&value, &["appearance", "theme"], "github-dark"),
+            custom_themes: json_path(&value, &["appearance", "custom_themes"])
+                .cloned()
+                .map(nyaterm_core::themes::ThemeCatalog)
+                .unwrap_or_default(),
             background_image_path: json_path(&value, &["appearance", "background_image_path"])
                 .and_then(|v| v.as_str())
                 .map(str::trim)
@@ -1044,6 +1048,33 @@ impl ConnectionStore {
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
         set_nested_json_string(&mut value, &["appearance", "theme"], settings.theme.clone());
+        let previous = json_path(&value, &["appearance", "custom_themes"])
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([]));
+        if settings.custom_themes.0 != previous {
+            let records = settings.custom_themes.0.as_array().ok_or_else(|| {
+                StorageError::InvalidData("unsupported custom theme catalog".into())
+            })?;
+            for record in records {
+                if previous.as_array().is_some_and(|old| old.contains(record)) {
+                    continue;
+                }
+                let theme: nyaterm_core::themes::ThemeConfig =
+                    serde_json::from_value(record.clone())?;
+                let errors = theme.validate();
+                if !errors.is_empty() || nyaterm_core::themes::is_builtin(&theme.id) {
+                    return Err(StorageError::InvalidData(format!(
+                        "invalid custom theme: {}",
+                        errors.join(", ")
+                    )));
+                }
+            }
+        }
+        set_nested_json_value(
+            &mut value,
+            &["appearance", "custom_themes"],
+            settings.custom_themes.0.clone(),
+        );
         match settings
             .background_image_path
             .as_deref()

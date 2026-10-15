@@ -211,6 +211,10 @@ impl NyaTermApp {
         }
         match id {
             "remote.stats.network" => self.select_stats_network_interface(value, cx),
+            "theme-designer-source" => self.theme_designer_action(
+                crate::features::settings::theme_designer::ThemeIntent::Copy(value.to_string()),
+                cx,
+            ),
             "appearance-ui-theme" => self.update_appearance_theme(value, cx),
             "appearance-terminal-theme" => {
                 self.set_terminal_theme((value != FOLLOW_UI_THEME_VALUE).then_some(value), cx)

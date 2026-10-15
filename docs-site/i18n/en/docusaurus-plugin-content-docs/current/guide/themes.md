@@ -18,6 +18,16 @@ The theme list includes two high-contrast themes, suited for accessibility, brig
 
 Select them like any other UI theme from **Settings → Appearance** or the **View → Theme** top menu.
 
+## Custom themes
+
+Open **Settings → Appearance → Manage custom themes**, copy the current UI theme or another theme, and edit its name, swatch, UI colors, and terminal colors. Built-in themes remain read-only.
+
+Use the color picker or enter a color value. The terminal tab includes ANSI colors, intense foreground, selection, line highlight, and search colors. The preview updates while editing and warns when text contrast is low.
+
+**Save theme** stages the edits. **Save and use for UI / terminal** also selects it; saving an active theme refreshes its colors. Click the settings page’s **Apply** to persist changes. **Cancel** restores the previous theme catalog and colors. Leaving unsaved edits offers save, discard, or keep editing.
+
+**Import JSON / Export JSON** use Tauri-compatible single-theme files. Conflicting imported IDs receive new IDs. Exporting a valid draft does not save settings. Unsupported existing records are preserved but cannot be selected.
+
 ## Minimum contrast
 
 **Settings → Appearance → Minimum contrast** automatically adjusts the terminal foreground color when it sits too close to the background, so a remote program's color choices stay readable under your current theme. Available steps:

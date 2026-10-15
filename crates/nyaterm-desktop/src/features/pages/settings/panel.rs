@@ -133,6 +133,10 @@ impl SettingsSnapshot {
 #[derive(Clone, PartialEq)]
 pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) summary: Arc<AppSettingsSummary>,
+    pub(in crate::features) theme_options: Arc<[(String, String)]>,
+    pub(in crate::features) theme_diagnostics: Arc<[String]>,
+    pub(in crate::features) theme_designer:
+        crate::features::settings::theme_designer::ThemeDesignerState,
     pub(in crate::features) keyword_config: Arc<KeywordHighlightConfig>,
     pub(in crate::features) search_engine_presentation: SearchEnginePresentationState,
     pub(in crate::features) keyword_highlight_presentation: KeywordHighlightPresentationState,
@@ -153,6 +157,9 @@ impl SettingsPresentation {
     fn empty(cx: &mut Context<SettingsPanel>) -> Self {
         Self {
             summary: Arc::new(AppSettingsSummary::default()),
+            theme_options: nyaterm_ui::available_themes(&Default::default()).into(),
+            theme_diagnostics: Arc::from([]),
+            theme_designer: Default::default(),
             keyword_config: Arc::new(KeywordHighlightConfig::default()),
             search_engine_presentation: SearchEnginePresentationState {
                 expanded_index: None,
@@ -474,6 +481,8 @@ pub(in crate::features) struct SettingsPanel {
     last_image_opacity: u8,
     last_content_opacity: u8,
     slider_subscriptions: Vec<Subscription>,
+    pub(in crate::features::pages::settings) theme_picker_controls:
+        super::workspace::theme_designer::ThemePickerControls,
     selects: SelectRegistry,
     select_subscriptions: Vec<Subscription>,
     ui_font_select_options: FontSelectOptionCache,
@@ -536,6 +545,7 @@ impl SettingsPanel {
             last_image_opacity: 100,
             last_content_opacity: 82,
             slider_subscriptions: vec![image_subscription, content_subscription],
+            theme_picker_controls: Default::default(),
             selects: SelectRegistry::default(),
             select_subscriptions: Vec::new(),
             ui_font_select_options: FontSelectOptionCache::empty(),
@@ -617,6 +627,12 @@ impl SettingsPanel {
         self.text_inputs = snapshot.text_inputs.clone();
         self.number_inputs = snapshot.number_inputs.clone();
         self.snapshot = Some(snapshot);
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |panel, window, cx| {
+                panel.sync_theme_picker_controls(window, cx)
+            });
+        })
+        .detach();
         #[cfg(test)]
         {
             self.rebuild_count += 1;
@@ -1248,7 +1264,7 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
-        let dirty = snapshot.draft_dirty;
+        let dirty = snapshot.draft_dirty || snapshot.settings.theme_designer.dirty();
         let validation_error = snapshot.validation_error.clone();
         let apply_disabled = !dirty || validation_error.is_some();
         let confirm_disabled = validation_error.is_some();

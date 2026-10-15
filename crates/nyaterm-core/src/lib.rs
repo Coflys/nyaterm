@@ -49,6 +49,7 @@ pub mod terminal_wire_write {
     pub use super::terminal::wire_write::*;
 }
 pub mod text_edit;
+pub mod themes;
 pub mod transfer_speed;
 pub mod translation;
 pub mod updater;

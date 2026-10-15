@@ -179,6 +179,8 @@ pub enum RecordingRotationPolicy {
 pub struct AppSettingsSummary {
     pub theme: String,
     #[serde(default)]
+    pub custom_themes: crate::themes::ThemeCatalog,
+    #[serde(default)]
     pub background_image_path: Option<String>,
     #[serde(default = "default_background_image_fit")]
     pub background_image_fit: String,
@@ -499,6 +501,7 @@ impl Default for AppSettingsSummary {
             terminal_font_size: 16,
             cursor_style: default_cursor_style(),
             cursor_blink: default_cursor_blink(),
+            custom_themes: crate::themes::ThemeCatalog::default(),
             terminal_theme: None,
             minimum_contrast_ratio: default_minimum_contrast_ratio(),
             ui_font_family: default_ui_font_family(),

@@ -693,7 +693,7 @@ fn zebra_stripes_merge_input_rows_and_target_row_takes_priority() {
     assert_eq!(stripes.len(), 3);
     assert_eq!(
         stripes[1].background,
-        gpui::rgba((palette.accent << 8) | 0x24).into()
+        gpui::rgb(palette.terminal_line_highlight).into()
     );
 }
 
@@ -1833,13 +1833,22 @@ fn dynamic_decoration_backgrounds_include_occurrence_and_search() {
         &mut out,
     );
 
-    assert_eq!(out.len(), 3);
+    assert_eq!(out.len(), 4);
     assert!(out.iter().all(|quad| quad.bounds.origin.y == px(-8.0)));
     assert_eq!(
         out[0].background,
         gpui::rgba((palette.text_muted << 8) | 0x58).into()
     );
-    assert_eq!(out[2].background, gpui::rgb(palette.warning).into());
+    assert_eq!(
+        out[2].background,
+        gpui::rgb(palette.terminal_find_bg).into()
+    );
+    assert_eq!(
+        out[3].border_color,
+        gpui::rgb(palette.terminal_find_border).into()
+    );
+    assert_eq!(out[3].bounds, out[2].bounds);
+    assert_eq!(out[3].border_widths.top, px(1.));
 }
 
 #[test]
