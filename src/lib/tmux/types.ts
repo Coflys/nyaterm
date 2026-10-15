@@ -5,7 +5,11 @@ import type { PaneSplitDirection } from "@/types/global";
 export interface TmuxWindowInfo {
   id: string;
   name: string;
+  /** `#{window_index}` — the `N:` prefix users see in window labels. */
+  index: number;
   active: boolean;
+  /** The window's own pane tree; null until its layout has been reported. */
+  tree?: TmuxLayoutNode | null;
 }
 
 export type TmuxLayoutNode =
@@ -29,5 +33,4 @@ export interface TmuxSessionState {
   windows: TmuxWindowInfo[];
   activeWindowId?: string | null;
   activePaneSessionId?: string | null;
-  tree?: TmuxLayoutNode | null;
 }

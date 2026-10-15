@@ -55,10 +55,22 @@ export interface AppSupportInfo {
 }
 
 /** AI Agent command execution wrapper profile. */
-export type AIExecutionProfile = "auto" | "posix" | "powershell" | "cmd" | "send_only" | "disabled";
+export type AIExecutionProfile =
+  | "auto"
+  | "posix"
+  | "powershell"
+  | "cmd"
+  | "send_only"
+  | "disabled";
 export type SshProfile = "standard" | "network_device";
 export type SshRuntimeMode = "standard" | "terminal" | "sftp";
-export type SshTerminalType = "xterm-256color" | "xterm" | "vt100" | "vt220" | "ansi" | "linux";
+export type SshTerminalType =
+  | "xterm-256color"
+  | "xterm"
+  | "vt100"
+  | "vt220"
+  | "ansi"
+  | "linux";
 
 /** A group of sessions whose terminal input is broadcast to all members. */
 export interface SyncGroup {
@@ -75,7 +87,13 @@ export interface SyncGroup {
 export type PaneSplitDirection = "horizontal" | "vertical";
 
 /** Connection type discriminator matching Rust ConnectionType. */
-export type ConnectionTypeTag = "ssh" | "local_terminal" | "telnet" | "serial" | "rdp" | "vnc";
+export type ConnectionTypeTag =
+  | "ssh"
+  | "local_terminal"
+  | "telnet"
+  | "serial"
+  | "rdp"
+  | "vnc";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -194,7 +212,11 @@ export interface FileDocumentPane extends WorkspacePaneBase {
   };
 }
 
-export type SessionPane = TerminalSessionPane | RdpSessionPane | VncSessionPane | FileDocumentPane;
+export type SessionPane =
+  | TerminalSessionPane
+  | RdpSessionPane
+  | VncSessionPane
+  | FileDocumentPane;
 
 /** Split node containing two child panes. */
 export interface SplitPane {
@@ -223,6 +245,30 @@ export interface Tab {
   tabColor?: string;
   /** True when the tab is protected from accidental close actions. */
   locked?: boolean;
+  /**
+   * Set while the tab renders one tmux window of a `-CC` control session:
+   * the root pane tree mirrors that window's layout and its leaves are
+   * virtual pane sessions owned by `controlSessionId`. Not persisted —
+   * the tab is dropped on serialize and dies with the session.
+   */
+  tmux?: {
+    controlSessionId: string;
+    windowId: string;
+    /** Latest `#{window_name}`; follows `%window-renamed`. */
+    windowName: string;
+    /** `#{window_index}` — the `N:` prefix on the sub-tab label. */
+    windowIndex: number;
+    /** True while this is the tmux client's current window — the sub-tab
+     * the host container shows (unless the control pane is selected). */
+    active: boolean;
+  };
+  /**
+   * Set while this tab hosts the SSH channel running `tmux -CC`: one of
+   * its leaves keeps `sessionId === controlSessionId` and acts as the
+   * control pane — frozen shell output, tmux bar attached, bare Enter
+   * detaches. Runtime-only marker, cleared when the control session ends.
+   */
+  tmuxHost?: { controlSessionId: string };
 }
 
 /** SSH connection config for creating a session. */
@@ -282,7 +328,9 @@ export interface SshAgentForwardingIdentity {
   custom_endpoint_index?: number;
 }
 
-export type SshAgentForwardingEndpointErrorCode = "connect_failed" | "identity_enumeration_failed";
+export type SshAgentForwardingEndpointErrorCode =
+  | "connect_failed"
+  | "identity_enumeration_failed";
 
 export interface SshAgentForwardingEndpointError {
   custom_endpoint_index: number;
@@ -660,7 +708,12 @@ export interface VncReconnectSettings {
 }
 
 export type RecordingMode = "transcript" | "raw";
-export type RecordingState = "starting" | "recording" | "degraded" | "failed" | "stopping";
+export type RecordingState =
+  | "starting"
+  | "recording"
+  | "degraded"
+  | "failed"
+  | "stopping";
 export type ExistingFileBehavior = "unique" | "append" | "overwrite";
 export type RotationPolicy =
   | { type: "session" }
@@ -784,7 +837,11 @@ export type RightPanelId =
   | "recording"
   | "syncBackupHistory";
 
-export type ActivityBarZone = "left_top" | "left_bottom" | "right_top" | "right_bottom";
+export type ActivityBarZone =
+  | "left_top"
+  | "left_bottom"
+  | "right_top"
+  | "right_bottom";
 
 export interface ActivityBarLayout {
   left_top: string[];
@@ -800,7 +857,13 @@ export interface ActivityBarLayout {
 /** Layout preferences: panel widths, active panels, theme. */
 export type QuickCommandViewMode = "list" | "compact" | "tile";
 export type QuickCommandSortMode = "created" | "name" | "useCount" | "custom";
-export type HeaderStatusMode = "session" | "resources" | "host" | "datetime" | "gpu" | "npu";
+export type HeaderStatusMode =
+  | "session"
+  | "resources"
+  | "host"
+  | "datetime"
+  | "gpu"
+  | "npu";
 
 export type RestorableTerminalWindowNode =
   | {
@@ -841,7 +904,12 @@ export interface UiConfig {
   /** Relative height weight per panel id for stacked multi-open panels. */
   panel_stack_sizes: Record<string, number>;
   network_panel_active_tab?: "tunnel" | "proxy";
-  security_auth_panel_active_tab?: "keys" | "passwords" | "otp" | "credentials" | "known-hosts";
+  security_auth_panel_active_tab?:
+    | "keys"
+    | "passwords"
+    | "otp"
+    | "credentials"
+    | "known-hosts";
   show_quick_cmd_bar: boolean;
   show_serial_send_panel: boolean;
   serial_send_height: number;
@@ -1150,7 +1218,10 @@ export interface QuickCommandsConfig {
   categories: QuickCommandCategory[];
 }
 
-export type QuickCommandImportSource = "windterm_quickbar" | "xshell_xts" | "nyaterm_json";
+export type QuickCommandImportSource =
+  | "windterm_quickbar"
+  | "xshell_xts"
+  | "nyaterm_json";
 
 export interface QuickCommandImportResult {
   imported_commands: number;
@@ -1449,7 +1520,11 @@ export type AIModelReasoningEffort =
   | "max"
   | "ultra";
 export type AIApiFormat = "chat_completions" | "responses";
-export type AIProviderApiProtocol = "openai_compatible" | "anthropic" | "gemini" | "ollama";
+export type AIProviderApiProtocol =
+  | "openai_compatible"
+  | "anthropic"
+  | "gemini"
+  | "ollama";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1743,7 +1818,12 @@ export type RiskReasonCode =
   | "unknownCommand"
   | "ordinaryWrite"
   | "readOnlyDiagnostic";
-export type AgentStepStatus = "running" | "completed" | "needs_approval" | "rejected" | "failed";
+export type AgentStepStatus =
+  | "running"
+  | "completed"
+  | "needs_approval"
+  | "rejected"
+  | "failed";
 
 export interface AgentStepAction {
   kind: AgentActionKind;
@@ -1776,7 +1856,12 @@ export interface AgentStepPayload {
 }
 
 export type AiCaptureEvent =
-  | { type: "commandStart"; command: string; stepIndex: number; source?: "AI" | "MCP" }
+  | {
+      type: "commandStart";
+      command: string;
+      stepIndex: number;
+      source?: "AI" | "MCP";
+    }
   | {
       type: "commandEnd";
       output: string;

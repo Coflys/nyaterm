@@ -18,7 +18,7 @@ import {
   removeSessionFromGroup,
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
-import { findTmuxControlSessionId } from "@/lib/tmux/tree";
+import { tmuxWindowTabs } from "@/lib/tmux/tree";
 import {
   collectSessionPanes,
   findPaneById,
@@ -35,7 +35,7 @@ import type {
   Tab,
   TerminalSessionPane,
 } from "@/types/global";
-import TmuxBar from "./TmuxBar";
+import TmuxWindowStrip from "./TmuxWindowStrip";
 import XTerminal from "./XTerminal";
 
 interface PaneWorkspaceProps {
@@ -44,14 +44,31 @@ interface PaneWorkspaceProps {
   paneFocusMode?: boolean;
   sessionInfoById?: Map<string, SessionInfo> | null;
   onActivatePane: (paneId: string) => void;
+  /** Tab-aware pane activation — the tmux host container needs it to
+   * activate panes inside its hidden window tabs. */
+  onActivatePaneInTab?: (tabId: string, paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
-  onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
-  onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  onDisconnectedCloseRequested?: (
+    tabId: string,
+    paneId: string,
+  ) => void | Promise<void>;
+  onConnectionError?: (
+    tabId: string,
+    paneId: string,
+    sessionId: string,
+    error: string,
+  ) => void;
   recordingStatuses?: RecordingStatus[];
-  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
-  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
+  onToggleSessionRecording?: (
+    sessionId: string,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
+  onSaveSessionTranscript?: (
+    sessionId: string,
+    sessionName?: string,
+  ) => Promise<void> | void;
 }
 
 function SplitView({
@@ -79,16 +96,33 @@ function SplitView({
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
-  onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
-  onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  onDisconnectedCloseRequested?: (
+    tabId: string,
+    paneId: string,
+  ) => void | Promise<void>;
+  onConnectionError?: (
+    tabId: string,
+    paneId: string,
+    sessionId: string,
+    error: string,
+  ) => void;
   recordingStatuses?: RecordingStatus[];
-  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
-  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
+  onToggleSessionRecording?: (
+    sessionId: string,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
+  onSaveSessionTranscript?: (
+    sessionId: string,
+    sessionName?: string,
+  ) => Promise<void> | void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isHorizontalSplit = split.direction === "horizontal";
   const firstContainsActivePane = !!findPaneById(split.first, tab.activePaneId);
-  const secondContainsActivePane = !!findPaneById(split.second, tab.activePaneId);
+  const secondContainsActivePane = !!findPaneById(
+    split.second,
+    tab.activePaneId,
+  );
   // tmux-driven splits mirror a remote layout; dragging a divider would fight
   // the cell-based geometry, so the divider is fixed and non-interactive.
   // Only splits entirely inside one control session's projection are locked —
@@ -126,7 +160,8 @@ function SplitView({
       <div
         className="min-h-0 min-w-0 relative"
         style={{
-          display: paneFocusMode && !firstContainsActivePane ? "none" : undefined,
+          display:
+            paneFocusMode && !firstContainsActivePane ? "none" : undefined,
           flexBasis: paneFocusMode ? "100%" : `${split.ratio * 100}%`,
           flexGrow: 0,
           flexShrink: 0,
@@ -165,7 +200,8 @@ function SplitView({
       <div
         className="min-h-0 min-w-0 flex-1 relative"
         style={{
-          display: paneFocusMode && !secondContainsActivePane ? "none" : undefined,
+          display:
+            paneFocusMode && !secondContainsActivePane ? "none" : undefined,
           flexBasis: paneFocusMode ? "100%" : `${(1 - split.ratio) * 100}%`,
           flexGrow: 1,
           flexShrink: 1,
@@ -220,22 +256,42 @@ function PaneNodeView({
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
-  onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
-  onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  onDisconnectedCloseRequested?: (
+    tabId: string,
+    paneId: string,
+  ) => void | Promise<void>;
+  onConnectionError?: (
+    tabId: string,
+    paneId: string,
+    sessionId: string,
+    error: string,
+  ) => void;
   recordingStatuses?: RecordingStatus[];
-  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
-  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
+  onToggleSessionRecording?: (
+    sessionId: string,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
+  onSaveSessionTranscript?: (
+    sessionId: string,
+    sessionName?: string,
+  ) => Promise<void> | void;
 }) {
   const { t } = useTranslation();
   const { syncGroups, broadcastToAll } = useApp();
   const [isReconnectPending, setIsReconnectPending] = useState(false);
-  const [closedSftpSessionId, setClosedSftpSessionId] = useState<string | null>(null);
+  const [closedSftpSessionId, setClosedSftpSessionId] = useState<string | null>(
+    null,
+  );
   const splitNode = isSplitPane(node);
   const requestedSftp = !splitNode && node.sshRuntimeMode === "sftp";
   const effectiveSftp =
-    !splitNode && sessionInfoById?.get(node.sessionId)?.ssh_runtime_mode === "sftp";
+    !splitNode &&
+    sessionInfoById?.get(node.sessionId)?.ssh_runtime_mode === "sftp";
   const sessionId = splitNode ? null : node.sessionId;
-  const observedSftpRef = useRef({ sessionId, enabled: requestedSftp || effectiveSftp });
+  const observedSftpRef = useRef({
+    sessionId,
+    enabled: requestedSftp || effectiveSftp,
+  });
   if (observedSftpRef.current.sessionId !== sessionId) {
     observedSftpRef.current = {
       sessionId,
@@ -297,7 +353,11 @@ function PaneNodeView({
   const isActive = visible && tab.activePaneId === node.id;
   const showReconnectAction =
     node.paneKind !== "file" &&
-    !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
+    !!(
+      node.type === "Local" ||
+      node.connectionId ||
+      hasMatchingTemporaryConfig(node)
+    ) &&
     !!onReconnectPane;
   const statusTitle = isReconnectPending
     ? t("tabCtx.reconnecting")
@@ -437,7 +497,10 @@ function PaneNodeView({
           aria-live="polite"
           data-testid="sftp-only-placeholder"
         >
-          <FolderOpen className="size-9" style={{ color: "var(--df-primary)" }} />
+          <FolderOpen
+            className="size-9"
+            style={{ color: "var(--df-primary)" }}
+          />
           <div className="space-y-1">
             <div className="font-medium" style={{ color: "var(--df-text)" }}>
               {closedSftpSessionId === node.sessionId
@@ -482,7 +545,9 @@ function PaneNodeView({
           syncGroups={syncGroups}
           broadcastToAll={broadcastToAll}
           sessionInfoById={sessionInfoById}
-          recordingStatus={recordingStatuses?.find((status) => status.sessionId === node.sessionId)}
+          recordingStatus={recordingStatuses?.find(
+            (status) => status.sessionId === node.sessionId,
+          )}
           onToggleRecording={onToggleSessionRecording}
           onSaveTranscript={onSaveSessionTranscript}
         />
@@ -523,20 +588,32 @@ function PaneXTerminal({
   broadcastToAll: boolean;
   sessionInfoById?: Map<string, SessionInfo> | null;
   recordingStatus?: RecordingStatus;
-  onToggleRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
-  onSaveTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
+  onToggleRecording?: (
+    sessionId: string,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
+  onSaveTranscript?: (
+    sessionId: string,
+    sessionName?: string,
+  ) => Promise<void> | void;
 }) {
   const { tabs, setSyncGroups, isLocked } = useApp();
 
   const syncPeerSessionIds = useMemo(() => {
-    return getSessionInputPeerIds(sessionId, syncGroups, tabs, broadcastToAll).filter(
-      (peerSessionId) => {
-        if (sessionInfoById?.get(peerSessionId)?.ssh_runtime_mode === "sftp") return false;
-        const peerTab = findTabBySessionId(tabs, peerSessionId);
-        const peerPane = peerTab ? findPaneBySessionId(peerTab, peerSessionId) : null;
-        return peerPane?.sshRuntimeMode !== "sftp";
-      },
-    );
+    return getSessionInputPeerIds(
+      sessionId,
+      syncGroups,
+      tabs,
+      broadcastToAll,
+    ).filter((peerSessionId) => {
+      if (sessionInfoById?.get(peerSessionId)?.ssh_runtime_mode === "sftp")
+        return false;
+      const peerTab = findTabBySessionId(tabs, peerSessionId);
+      const peerPane = peerTab
+        ? findPaneBySessionId(peerTab, peerSessionId)
+        : null;
+      return peerPane?.sshRuntimeMode !== "sftp";
+    });
   }, [broadcastToAll, sessionId, sessionInfoById, syncGroups, tabs]);
 
   const activeGroup = useMemo(
@@ -621,7 +698,89 @@ function PaneXTerminal({
   );
 }
 
-function PaneWorkspace({
+/**
+ * A tab hosting a `tmux -CC` control channel is a container, not a plain
+ * pane tree: the selected window's panes fill the middle and the
+ * WindTerm-style status bar (window sub-tabs + controls) sits at the bottom.
+ *
+ * The host leaf stays mounted in a stable position across the tmuxHost →
+ * plain-tab transition: it is rendered unconditionally as the first child
+ * of the middle section while window views are absolute overlays that
+ * mount/unmount around it. Without this, clearing `tmuxHost` on detach
+ * would unmount the leaf's XTerminal — and because the backend drains the
+ * detached output backlog to the *old* listener at ReturnToShell time,
+ * the freshly mounted terminal would have nothing to replay and render a
+ * dead black screen instead of the resumed shell.
+ */
+function PaneWorkspace(props: PaneWorkspaceProps) {
+  const { tab, visible, onActivatePane, onActivatePaneInTab, ...rest } = props;
+  const { tabs, setActivePane } = useApp();
+  const controlSessionId = tab.tmuxHost?.controlSessionId ?? null;
+  const windowTabs = useMemo(
+    () => (controlSessionId ? tmuxWindowTabs(tabs, controlSessionId) : []),
+    [tabs, controlSessionId],
+  );
+  const isTmuxHost = controlSessionId !== null;
+
+  const activatePaneInTab = useCallback(
+    (tabId: string, paneId: string) => {
+      if (onActivatePaneInTab) {
+        onActivatePaneInTab(tabId, paneId);
+      } else {
+        setActivePane(tabId, paneId);
+      }
+    },
+    [onActivatePaneInTab, setActivePane],
+  );
+
+  return (
+    <div
+      className="absolute inset-0 flex flex-col"
+      style={{ display: visible ? "flex" : "none" }}
+    >
+      <div className="relative min-h-0 flex-1">
+        {/* Host leaf — always mounted here so its xterm survives mode
+            switches; while tmux runs it stays hidden behind the window
+            views and reappears on detach with the resumed shell. */}
+        <PaneWorkspaceContent
+          key="host-content"
+          {...rest}
+          tab={tab}
+          visible={visible && !isTmuxHost}
+          onActivatePane={onActivatePane}
+        />
+        {isTmuxHost &&
+          windowTabs.map((windowTab) => {
+            const viewed = !!windowTab.tmux?.active;
+            return (
+              <div
+                key={windowTab.id}
+                className="absolute inset-0"
+                style={{ display: viewed ? "block" : "none" }}
+              >
+                <PaneWorkspaceContent
+                  {...rest}
+                  tab={windowTab}
+                  visible={visible && viewed}
+                  onActivatePane={(paneId) =>
+                    activatePaneInTab(windowTab.id, paneId)
+                  }
+                />
+              </div>
+            );
+          })}
+      </div>
+      {isTmuxHost && (
+        <TmuxWindowStrip
+          controlSessionId={controlSessionId}
+          windowTabs={windowTabs}
+        />
+      )}
+    </div>
+  );
+}
+
+function PaneWorkspaceContent({
   tab,
   visible,
   paneFocusMode = false,
@@ -636,18 +795,11 @@ function PaneWorkspace({
   onToggleSessionRecording,
   onSaveSessionTranscript,
 }: PaneWorkspaceProps) {
-  const tmuxControlSessionId = useMemo(
-    () => findTmuxControlSessionId(tab),
-    [tab],
-  );
   return (
     <div
       className="absolute inset-0 flex flex-col"
       style={{ display: visible ? "flex" : "none" }}
     >
-      {tmuxControlSessionId ? (
-        <TmuxBar controlSessionId={tmuxControlSessionId} />
-      ) : null}
       <div className="relative min-h-0 flex-1">
         <PaneNodeView
           node={tab.root}

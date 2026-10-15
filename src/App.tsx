@@ -514,7 +514,21 @@ function App() {
     ? getActiveSessionTabDisplayName(activeTab, getDynamicTitle).trim()
     : "";
   const windowTitle = activeTabName ? `${activeTabName} - NyaTerm` : "NyaTerm";
-  const activePane = activeTab ? getActivePane(activeTab) : null;
+  const activePane = (() => {
+    if (!activeTab) return null;
+    // A tmux host tab's own leaf is the hidden control channel — what the
+    // user sees is the active window sub-tab's pane, so that is the pane
+    // AI tools, quick commands and friends should talk to.
+    const controlSessionId = activeTab.tmuxHost?.controlSessionId;
+    if (controlSessionId) {
+      const activeWindow = tabs.find(
+        (tab) =>
+          tab.tmux?.controlSessionId === controlSessionId && tab.tmux.active,
+      );
+      if (activeWindow) return getActivePane(activeWindow);
+    }
+    return getActivePane(activeTab);
+  })();
   const activeSessionId =
     activePane &&
     activePane.paneKind === "terminal" &&
@@ -1305,16 +1319,18 @@ function App() {
         .filter((pane) => !retainedPaneIds.has(pane.id));
       const releasedSessionIds = getReleasedSessionIds(previousTabs, nextTabs);
       const previousPanes = previousTabs.flatMap((tab) => collectSessionPanes(tab.root));
-      // tmux virtual panes share one control channel: when the last pane of a
-      // control session is released (its tab closed), detach via the control
-      // session once — the remote tmux session keeps running.
+      // tmux virtual panes share one control channel: a released pane is
+      // closed via `kill-pane` only while sibling panes remain (single-pane
+      // close). When the last pane of a control session disappears — the
+      // final window died — do NOT close the control channel: the remote
+      // session is ending on its own (or `kill-window` already did it) and
+      // the channel must stay alive so the host leaf falls back to a shell.
       const remainingTmuxControls = new Set(
         nextTabs
           .flatMap((tab) => collectSessionPanes(tab.root))
           .map((pane) => pane.tmux?.controlSessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      const detachedControls = new Set<string>();
       const results = await Promise.all(
         releasedSessionIds.map((sessionId) => {
           const pane = previousPanes.find(
@@ -1323,12 +1339,7 @@ function App() {
           if (!pane) return Promise.resolve(true);
           const controlId = pane.tmux?.controlSessionId;
           if (controlId && !remainingTmuxControls.has(controlId)) {
-            if (detachedControls.has(controlId)) return Promise.resolve(true);
-            detachedControls.add(controlId);
-            return closePaneBackendSession({
-              sessionId: controlId,
-              type: "SSH",
-            });
+            return Promise.resolve(true);
           }
           return closePaneBackendSession(pane);
         }),
@@ -2557,7 +2568,10 @@ function App() {
   );
 
   const handleCloseAllTabs = useCallback(async () => {
-    const tabsToClose = tabs.filter((tab) => !tab.locked);
+    // tmux window tabs are data-only sub-tabs of the host container —
+    // closing them via kill-window would destroy the remote session that
+    // closing the connection should leave detached.
+    const tabsToClose = tabs.filter((tab) => !tab.locked && !tab.tmux);
     const skippedLockedCount = tabs.length - tabsToClose.length;
     if (tabsToClose.length > 0) await requestCloseTabs(tabsToClose);
     if (skippedLockedCount > 0) toast.info(t("tabCtx.lockedTabsSkipped"));
@@ -2570,7 +2584,7 @@ function App() {
         : null;
       const targetTabs = leaf?.tabIds ?? tabs.map((tab) => tab.id);
       const targetTabsToClose = tabs.filter(
-        (tab) => targetTabs.includes(tab.id) && tab.id !== keepTabId,
+        (tab) => targetTabs.includes(tab.id) && tab.id !== keepTabId && !tab.tmux,
       );
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
@@ -2594,7 +2608,9 @@ function App() {
       if (idx === -1) return;
 
       const rightTabIds = tabOrder.slice(idx + 1);
-      const targetTabsToClose = tabs.filter((tab) => rightTabIds.includes(tab.id));
+      const targetTabsToClose = tabs.filter(
+        (tab) => rightTabIds.includes(tab.id) && !tab.tmux,
+      );
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
 

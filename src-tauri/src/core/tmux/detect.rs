@@ -26,6 +26,15 @@ const MAX_CANDIDATE_LINE_BYTES: usize = 512;
 /// by unrelated programs.
 const ARM_WINDOW: Duration = Duration::from_secs(30);
 
+/// Shorter arm window for a *submitted but invisible* command line: shell
+/// history recall (arrow keys, Ctrl+R) sends only editing escapes — the
+/// recalled command text arrives as output redraw, so input-side matching
+/// can never see it. We arm briefly on that gesture and let the post-detect
+/// bail path (`unverified_lines`) reject a stream that is not really
+/// control protocol. Gated on having consumed an escape sequence so a bare
+/// Enter at an empty prompt never arms detection.
+const BLIND_ARM_WINDOW: Duration = Duration::from_secs(5);
+
 /// Upper bound for the tracked input line; longer lines cannot be matched
 /// reliably anyway, so tracking resets instead of growing without bound.
 const MAX_INPUT_LINE_BYTES: usize = 4096;
@@ -186,6 +195,27 @@ pub(crate) enum TmuxFeed {
     Detected { passthrough: Vec<u8>, rest: Vec<u8> },
 }
 
+/// Escape-sequence state while tracking user input bytes. Cursor/editing
+/// keys emit multi-byte sequences (CSI, SS3, OSC) that must be skipped as
+/// a unit: ending CSI at the `[` byte itself would leak the parameter tail
+/// (e.g. `A` from `ESC [ A` arrow-up) into the tracked line, and a
+/// history-recalled `tmux -CC` would then fail to match.
+#[derive(Default, PartialEq, Clone, Copy)]
+enum InputTrack {
+    #[default]
+    Normal,
+    /// Saw `ESC`; the next byte selects the sequence class.
+    Esc,
+    /// Inside `ESC [` — ends on a final byte in `0x40..=0x7e`.
+    Csi,
+    /// Inside `ESC O` (SS3) — exactly one more byte follows.
+    Ss3,
+    /// Inside `ESC ]` (OSC) — ends on BEL or ST (`ESC \`).
+    Osc,
+    /// Inside OSC after an `ESC` — `\` closes ST, anything else stays OSC.
+    OscEsc,
+}
+
 #[derive(Default)]
 pub(crate) struct TmuxControlDetector {
     /// The next byte begins a new line.
@@ -196,11 +226,17 @@ pub(crate) struct TmuxControlDetector {
     done: bool,
     /// Input line being composed on the user side; completed on Enter.
     input_line: Vec<u8>,
-    /// Inside a CSI escape (`ESC [ ... <final>`) while tracking input.
-    input_in_csi: bool,
+    /// Escape-sequence tracking state for [`Self::feed_input`].
+    input_track: InputTrack,
     /// Set when a `tmux -CC` command line was just submitted; notifications
     /// only count while this is armed and fresh.
     armed_at: Option<Instant>,
+    /// Short window armed by a submitted-but-invisible command line — see
+    /// [`BLIND_ARM_WINDOW`]. Set only when editing escapes preceded Enter.
+    blind_arm_at: Option<Instant>,
+    /// An escape sequence was consumed since the current input line began —
+    /// evidence of a recall/editing gesture that gates the blind arm.
+    input_saw_escape: bool,
 }
 
 impl TmuxControlDetector {
@@ -210,8 +246,10 @@ impl TmuxControlDetector {
             candidate: None,
             done: false,
             input_line: Vec::new(),
-            input_in_csi: false,
+            input_track: InputTrack::Normal,
             armed_at: None,
+            blind_arm_at: None,
+            input_saw_escape: false,
         }
     }
 
@@ -224,6 +262,9 @@ impl TmuxControlDetector {
     fn is_armed(&self) -> bool {
         self.armed_at
             .is_some_and(|armed_at| armed_at.elapsed() <= ARM_WINDOW)
+            || self
+                .blind_arm_at
+                .is_some_and(|armed_at| armed_at.elapsed() <= BLIND_ARM_WINDOW)
     }
 
     /// Track bytes written to the channel (user input, AI capture commands)
@@ -233,23 +274,71 @@ impl TmuxControlDetector {
             return;
         }
         for &byte in data {
-            if self.input_in_csi {
-                // CSI ends on a byte in 0x40..=0x7e.
-                if (0x40..=0x7e).contains(&byte) {
-                    self.input_in_csi = false;
+            match self.input_track {
+                InputTrack::Normal => {}
+                InputTrack::Esc => {
+                    self.input_track = match byte {
+                        b'[' => InputTrack::Csi,
+                        b'O' => InputTrack::Ss3,
+                        b']' => InputTrack::Osc,
+                        0x1b => InputTrack::Esc,
+                        // Alt+key and other two-byte escapes produce no text.
+                        _ => InputTrack::Normal,
+                    };
+                    continue;
                 }
-                continue;
+                InputTrack::Csi => {
+                    // Parameter/intermediate bytes are 0x20..=0x3f; the
+                    // first byte in 0x40..=0x7e terminates the sequence.
+                    if (0x40..=0x7e).contains(&byte) {
+                        self.input_track = InputTrack::Normal;
+                    }
+                    continue;
+                }
+                InputTrack::Ss3 => {
+                    self.input_track = InputTrack::Normal;
+                    continue;
+                }
+                InputTrack::Osc => {
+                    self.input_track = match byte {
+                        0x07 => InputTrack::Normal,
+                        0x1b => InputTrack::OscEsc,
+                        _ => InputTrack::Osc,
+                    };
+                    continue;
+                }
+                InputTrack::OscEsc => {
+                    self.input_track = if byte == b'\\' {
+                        InputTrack::Normal
+                    } else {
+                        InputTrack::Osc
+                    };
+                    continue;
+                }
             }
             match byte {
                 b'\r' | b'\n' => {
                     let line = std::mem::take(&mut self.input_line);
-                    self.evaluate_input_line(&line);
+                    let saw_escape = std::mem::take(&mut self.input_saw_escape);
+                    if line.iter().all(|b| b.is_ascii_whitespace()) {
+                        // The submit carried no visible text — a recalled
+                        // command is only visible to the shell. Arm the
+                        // short blind window only when an editing escape
+                        // (arrow key, etc.) actually preceded the Enter.
+                        if saw_escape {
+                            self.blind_arm_at = Some(Instant::now());
+                        }
+                    } else {
+                        self.blind_arm_at = None;
+                        self.evaluate_input_line(&line);
+                    }
                 }
                 0x7f | 0x08 => {
                     self.input_line.pop();
                 }
                 0x1b => {
-                    self.input_in_csi = true;
+                    self.input_track = InputTrack::Esc;
+                    self.input_saw_escape = true;
                 }
                 _ => {
                     if self.input_line.len() < MAX_INPUT_LINE_BYTES {
@@ -301,6 +390,12 @@ impl TmuxControlDetector {
                                 passthrough: out,
                                 rest: data[i..].to_vec(),
                             };
+                        }
+                        Ok(_) => {
+                            // Not a notification: the line was ordinary output.
+                            out.extend_from_slice(&line);
+                            out.push(b'\n');
+                            self.line_start = true;
                         }
                         _ => {
                             // Not a notification: the line was ordinary output.
@@ -518,5 +613,59 @@ mod tests {
         ] {
             assert!(!is_tmux_control_command(line), "should not match: {line}");
         }
+    }
+
+    #[test]
+    fn arrow_key_history_recall_still_arms() {
+        // Re-attaching usually means recalling `tmux -CC` with arrow-up —
+        // the shell redraws the recalled text, so the input side only sees
+        // the CSI sequence and Enter. The sequence must be skipped whole:
+        // leaking `A` into the line made re-attach detection impossible.
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"\x1b[A\r");
+        assert!(matches!(
+            detector.feed(b"%session-changed $0 0\n"),
+            TmuxFeed::Detected { .. }
+        ));
+    }
+
+    #[test]
+    fn csi_parameters_do_not_leak_into_input_line() {
+        // `ESC [ 1 ; 5 D` (Ctrl+Left) — the `[` itself is in the
+        // final-byte range, so a naive tracker ends CSI early and pushes
+        // `1;5D` into the line, corrupting the command match.
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"tmux -CC new -As0");
+        // word-jump left then more editing noise before submitting
+        detector.feed_input(b"\x1b[1;5D\x1b[1;5C\r");
+        assert!(matches!(
+            detector.feed(b"%session-changed $0 0\n"),
+            TmuxFeed::Detected { .. }
+        ));
+    }
+
+    #[test]
+    fn ss3_and_alt_keys_do_not_corrupt_input_line() {
+        // Application-mode arrow (`ESC O A`) and Alt+key two-byte escapes
+        // are editing input, not command text.
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"\x1bOA\x1bb"); // SS3 arrow-up, Alt+b
+        detector.feed_input(b"tmux -CC new -As0\r");
+        assert!(matches!(
+            detector.feed(b"%session-changed $0 0\n"),
+            TmuxFeed::Detected { .. }
+        ));
+    }
+
+    #[test]
+    fn bracketed_paste_markers_do_not_corrupt_input_line() {
+        // `ESC [ 200 ~` … `ESC [ 201 ~` wrap a paste; the markers are CSI
+        // sequences and must not push `200~`/`201~` into the line.
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"\x1b[200~tmux -CC new -As0\x1b[201~\r");
+        assert!(matches!(
+            detector.feed(b"%session-changed $0 0\n"),
+            TmuxFeed::Detected { .. }
+        ));
     }
 }

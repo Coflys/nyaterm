@@ -228,11 +228,13 @@ export function useTerminalWindowLayout({
     (tabId: string, paneId: string) => {
       preserveRestoredLeafActiveTabsRef.current = false;
       restoredGlobalActiveTabIdRef.current = null;
-      setActiveTabId(tabId);
+      const tab = tabsRef.current.find((item) => item.id === tabId);
+      // tmux window tabs render as sub-tabs inside the host's container —
+      // clicking a pane there must not steal the top-level active tab.
+      if (!tab?.tmux) setActiveTabId(tabId);
       setActivePane(tabId, paneId);
       // tmux panes: keep the remote "current pane" in sync with local focus
       // so untargeted commands (kill-pane, respawn-pane, ...) act on it.
-      const tab = tabsRef.current.find((item) => item.id === tabId);
       const pane = tab ? findSessionPaneById(tab.root, paneId) : null;
       if (pane?.kind === "leaf" && pane.tmux) {
         void invoke("tmux_send_command", {

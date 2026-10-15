@@ -14,7 +14,6 @@ import { focusTerminalSession } from "@/lib/appSessionFactory";
 import { invoke } from "@/lib/invoke";
 import { insertTabIntoLeaf, type TerminalWindowNode } from "@/lib/tabWindows";
 import { setBackendTransferDuplicatePrompt } from "@/lib/transferDuplicatePrompt";
-import { updateTmuxState } from "@/lib/tmux/store";
 import type { TmuxSessionState } from "@/lib/tmux/types";
 import { eventTargetsCurrentWindow } from "@/lib/windowManager";
 import type { AppSettings, CloudConflictPreview, WorkspaceSessionType } from "@/types/global";
@@ -233,7 +232,6 @@ export function useAppWindowEvents({
 
     unsubs.push(
       listen<TmuxSessionState>("tmux-session-state", (event) => {
-        updateTmuxState(event.payload);
         applyTmuxState(event.payload);
       }),
     );

@@ -199,6 +199,16 @@ fn sh_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// `YYYY-MM-DD HH:MM:SS` local time for the tmux control-mode banner lines.
+fn tmux_local_stamp() -> String {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ))
+        .unwrap_or_default()
+}
+
 fn remote_install_command(shell: ShellKind) -> Option<String> {
     let script = osc::persistent_script(shell)?;
     let block = osc::rc_managed_block(shell)?;
@@ -1525,18 +1535,22 @@ pub(super) async fn ssh_io_loop(
                                         &result.visible,
                                     );
                                 }
+                                let stamp = tmux_local_stamp();
                                 emit_visible_text(
                                     &output,
                                     &recording_mgr,
                                     &session_id,
-                                    "\r\n\x1b[2m[nyaterm] tmux control mode\x1b[0m\r\n",
+                                    &format!(
+                                        "\r\n\x1b[2m[{stamp}] [nyaterm] tmux control mode\x1b[0m\r\n"
+                                    ),
                                 );
-                                // The leaf terminal unmounts for the tmux
-                                // pane tree; detach so that output arriving
-                                // during/after control mode (including the
-                                // shell prompt repainted on detach) buffers
-                                // for the remounted renderer instead of being
-                                // emitted into a dead listener.
+                                // Guard the edge where the leaf unmounts
+                                // mid-control (tab closed/detached
+                                // renderer): output then buffers for an
+                                // attach instead of emitting into a dead
+                                // listener. The common path — leaf stays
+                                // mounted — is re-attached explicitly on
+                                // ReturnToShell below.
                                 output.detach();
                                 match tmux::run_control_session(
                                     &app,
@@ -1551,11 +1565,23 @@ pub(super) async fn ssh_io_loop(
                                 .await
                                 {
                                     tmux::ControlExit::ReturnToShell { leftover } => {
+                                        // The host leaf stays mounted under
+                                        // the window-tabs model, so no
+                                        // AttachConfirmed will ever arrive —
+                                        // re-attach here or the shell's
+                                        // output buffers forever and the pane
+                                        // looks frozen.
+                                        let (attach_tx, _attach_rx) =
+                                            tokio::sync::oneshot::channel();
+                                        output.attach_confirmed(attach_tx);
+                                        let stamp = tmux_local_stamp();
                                         emit_visible_text(
                                             &output,
                                             &recording_mgr,
                                             &session_id,
-                                            "\r\n\x1b[2m[nyaterm] tmux detached; back to shell\x1b[0m\r\n",
+                                            &format!(
+                                                "\r\n\x1b[2m[{stamp}] [nyaterm] tmux detached; back to shell\x1b[0m\r\n"
+                                            ),
                                         );
                                         // Re-arm detection so a later `tmux -CC`
                                         // in this shell can enter control mode again.

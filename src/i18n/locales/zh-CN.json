@@ -3171,11 +3171,10 @@
     "commandError": "tmux 命令失败：{{message}}",
     "commandPlaceholder": "tmux 命令，例如 resize-pane -Z",
     "detach": "分离（远端 tmux 会话保留）",
+    "killWindow": "关闭窗口（kill-window）",
     "newWindow": "新建窗口",
     "splitHorizontal": "上下分屏",
-    "splitVertical": "左右分屏",
-    "window": "窗口",
-    "zoom": "缩放当前窗格（再按一次还原）"
+    "splitVertical": "左右分屏"
   },
   "translation": {
     "ali": "阿里翻译",

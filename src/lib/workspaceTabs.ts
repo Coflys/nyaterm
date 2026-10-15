@@ -307,6 +307,8 @@ export function getTabDisplayName(
   dynamicTitle?: string | null,
 ): string {
   if (tab.customName) return tab.customName;
+  // A tmux window tab is titled by its window name (`#{window_name}`).
+  if (tab.tmux) return tab.tmux.windowName || "tmux";
   const activePane = getActivePane(tab);
   const dynamic = dynamicTitle?.trim();
   if (activePane?.paneKind === "terminal" && dynamic) return dynamic;
@@ -581,6 +583,11 @@ export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
   return [...tabs]
     .sort((a, b) => a.persistOrder - b.persistOrder)
     .flatMap((tab) => {
+      // tmux window tabs are owned by the remote session and die with the
+      // app — never persist them. The host tab (a plain SSH leaf) persists
+      // normally, so restart restores the connection and the user re-runs
+      // `tmux -CC attach` to get the windows back.
+      if (tab.tmux) return [];
       // tmux control-mode panes share one SSH channel and die with the app:
       // collapse each projection to a single leaf so restart restores the
       // original connection (the user can re-run `tmux -CC attach`), while

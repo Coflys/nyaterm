@@ -3,113 +3,79 @@
 import {
   collectSessionPanes,
   createWorkspaceId,
+  findPaneById,
+  getNextPersistOrder,
+  insertTabAfter,
 } from "@/lib/workspaceTabs";
 import type { PaneNode, SessionPane, Tab } from "@/types/global";
-import type { TmuxLayoutNode, TmuxSessionState } from "./types";
+import type { TmuxLayoutNode, TmuxSessionState, TmuxWindowInfo } from "./types";
 
-/** The control session owning this tab's tmux panes, if the tab is in tmux mode. */
-export function findTmuxControlSessionId(tab: Tab): string | null {
-  for (const pane of collectSessionPanes(tab.root)) {
-    if (pane.tmux) return pane.tmux.controlSessionId;
+/**
+ * The tab holding the SSH leaf whose channel entered `tmux -CC` — the leaf
+ * keeps `sessionId === controlSessionId` and is never replaced: it stays a
+ * normal shell pane (frozen while the control session owns the channel, live
+ * again after detach). Returns null once that session is gone.
+ */
+export function findTmuxHostTab(
+  tabs: Tab[],
+  controlSessionId: string,
+): Tab | null {
+  for (const tab of tabs) {
+    for (const pane of collectSessionPanes(tab.root)) {
+      if (pane.sessionId === controlSessionId) return tab;
+    }
   }
   return null;
 }
 
-/**
- * Locate the tab that owns `controlSessionId` — either the session is still a
- * plain leaf (control mode was just detected) or one of its virtual panes.
+/** Tabs rendering windows of `controlSessionId`, in tab-bar order. */
+export function tmuxWindowTabs(tabs: Tab[], controlSessionId: string): Tab[] {
+  return tabs.filter((tab) => tab.tmux?.controlSessionId === controlSessionId);
+}
+
+/** The workspace pane id currently rendering each tmux pane — leaf ids are
+ * preserved across layout changes so React keys and xterm instances stay
+ * stable, and a pane `join-pane`-d into another window keeps its terminal.
  */
-export function findTmuxTab(tabs: Tab[], controlSessionId: string): Tab | null {
-  for (const tab of tabs) {
+export function tmuxPaneLeafIds(tabs: Tab[], controlSessionId: string) {
+  const ids = new Map<string, string>();
+  for (const tab of tmuxWindowTabs(tabs, controlSessionId)) {
     for (const pane of collectSessionPanes(tab.root)) {
-      if (
-        pane.sessionId === controlSessionId ||
-        pane.tmux?.controlSessionId === controlSessionId
-      ) {
-        return tab;
+      if (pane.tmux?.controlSessionId === controlSessionId) {
+        ids.set(pane.tmux.paneId, pane.id);
       }
     }
   }
-  return null;
+  return ids;
 }
 
 /**
- * True when every leaf under `node` belongs to `controlSessionId` — either
- * the plain SSH leaf the user ran `tmux -CC` in, or the pane subtree the
- * projection previously replaced it with. Applied top-down, so the first
- * match is the minimal subtree anchoring the projection; native splits
- * holding other panes stay outside it.
+ * Build the workspace pane tree for one tmux window. `basePane` — the host
+ * SSH leaf — supplies connection identity and restore config; `leafIds`
+ * (from {@link tmuxPaneLeafIds}) keeps leaf ids stable across updates.
  */
-function isTmuxAnchor(node: PaneNode, controlSessionId: string): boolean {
-  const panes = collectSessionPanes(node);
-  return (
-    panes.length > 0 &&
-    panes.every(
-      (pane) =>
-        pane.sessionId === controlSessionId ||
-        pane.tmux?.controlSessionId === controlSessionId,
-    )
-  );
-}
-
-/**
- * Swap the subtree anchoring `controlSessionId` inside `root` for
- * `replacement`, leaving every pane outside the projection untouched.
- * Returns `root` unchanged when no anchor exists.
- */
-export function replaceTmuxAnchor(
-  root: PaneNode,
-  controlSessionId: string,
-  replacement: PaneNode,
-): PaneNode {
-  if (isTmuxAnchor(root, controlSessionId)) return replacement;
-  if (root.kind !== "split") return root;
-  const first = replaceTmuxAnchor(root.first, controlSessionId, replacement);
-  const second = replaceTmuxAnchor(root.second, controlSessionId, replacement);
-  // Keep node identity when nothing changed so React skips untouched
-  // subtrees and persistence comparisons stay cheap.
-  if (first === root.first && second === root.second) return root;
-  return { ...root, first, second };
-}
-
-/**
- * Build the workspace pane tree for a tmux window. Existing leaf ids are
- * preserved per tmux pane id so React keys and xterm instances stay stable
- * across layout changes.
- */
-export function buildTmuxPaneTree(
+export function buildWindowPaneTree(
   state: TmuxSessionState,
-  existing: Tab,
+  window: TmuxWindowInfo,
+  leafIds: Map<string, string>,
+  basePane: SessionPane | undefined,
 ): { root: PaneNode; activePaneId: string } | null {
-  if (!state.tree) return null;
-
-  const paneIdByTmuxPane = new Map<string, string>();
-  for (const pane of collectSessionPanes(existing.root)) {
-    if (pane.tmux?.controlSessionId === state.controlSessionId) {
-      paneIdByTmuxPane.set(pane.tmux.paneId, pane.id);
-    }
-  }
-
-  const basePane = collectSessionPanes(existing.root).find(
-    (pane) =>
-      pane.sessionId === state.controlSessionId ||
-      pane.tmux?.controlSessionId === state.controlSessionId,
-  );
+  if (!window.tree) return null;
 
   const convert = (node: TmuxLayoutNode): PaneNode => {
     if (node.kind === "pane") {
       const pane: SessionPane = {
-        id: paneIdByTmuxPane.get(node.paneId) ?? createWorkspaceId("pane"),
+        id: leafIds.get(node.paneId) ?? createWorkspaceId("pane"),
         kind: "leaf",
         paneKind: "terminal",
         sessionId: node.sessionId,
-        // Keep the connection's session name so the tab title stays the
-        // connection label instead of the pane's current command.
+        // Keep the connection's session name so the tab title falls back to
+        // the connection label instead of the pane's current command.
         name: basePane?.name ?? node.name,
         type: "SSH",
         connectionId: basePane?.connectionId,
-        // Carry the originating leaf's restore config so detach can rebuild
-        // it and persistence serializes a restorable SSH leaf.
+        // Carry the originating leaf's restore config so persistence could
+        // serialize a restorable SSH leaf if the window tab ever survived.
         temporaryConfig: basePane?.temporaryConfig,
         sshRuntimeMode: basePane?.sshRuntimeMode,
         tmux: {
@@ -135,46 +101,147 @@ export function buildTmuxPaneTree(
     };
   };
 
-  const root = convert(state.tree);
-  const paneIds = new Set(collectSessionPanes(root).map((pane) => pane.id));
+  const root = convert(window.tree);
+  const panes = collectSessionPanes(root);
   const activePaneId =
-    (paneIds.has(existing.activePaneId) ? existing.activePaneId : null) ??
-    (state.activePaneSessionId
-      ? collectSessionPanes(root).find(
-          (pane) => pane.sessionId === state.activePaneSessionId,
-        )?.id
-      : undefined) ??
-    collectSessionPanes(root)[0]?.id ??
-    existing.activePaneId;
+    (window.active && state.activePaneSessionId
+      ? panes.find((pane) => pane.sessionId === state.activePaneSessionId)?.id
+      : undefined) ?? panes[0]?.id;
+  if (!activePaneId) return null;
 
   return { root, activePaneId };
 }
 
-/** Leaf shown after the tmux control client detached: a plain shell pane. */
-export function tmuxFallbackLeaf(
+export interface WindowTabReconcile {
+  tabs: Tab[];
+}
+
+/**
+ * Reconcile the native tabs of one control session with the backend's window
+ * list — the pure half of `applyTmuxState`. Tabs whose window vanished
+ * remotely are dropped, windows without a tab get one inserted contiguously
+ * after the session's existing tabs (host tab first, then window tabs in
+ * order), and surviving tabs refresh their pane tree and window name in
+ * place. Activation and remote side effects stay with the caller.
+ */
+export function reconcileTmuxWindowTabs(
+  tabs: Tab[],
   state: TmuxSessionState,
-  existing: Tab,
-): SessionPane {
-  const panes = collectSessionPanes(existing.root);
-  // Prefer a pane of this control session so the restored leaf inherits the
-  // originating connection's name/config; reusing its id keeps the leaf
-  // mounted when the anchor was already a plain shell pane.
-  const basePane =
-    panes.find(
-      (pane) =>
-        pane.sessionId === state.controlSessionId ||
-        pane.tmux?.controlSessionId === state.controlSessionId,
-    ) ?? panes[0];
-  const pane: SessionPane = {
-    id: basePane?.id ?? createWorkspaceId("pane"),
-    kind: "leaf",
-    paneKind: "terminal",
-    sessionId: state.controlSessionId,
-    name: basePane?.name ?? "shell",
-    type: "SSH",
-    connectionId: basePane?.connectionId,
-    temporaryConfig: basePane?.temporaryConfig,
-    sshRuntimeMode: basePane?.sshRuntimeMode,
-  };
-  return pane;
+  hostTab: Tab,
+  options?: {
+    /**
+     * Adopt the remote active pane in the active window's tab. The caller
+     * sets this only when `state.activePaneSessionId` actually changed —
+     * remote-initiated `select-pane` then follows through to the UI while a
+     * local click is not reverted by a stale echo.
+     */
+    followRemoteActivePane?: boolean;
+  },
+): WindowTabReconcile {
+  const controlSessionId = state.controlSessionId;
+  const basePane = collectSessionPanes(hostTab.root).find(
+    (pane) => pane.sessionId === controlSessionId,
+  );
+  const leafIds = tmuxPaneLeafIds(tabs, controlSessionId);
+  const liveWindowIds = new Set(state.windows.map((window) => window.id));
+
+  // Tabs for windows that no longer exist remotely are removed here; tmux
+  // itself owns the close, so the tab simply disappears.
+  let nextTabs = tabs.filter(
+    (tab) =>
+      !(
+        tab.tmux?.controlSessionId === controlSessionId &&
+        !liveWindowIds.has(tab.tmux.windowId)
+      ),
+  );
+
+  // Mark the host tab as the control pane — the tmux bar mounts there and
+  // the frozen shell is visibly "the tmux tab" instead of a dead terminal.
+  if (hostTab.tmuxHost?.controlSessionId !== controlSessionId) {
+    nextTabs = nextTabs.map((tab) =>
+      tab.id === hostTab.id ? { ...tab, tmuxHost: { controlSessionId } } : tab,
+    );
+  }
+
+  // New window tabs insert contiguously after the session's existing tabs.
+  const existingWindowTabs = tmuxWindowTabs(nextTabs, controlSessionId);
+  let insertAfter =
+    existingWindowTabs.length > 0
+      ? existingWindowTabs[existingWindowTabs.length - 1].id
+      : hostTab.id;
+  let nextPersistOrder = getNextPersistOrder(nextTabs);
+
+  const byWindow = new Map(
+    tmuxWindowTabs(nextTabs, controlSessionId).map((tab) => [
+      tab.tmux!.windowId,
+      tab,
+    ]),
+  );
+
+  for (const window of state.windows) {
+    const existing = byWindow.get(window.id);
+    const built = buildWindowPaneTree(state, window, leafIds, basePane);
+    if (!built) {
+      // Layout for this window has not arrived yet — keep an existing tab's
+      // name and active flag current so the strip never goes stale.
+      if (
+        existing &&
+        (existing.tmux!.windowName !== window.name ||
+          existing.tmux!.windowIndex !== window.index ||
+          existing.tmux!.active !== window.active)
+      ) {
+        const id = existing.id;
+        const tmux = {
+          ...existing.tmux!,
+          windowName: window.name,
+          windowIndex: window.index,
+          active: window.active,
+        };
+        nextTabs = nextTabs.map((tab) =>
+          tab.id === id ? { ...tab, tmux } : tab,
+        );
+      }
+      continue;
+    }
+    if (existing) {
+      const activePaneId =
+        window.active && options?.followRemoteActivePane
+          ? built.activePaneId
+          : findPaneById(built.root, existing.activePaneId)
+            ? existing.activePaneId
+            : built.activePaneId;
+      nextTabs = nextTabs.map((tab) =>
+        tab.id === existing.id
+          ? {
+              ...tab,
+              root: built.root,
+              activePaneId,
+              tmux: {
+                ...tab.tmux!,
+                windowName: window.name,
+                windowIndex: window.index,
+                active: window.active,
+              },
+            }
+          : tab,
+      );
+    } else {
+      const newTab: Tab = {
+        id: createWorkspaceId("tab"),
+        persistOrder: nextPersistOrder++,
+        activePaneId: built.activePaneId,
+        root: built.root,
+        tmux: {
+          controlSessionId,
+          windowId: window.id,
+          windowName: window.name,
+          windowIndex: window.index,
+          active: window.active,
+        },
+      };
+      nextTabs = insertTabAfter(nextTabs, insertAfter, newTab);
+      insertAfter = newTab.id;
+    }
+  }
+  return { tabs: nextTabs };
 }
