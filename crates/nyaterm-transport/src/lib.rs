@@ -8,7 +8,6 @@ use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::path::Path;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{
@@ -35,6 +34,7 @@ mod environment;
 mod file_browser;
 mod gpu;
 mod local_fs;
+mod local_shell;
 mod reconnect_cwd;
 mod recording;
 mod remote_file;
@@ -955,6 +955,15 @@ impl SessionManager {
         &self,
         config: LocalSessionConfig,
     ) -> Result<SessionInfo, SessionError> {
+        let shell = local_shell::ResolvedLocalShell::resolve(&config);
+        self.create_local_session_with_shell(config, shell)
+    }
+
+    fn create_local_session_with_shell(
+        &self,
+        config: LocalSessionConfig,
+        shell: local_shell::ResolvedLocalShell,
+    ) -> Result<SessionInfo, SessionError> {
         #[cfg(windows)]
         local_conpty::ensure_supported()?;
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -968,23 +977,17 @@ impl SessionManager {
             ))
             .map_err(SessionError::OpenPty)?;
 
-        let mut command = build_command(&config);
+        let mut command = shell.command();
         // Startup asynchronously warms the complete shell environment. Copy
         // values from the shared snapshot here without starting another shell.
         // If a terminal is created before warm-up finishes, retain portable-pty's
         // inherited environment as a non-blocking fallback.
-        let requested_shell = config
-            .shell_path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(default_local_shell_path);
         let shell_snapshot = self
             .shell_environment
             .snapshot()
             .ok()
             .flatten()
-            .filter(|snapshot| snapshot.matches_shell_path(Some(Path::new(&requested_shell))));
+            .filter(|snapshot| shell.matches_environment(snapshot));
         configure_environment(&mut command, shell_snapshot.as_deref());
         if let Some(working_dir) = &config.working_dir {
             command.cwd(working_dir);
@@ -3751,25 +3754,6 @@ fn parse_stop_bits(value: &str) -> StopBits {
         "2" => StopBits::Two,
         _ => StopBits::One,
     }
-}
-
-fn build_command(config: &LocalSessionConfig) -> CommandBuilder {
-    let shell = config
-        .shell_path
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(default_local_shell_path);
-    let mut command = CommandBuilder::new(&shell);
-    if config.shell_args.is_empty() {
-        #[cfg(not(windows))]
-        if should_use_interactive_login_args(&shell) {
-            command.args(["--login", "-i"]);
-        }
-    } else {
-        command.args(config.shell_args.iter().map(String::as_str));
-    }
-    command
 }
 
 fn configure_environment(
