@@ -131,11 +131,8 @@ export default function TabContextMenu({
   const supportsDisconnect = !!activePane && isTerminalPane;
   const supportsAI = !!activePane && isTerminalPane;
   const supportsSplit = supportsSessionSpawn;
-  // A tmux-managed tab's layout is owned by the remote session — a window
-  // tab's split would be wiped by the next layout emit, and the host tab
-  // renders the whole tmux container anyway, so splitting must go through
-  // the tmux bar's `split-window` instead.
-  const isTmuxWindowTab = !!tab.tmux || !!tab.tmuxHost;
+  // Native splits remain available around a host leaf; remote splits use its tmux strip.
+  const isTmuxWindowTab = !!tab.tmux;
   const supportsSessionInfo = !!activePane?.connectionId && isTerminalPane;
   const showSessionActionsGroup =
     supportsSessionSpawn ||

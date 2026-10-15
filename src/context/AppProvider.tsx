@@ -28,6 +28,7 @@ import {
   normalizeQuickCommandUiConfig,
 } from "@/lib/quickCommandSettings";
 import {
+  activateWorkspacePane,
   findTmuxHostTab,
   reconcileTmuxWindowTabs,
   tmuxWindowTabs,
@@ -839,11 +840,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setActivePane = useCallback(
     (tabId: string, paneId: string) => {
-      const nextTabs = tabsRef.current.map((tab) =>
-        tab.id === tabId ? ensureActivePane({ ...tab, activePaneId: paneId }) : tab,
-      );
-      void commitTabs(nextTabs);
-      setActiveTabId(tabId);
+      const result = activateWorkspacePane(tabsRef.current, tabId, paneId);
+      if (!result) return;
+      void commitTabs(result.tabs);
+      setActiveTabId(result.activeTabId);
     },
     [commitTabs, setActiveTabId],
   );
@@ -1075,17 +1075,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // tab was never consumed, so its shell leaf simply resumes output.
         // `skipTmuxKill`: detach leaves the remote session alive, so killing
         // its windows here would destroy exactly what detach preserves.
-        // Also strip the host marker — the tab is a plain shell tab again.
-        if (hostTab?.tmuxHost) {
-          void commitTabs(
-            currentTabs.map((tab) =>
-              tab.id === hostTab.id ? { ...tab, tmuxHost: undefined } : tab,
-            ),
-          );
-        }
         if (windowTabs.length > 0) {
           closeTabs(windowTabs.map((tab) => tab.id), {
-            nextActiveTabId: hostTab?.id ?? null,
+            ...(windowTabs.some((tab) => tab.id === activeTabIdRef.current)
+              ? { nextActiveTabId: hostTab?.id ?? null }
+              : {}),
             skipTmuxKill: true,
           });
         }

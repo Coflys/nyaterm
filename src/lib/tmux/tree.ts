@@ -3,6 +3,8 @@
 import {
   collectSessionPanes,
   createWorkspaceId,
+  ensureActivePane,
+  getActivePane,
   findPaneById,
   getNextPersistOrder,
   insertTabAfter,
@@ -22,7 +24,12 @@ export function findTmuxHostTab(
 ): Tab | null {
   for (const tab of tabs) {
     for (const pane of collectSessionPanes(tab.root)) {
-      if (pane.sessionId === controlSessionId) return tab;
+      if (
+        pane.paneKind === "terminal" &&
+        pane.type === "SSH" &&
+        pane.sessionId === controlSessionId
+      )
+        return tab;
     }
   }
   return null;
@@ -157,14 +164,6 @@ export function reconcileTmuxWindowTabs(
       ),
   );
 
-  // Mark the host tab as the control pane — the tmux bar mounts there and
-  // the frozen shell is visibly "the tmux tab" instead of a dead terminal.
-  if (hostTab.tmuxHost?.controlSessionId !== controlSessionId) {
-    nextTabs = nextTabs.map((tab) =>
-      tab.id === hostTab.id ? { ...tab, tmuxHost: { controlSessionId } } : tab,
-    );
-  }
-
   // New window tabs insert contiguously after the session's existing tabs.
   const existingWindowTabs = tmuxWindowTabs(nextTabs, controlSessionId);
   let insertAfter =
@@ -199,9 +198,7 @@ export function reconcileTmuxWindowTabs(
           windowIndex: window.index,
           active: window.active,
         };
-        nextTabs = nextTabs.map((tab) =>
-          tab.id === id ? { ...tab, tmux } : tab,
-        );
+        nextTabs = nextTabs.map((tab) => (tab.id === id ? { ...tab, tmux } : tab));
       }
       continue;
     }
@@ -251,4 +248,34 @@ export function reconcileTmuxWindowTabs(
     tab.tmux?.controlSessionId === controlSessionId ? ordered[index++] : tab,
   );
   return { tabs: nextTabs };
+}
+
+/** Resolve actions against the visible pane of the selected host leaf only. */
+export function resolveWorkspaceActivePane(tabs: Tab[], tab: Tab): SessionPane | null {
+  const pane = getActivePane(tab);
+  if (!pane || pane.paneKind !== "terminal" || pane.tmux) return pane;
+  const window = tmuxWindowTabs(tabs, pane.sessionId).find((tab) => tab.tmux?.active);
+  return window ? getActivePane(window) : pane;
+}
+
+/** Select a child pane and its host leaf atomically, keeping a native top-level tab. */
+export function activateWorkspacePane(tabs: Tab[], tabId: string, paneId: string) {
+  const target = tabs.find((tab) => tab.id === tabId);
+  if (!target || !findPaneById(target.root, paneId)) return null;
+  const host = target.tmux ? findTmuxHostTab(tabs, target.tmux.controlSessionId) : target;
+  if (!host) return null;
+  const hostPane = target.tmux
+    ? collectSessionPanes(host.root).find(
+        (pane) => pane.paneKind === "terminal" && pane.sessionId === target.tmux!.controlSessionId,
+      )
+    : null;
+  if (target.tmux && !hostPane) return null;
+  return {
+    activeTabId: host.id,
+    tabs: tabs.map((tab) => {
+      if (tab.id === target.id) return ensureActivePane({ ...tab, activePaneId: paneId });
+      if (tab.id === host.id && hostPane) return { ...tab, activePaneId: hostPane.id };
+      return tab;
+    }),
+  };
 }

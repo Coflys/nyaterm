@@ -1,3 +1,4 @@
+import { resolveWorkspaceActivePane } from "@/lib/tmux/tree";
 import { supports } from "@/lib/backend/runtime";
 import { listen } from "@/lib/backend/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -514,21 +515,7 @@ function App() {
     ? getActiveSessionTabDisplayName(activeTab, getDynamicTitle).trim()
     : "";
   const windowTitle = activeTabName ? `${activeTabName} - NyaTerm` : "NyaTerm";
-  const activePane = (() => {
-    if (!activeTab) return null;
-    // A tmux host tab's own leaf is the hidden control channel — what the
-    // user sees is the active window sub-tab's pane, so that is the pane
-    // AI tools, quick commands and friends should talk to.
-    const controlSessionId = activeTab.tmuxHost?.controlSessionId;
-    if (controlSessionId) {
-      const activeWindow = tabs.find(
-        (tab) =>
-          tab.tmux?.controlSessionId === controlSessionId && tab.tmux.active,
-      );
-      if (activeWindow) return getActivePane(activeWindow);
-    }
-    return getActivePane(activeTab);
-  })();
+  const activePane = activeTab ? resolveWorkspaceActivePane(tabs, activeTab) : null;
   const activeSessionId =
     activePane &&
     activePane.paneKind === "terminal" &&

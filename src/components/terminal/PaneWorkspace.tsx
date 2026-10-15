@@ -18,6 +18,7 @@ import {
   removeSessionFromGroup,
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
+import { invoke } from "@/lib/invoke";
 import { tmuxWindowTabs } from "@/lib/tmux/tree";
 import {
   collectSessionPanes,
@@ -44,9 +45,8 @@ interface PaneWorkspaceProps {
   paneFocusMode?: boolean;
   sessionInfoById?: Map<string, SessionInfo> | null;
   onActivatePane: (paneId: string) => void;
-  /** Tab-aware pane activation — the tmux host container needs it to
-   * activate panes inside its hidden window tabs. */
   onActivatePaneInTab?: (tabId: string, paneId: string) => void;
+  workspaceActive?: boolean;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
@@ -78,6 +78,8 @@ function SplitView({
   paneFocusMode,
   sessionInfoById,
   onActivatePane,
+  onActivatePaneInTab,
+  workspaceActive = true,
   onUpdateSplitRatio,
   onReconnectPane,
   onReconnected,
@@ -93,6 +95,8 @@ function SplitView({
   paneFocusMode: boolean;
   sessionInfoById?: Map<string, SessionInfo> | null;
   onActivatePane: (paneId: string) => void;
+  onActivatePaneInTab?: (tabId: string, paneId: string) => void;
+  workspaceActive?: boolean;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
@@ -135,11 +139,7 @@ function SplitView({
         .map((pane) => pane.tmux?.controlSessionId)
         .filter((id): id is string => Boolean(id)),
     );
-    return (
-      panes.length > 0 &&
-      panes.every((pane) => pane.tmux) &&
-      controlIds.size === 1
-    );
+    return panes.length > 0 && panes.every((pane) => pane.tmux) && controlIds.size === 1;
   }, [split]);
 
   const handleResize = (delta: number) => {
@@ -175,6 +175,8 @@ function SplitView({
           sessionInfoById={sessionInfoById}
           showChrome
           onActivatePane={onActivatePane}
+          onActivatePaneInTab={onActivatePaneInTab}
+          workspaceActive={workspaceActive}
           onUpdateSplitRatio={onUpdateSplitRatio}
           onReconnectPane={onReconnectPane}
           onReconnected={onReconnected}
@@ -215,6 +217,8 @@ function SplitView({
           sessionInfoById={sessionInfoById}
           showChrome
           onActivatePane={onActivatePane}
+          onActivatePaneInTab={onActivatePaneInTab}
+          workspaceActive={workspaceActive}
           onUpdateSplitRatio={onUpdateSplitRatio}
           onReconnectPane={onReconnectPane}
           onReconnected={onReconnected}
@@ -237,6 +241,8 @@ function PaneNodeView({
   sessionInfoById,
   showChrome,
   onActivatePane,
+  onActivatePaneInTab,
+  workspaceActive = true,
   onUpdateSplitRatio,
   onReconnectPane,
   onReconnected,
@@ -253,6 +259,8 @@ function PaneNodeView({
   sessionInfoById?: Map<string, SessionInfo> | null;
   showChrome: boolean;
   onActivatePane: (paneId: string) => void;
+  onActivatePaneInTab?: (tabId: string, paneId: string) => void;
+  workspaceActive?: boolean;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
@@ -277,7 +285,7 @@ function PaneNodeView({
   ) => Promise<void> | void;
 }) {
   const { t } = useTranslation();
-  const { syncGroups, broadcastToAll } = useApp();
+  const { syncGroups, broadcastToAll, tabs, setActivePane } = useApp();
   const [isReconnectPending, setIsReconnectPending] = useState(false);
   const [closedSftpSessionId, setClosedSftpSessionId] = useState<string | null>(
     null,
@@ -338,6 +346,8 @@ function PaneNodeView({
         paneFocusMode={paneFocusMode}
         sessionInfoById={sessionInfoById}
         onActivatePane={onActivatePane}
+        onActivatePaneInTab={onActivatePaneInTab}
+        workspaceActive={workspaceActive}
         onUpdateSplitRatio={onUpdateSplitRatio}
         onReconnectPane={onReconnectPane}
         onReconnected={onReconnected}
@@ -350,7 +360,12 @@ function PaneNodeView({
     );
   }
 
-  const isActive = visible && tab.activePaneId === node.id;
+  const isActive = visible && workspaceActive && tab.activePaneId === node.id;
+  const windowTabs =
+    node.paneKind === "terminal" && node.type === "SSH" && !node.tmux
+      ? tmuxWindowTabs(tabs, node.sessionId)
+      : [];
+  const isTmuxHost = windowTabs.length > 0;
   const showReconnectAction =
     node.paneKind !== "file" &&
     !!(
@@ -527,30 +542,80 @@ function PaneNodeView({
           ) : null}
         </div>
       ) : (
-        <PaneXTerminal
-          sessionId={node.sessionId}
-          sessionName={node.name}
-          active={isActive}
-          visible={visible}
-          sessionType={node.type}
-          connectionId={node.connectionId}
-          temporaryConfig={node.temporaryConfig}
-          onReconnected={onReconnected}
-          onDisconnectedCloseRequested={() =>
-            void onDisconnectedCloseRequested?.(tab.id, node.id)
-          }
-          onConnectionError={(sessionId, error) =>
-            onConnectionError?.(tab.id, node.id, sessionId, error)
-          }
-          syncGroups={syncGroups}
-          broadcastToAll={broadcastToAll}
-          sessionInfoById={sessionInfoById}
-          recordingStatus={recordingStatuses?.find(
-            (status) => status.sessionId === node.sessionId,
+        <div className="relative flex h-full min-h-0 flex-col">
+          <div className="relative min-h-0 flex-1">
+            <div className="absolute inset-0" style={{ display: isTmuxHost ? "none" : "block" }}>
+              <PaneXTerminal
+                sessionId={node.sessionId}
+                sessionName={node.name}
+                active={isActive && !isTmuxHost}
+                visible={visible && !isTmuxHost}
+                sessionType={node.type}
+                connectionId={node.connectionId}
+                temporaryConfig={node.temporaryConfig}
+                onReconnected={onReconnected}
+                onDisconnectedCloseRequested={() =>
+                  void onDisconnectedCloseRequested?.(tab.id, node.id)
+                }
+                onConnectionError={(sessionId, error) =>
+                  onConnectionError?.(tab.id, node.id, sessionId, error)
+                }
+                syncGroups={syncGroups}
+                broadcastToAll={broadcastToAll}
+                sessionInfoById={sessionInfoById}
+                recordingStatus={recordingStatuses?.find(
+                  (status) => status.sessionId === node.sessionId,
+                )}
+                onToggleRecording={onToggleSessionRecording}
+                onSaveTranscript={onSaveSessionTranscript}
+              />
+            </div>
+            {windowTabs.map((windowTab) => {
+              const viewed = !!windowTab.tmux?.active;
+              return (
+                <div
+                  key={windowTab.id}
+                  className="absolute inset-0"
+                  style={{ display: viewed ? "block" : "none" }}
+                >
+                  <PaneWorkspaceContent
+                    tab={windowTab}
+                    visible={visible && viewed}
+                    workspaceActive={isActive}
+                    paneFocusMode={paneFocusMode && isActive}
+                    sessionInfoById={sessionInfoById}
+                    onActivatePane={(paneId) => {
+                      onActivatePane(node.id);
+                      if (onActivatePaneInTab) onActivatePaneInTab(windowTab.id, paneId);
+                      else {
+                        setActivePane(windowTab.id, paneId);
+                        const pane = findPaneById(windowTab.root, paneId);
+                        if (pane?.kind === "leaf" && pane.tmux) {
+                          void invoke("tmux_send_command", {
+                            sessionId: pane.tmux.controlSessionId,
+                            command: `select-pane -t '${pane.tmux.paneId}'`,
+                          }).catch(() => {});
+                        }
+                      }
+                    }}
+                    onActivatePaneInTab={onActivatePaneInTab}
+                    onUpdateSplitRatio={onUpdateSplitRatio}
+                    onReconnectPane={onReconnectPane}
+                    onReconnected={onReconnected}
+                    onDisconnectedCloseRequested={onDisconnectedCloseRequested}
+                    onConnectionError={onConnectionError}
+                    recordingStatuses={recordingStatuses}
+                    onToggleSessionRecording={onToggleSessionRecording}
+                    onSaveSessionTranscript={onSaveSessionTranscript}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {isTmuxHost && (
+            <TmuxWindowStrip controlSessionId={node.sessionId} windowTabs={windowTabs} />
           )}
-          onToggleRecording={onToggleSessionRecording}
-          onSaveTranscript={onSaveSessionTranscript}
-        />
+        </div>
       )}
     </div>
   );
@@ -622,8 +687,7 @@ function PaneXTerminal({
   );
 
   const isPaused = useMemo(
-    () =>
-      activeGroup ? isSessionPausedInGroup(activeGroup, sessionId) : false,
+    () => (activeGroup ? isSessionPausedInGroup(activeGroup, sessionId) : false),
     [activeGroup, sessionId],
   );
 
@@ -643,9 +707,7 @@ function PaneXTerminal({
   const handleLeaveGroup = useCallback(() => {
     if (!activeGroup) return;
     setSyncGroups((prev) =>
-      prev.map((g) =>
-        g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g,
-      ),
+      prev.map((g) => (g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g)),
     );
   }, [activeGroup, sessionId, setSyncGroups]);
 
@@ -698,86 +760,9 @@ function PaneXTerminal({
   );
 }
 
-/**
- * A tab hosting a `tmux -CC` control channel is a container, not a plain
- * pane tree: the selected window's panes fill the middle and the
- * WindTerm-style status bar (window sub-tabs + controls) sits at the bottom.
- *
- * The host leaf stays mounted in a stable position across the tmuxHost →
- * plain-tab transition: it is rendered unconditionally as the first child
- * of the middle section while window views are absolute overlays that
- * mount/unmount around it. Without this, clearing `tmuxHost` on detach
- * would unmount the leaf's XTerminal — and because the backend drains the
- * detached output backlog to the *old* listener at ReturnToShell time,
- * the freshly mounted terminal would have nothing to replay and render a
- * dead black screen instead of the resumed shell.
- */
+/** The persistent host tree always renders; tmux overlays belong to individual leaves. */
 function PaneWorkspace(props: PaneWorkspaceProps) {
-  const { tab, visible, onActivatePane, onActivatePaneInTab, ...rest } = props;
-  const { tabs, setActivePane } = useApp();
-  const controlSessionId = tab.tmuxHost?.controlSessionId ?? null;
-  const windowTabs = useMemo(
-    () => (controlSessionId ? tmuxWindowTabs(tabs, controlSessionId) : []),
-    [tabs, controlSessionId],
-  );
-  const isTmuxHost = controlSessionId !== null;
-
-  const activatePaneInTab = useCallback(
-    (tabId: string, paneId: string) => {
-      if (onActivatePaneInTab) {
-        onActivatePaneInTab(tabId, paneId);
-      } else {
-        setActivePane(tabId, paneId);
-      }
-    },
-    [onActivatePaneInTab, setActivePane],
-  );
-
-  return (
-    <div
-      className="absolute inset-0 flex flex-col"
-      style={{ display: visible ? "flex" : "none" }}
-    >
-      <div className="relative min-h-0 flex-1">
-        {/* Host leaf — always mounted here so its xterm survives mode
-            switches; while tmux runs it stays hidden behind the window
-            views and reappears on detach with the resumed shell. */}
-        <PaneWorkspaceContent
-          key="host-content"
-          {...rest}
-          tab={tab}
-          visible={visible && !isTmuxHost}
-          onActivatePane={onActivatePane}
-        />
-        {isTmuxHost &&
-          windowTabs.map((windowTab) => {
-            const viewed = !!windowTab.tmux?.active;
-            return (
-              <div
-                key={windowTab.id}
-                className="absolute inset-0"
-                style={{ display: viewed ? "block" : "none" }}
-              >
-                <PaneWorkspaceContent
-                  {...rest}
-                  tab={windowTab}
-                  visible={visible && viewed}
-                  onActivatePane={(paneId) =>
-                    activatePaneInTab(windowTab.id, paneId)
-                  }
-                />
-              </div>
-            );
-          })}
-      </div>
-      {isTmuxHost && (
-        <TmuxWindowStrip
-          controlSessionId={controlSessionId}
-          windowTabs={windowTabs}
-        />
-      )}
-    </div>
-  );
+  return <PaneWorkspaceContent {...props} />;
 }
 
 function PaneWorkspaceContent({
@@ -786,6 +771,8 @@ function PaneWorkspaceContent({
   paneFocusMode = false,
   sessionInfoById,
   onActivatePane,
+  onActivatePaneInTab,
+  workspaceActive = true,
   onUpdateSplitRatio,
   onReconnectPane,
   onReconnected,
@@ -809,6 +796,8 @@ function PaneWorkspaceContent({
           sessionInfoById={sessionInfoById}
           showChrome={!paneFocusMode && isSplitPane(tab.root)}
           onActivatePane={onActivatePane}
+          onActivatePaneInTab={onActivatePaneInTab}
+          workspaceActive={workspaceActive}
           onUpdateSplitRatio={onUpdateSplitRatio}
           onReconnectPane={onReconnectPane}
           onReconnected={onReconnected}

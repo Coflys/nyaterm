@@ -258,17 +258,9 @@ export interface Tab {
     windowName: string;
     /** `#{window_index}` — the `N:` prefix on the sub-tab label. */
     windowIndex: number;
-    /** True while this is the tmux client's current window — the sub-tab
-     * the host container shows (unless the control pane is selected). */
+    /** Selected remote window within its host SSH leaf. */
     active: boolean;
   };
-  /**
-   * Set while this tab hosts the SSH channel running `tmux -CC`: one of
-   * its leaves keeps `sessionId === controlSessionId` and acts as the
-   * control pane — frozen shell output, tmux bar attached, bare Enter
-   * detaches. Runtime-only marker, cleared when the control session ends.
-   */
-  tmuxHost?: { controlSessionId: string };
 }
 
 /** SSH connection config for creating a session. */

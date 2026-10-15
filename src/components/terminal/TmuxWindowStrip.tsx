@@ -32,8 +32,8 @@ const TMUX_COMMON_COMMANDS = [
 ] as const;
 
 /**
- * WindTerm-style status bar at the bottom of a tmux host tab: the tmux icon
- * on the left marks the tab as tmux-driven, followed by one sub-tab per tmux
+ * WindTerm-style status bar inside the SSH leaf hosting tmux: the tmux icon
+ * on the left marks the leaf as tmux-driven, followed by one sub-tab per tmux
  * window (select → `select-window`, × → `kill-window`) and a `+` for
  * `new-window`; the right side carries pane splits and a free-form
  * control command input — the `-CC` channel swallows tmux prefix keys, so
