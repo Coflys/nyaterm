@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::{PortableSnapshotError, RawPortableSnapshot};
 
+pub mod control;
 mod gc;
 mod history;
 mod protocol;
@@ -16,6 +17,7 @@ mod snippet;
 
 pub use gc::{
     SYNC_SNAPSHOT_GC_GRACE_PERIOD, SYNC_SNAPSHOT_KEEP_RECENT, cleanup_sync_snapshots_with_remote,
+    cleanup_sync_snapshots_with_remote_controlled,
 };
 pub use history::{
     CLOUD_SYNC_HISTORY_DOMAIN, CLOUD_SYNC_HISTORY_EVENT, CLOUD_SYNC_HISTORY_LIMIT,
@@ -49,6 +51,8 @@ pub const REMOTE_SYNC_POINTER_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Error)]
 pub enum CloudSyncError {
+    #[error("cloud sync was cancelled before commit")]
+    Cancelled,
     #[error(
         "gist_capacity: Gitee snippet has insufficient file slots; remove unrelated files or choose a new snippet, then retry sync"
     )]
@@ -382,6 +386,27 @@ pub fn push_snapshot_with_remote(
     state: &CloudSyncState,
     force: bool,
 ) -> Result<CloudSyncResult, CloudSyncError> {
+    push_snapshot_with_remote_controlled(
+        local_store,
+        options,
+        remote,
+        state,
+        force,
+        &control::CloudSyncOperationControl::default(),
+    )
+}
+
+pub fn push_snapshot_with_remote_controlled(
+    local_store: &dyn CloudLocalStore,
+    options: &LocalCloudSyncOptions,
+    remote: &dyn CloudSyncRemote,
+    state: &CloudSyncState,
+    force: bool,
+    control: &control::CloudSyncOperationControl,
+) -> Result<CloudSyncResult, CloudSyncError> {
+    control.checkpoint()?;
+    let remote = &control.remote(remote);
+    let local_store = &control.local_store(local_store);
     ensure_enabled(options)?;
     ensure_remote_layout(remote, &options.remote_root)?;
     let mut next_state = normalized_state(state, &options.device_id);
@@ -481,6 +506,7 @@ pub fn push_snapshot_with_remote(
             latest.as_ref(),
         )?;
     }
+    control.begin_commit()?;
     write_sync_pointer(local_store, remote, &options.remote_root, &pointer)?;
     let _ = protocol::write_current_sync_snapshot_compat(local_store, remote, options, &snapshot);
     next_state.last_synced_payload_hash = Some(pointer.payload_hash.clone());
@@ -527,6 +553,29 @@ pub fn pull_snapshot_with_remote_guarded(
     force: bool,
     before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
 ) -> Result<CloudSyncResult, CloudSyncError> {
+    pull_snapshot_with_remote_controlled(
+        local_store,
+        options,
+        remote,
+        state,
+        force,
+        before_apply,
+        &control::CloudSyncOperationControl::default(),
+    )
+}
+
+pub fn pull_snapshot_with_remote_controlled(
+    local_store: &dyn CloudLocalStore,
+    options: &LocalCloudSyncOptions,
+    remote: &dyn CloudSyncRemote,
+    state: &CloudSyncState,
+    force: bool,
+    before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
+    control: &control::CloudSyncOperationControl,
+) -> Result<CloudSyncResult, CloudSyncError> {
+    control.checkpoint()?;
+    let remote = &control.remote(remote);
+    let local_store = &control.local_store(local_store);
     ensure_enabled(options)?;
     ensure_remote_layout(remote, &options.remote_root)?;
     let latest = load_sync_pointer_from_remote(local_store, remote, &options.remote_root)?
@@ -641,9 +690,27 @@ pub fn recover_current_snapshot_with_remote(
     options: &LocalCloudSyncOptions,
     remote: &dyn CloudSyncRemote,
 ) -> Result<CloudSyncResult, CloudSyncError> {
+    recover_current_snapshot_with_remote_controlled(
+        local_store,
+        options,
+        remote,
+        &control::CloudSyncOperationControl::default(),
+    )
+}
+
+pub fn recover_current_snapshot_with_remote_controlled(
+    local_store: &dyn CloudLocalStore,
+    options: &LocalCloudSyncOptions,
+    remote: &dyn CloudSyncRemote,
+    control: &control::CloudSyncOperationControl,
+) -> Result<CloudSyncResult, CloudSyncError> {
+    control.checkpoint()?;
+    let remote = &control.remote(remote);
+    let local_store = &control.local_store(local_store);
     ensure_enabled(options)?;
     ensure_remote_layout(remote, &options.remote_root)?;
-    let snapshot = protocol::recover_current_remote_snapshot(local_store, remote, options)?;
+    let snapshot =
+        protocol::recover_current_remote_snapshot(local_store, remote, options, control)?;
     let backup = local_store.apply_sync_snapshot(options, &snapshot)?;
     let mut applied_snapshot = local_store.build_sync_snapshot(options)?;
     applied_snapshot.recalculate_hash()?;

@@ -2801,6 +2801,8 @@
     "syncForcePushingProvider": "%{provider} 経由でクラウド同期スナップショットを強制的にプッシュしています。",
     "syncHistoryRefreshFailed": "クラウド同期履歴の更新に失敗しました: %{detail}",
     "syncMasterPasswordRequired": "クラウド同期を有効にする前にマスターパスワードを設定してください。",
+    "syncTimeoutStopping": "同期がタイムアウトしました。安全に停止しています…",
+    "syncTimeoutFinishing": "同期がタイムアウトしました。現在のコミットを完了しています…",
     "syncOperationInProgress": "クラウド同期処理がすでに実行中です。",
     "syncProviderPullFailed": "クラウド同期のプルに失敗しました: %{detail}",
     "syncProviderPullStarted": "クラウド同期のプル（プロバイダー）を開始しました。",

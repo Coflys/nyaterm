@@ -31,6 +31,7 @@ use std::time::Instant;
 use gpui::{FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle};
 use nyaterm_transport::{
     SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties, SftpPathTransferOptions,
+    SftpTransferControl,
 };
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
 
@@ -61,6 +62,7 @@ pub(in crate::features) struct TransferFeatureState {
     tree: tree::TransferTreeState,
     tree_focus: FocusHandle,
     queue: TransferQueueState,
+    bulk_executor: Option<crate::blocking_jobs::BlockingJobScheduler>,
     paths: TransferPathState,
     pub(super) browser: TransferBrowserState,
     /// The memo over `browser.entries`.
@@ -281,6 +283,8 @@ struct TransferExternalSyncState {
     windows: HashMap<String, ChildWindowSlot>,
     always_uploads: HashSet<String>,
     watchers: HashMap<String, ExternalEditorWatcherEntry>,
+    // Parent control also covers overlapping uploads whose queue row has finished.
+    upload_control: SftpTransferControl,
     focus: FocusHandle,
 }
 
@@ -334,6 +338,7 @@ impl TransferFeatureState {
             ui_batch_max: 0,
             file_ops: TransferFileOpsState::new(),
             queue: TransferQueueState::new(tx, rx, focus.queue),
+            bulk_executor: None,
             paths: TransferPathState::new(remote_path, local_path, duplicate_policy),
             browser_filter: BrowserFilterCache::default(),
             browser: TransferBrowserState {
@@ -626,6 +631,40 @@ impl TransferFeatureState {
         session_id: Option<&str>,
     ) -> usize {
         self.queue.cancel_visible_jobs(session_id)
+    }
+
+    pub(in crate::features) fn bulk_executor(
+        &mut self,
+    ) -> Result<
+        &crate::blocking_jobs::BlockingJobScheduler,
+        crate::blocking_jobs::SchedulerStartError,
+    > {
+        if self.bulk_executor.is_none() {
+            self.bulk_executor = Some(crate::blocking_jobs::BlockingJobScheduler::try_new()?);
+        }
+        Ok(self.bulk_executor.as_ref().expect("executor initialized"))
+    }
+
+    pub(in crate::features) fn begin_bulk_shutdown(&mut self) -> impl FnOnce() + Send + 'static {
+        self.external_sync.upload_control.cancel();
+        for job in &self.queue.jobs {
+            if let Some(control) = &job.control {
+                control.cancel();
+            }
+        }
+        let cleanup = self
+            .bulk_executor
+            .as_ref()
+            .map(|executor| executor.begin_shutdown());
+        move || {
+            if let Some(cleanup) = cleanup {
+                cleanup();
+            }
+        }
+    }
+
+    pub(in crate::features) fn external_editor_upload_control(&self) -> SftpTransferControl {
+        self.external_sync.upload_control.child()
     }
 
     pub(in crate::features) fn clear_completed_transfer_jobs_for_session(
@@ -1069,6 +1108,7 @@ impl TransferFeatureState {
         remote_path: String,
         raw_path_token: Option<String>,
         local_path: std::path::PathBuf,
+        baseline: crate::models::external_editor::ExternalEditorFileVersion,
     ) -> Result<(), String> {
         let watcher = ExternalEditorWatcher::spawn(
             job_id.clone(),
@@ -1076,6 +1116,7 @@ impl TransferFeatureState {
             raw_path_token,
             local_path,
             self.transfer_event_sender(),
+            baseline,
         )
         .map_err(|error| format!("failed to start external editor watcher: {error}"))?;
         self.external_sync.watchers.insert(
@@ -1088,8 +1129,23 @@ impl TransferFeatureState {
         Ok(())
     }
 
-    pub(in crate::features) fn shutdown_external_editor_watchers(&mut self) {
+    pub(in crate::features) fn begin_external_editor_shutdown(
+        &mut self,
+    ) -> impl FnOnce() + Send + 'static {
+        let workers: Vec<_> = self
+            .external_sync
+            .watchers
+            .values_mut()
+            .filter_map(|entry| entry._watcher.stop())
+            .collect();
         self.external_sync.watchers.clear();
+        move || {
+            for worker in workers {
+                if worker.join().is_err() {
+                    tracing::warn!("external editor watcher panicked during shutdown");
+                }
+            }
+        }
     }
 
     /// The window slot for one prompt, if that prompt still exists.
@@ -1351,6 +1407,7 @@ impl TransferExternalSyncState {
             windows: HashMap::new(),
             always_uploads: HashSet::new(),
             watchers: HashMap::new(),
+            upload_control: SftpTransferControl::new(),
             focus,
         }
     }
@@ -1358,7 +1415,17 @@ impl TransferExternalSyncState {
 
 impl Drop for TransferFeatureState {
     fn drop(&mut self) {
-        self.shutdown_external_editor_watchers();
+        let has_workers = self.bulk_executor.is_some() || !self.external_sync.watchers.is_empty();
+        let stop_bulk = self.begin_bulk_shutdown();
+        let stop_watchers = self.begin_external_editor_shutdown();
+        if has_workers {
+            let _ = std::thread::Builder::new()
+                .name("nyaterm-transfer-reaper".into())
+                .spawn(move || {
+                    stop_watchers();
+                    stop_bulk();
+                });
+        }
     }
 }
 

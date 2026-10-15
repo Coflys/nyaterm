@@ -2801,6 +2801,8 @@
     "syncForcePushingProvider": "Envoi forcé de l'instantané de synchronisation cloud via %{provider}.",
     "syncHistoryRefreshFailed": "Échec de l'actualisation de l'historique de synchronisation cloud : %{detail}",
     "syncMasterPasswordRequired": "Définissez un mot de passe maître avant d'activer la synchronisation cloud.",
+    "syncTimeoutStopping": "Délai de synchronisation dépassé, arrêt en cours…",
+    "syncTimeoutFinishing": "Délai de synchronisation dépassé, finalisation en cours…",
     "syncOperationInProgress": "Une opération de synchronisation cloud est déjà en cours.",
     "syncProviderPullFailed": "Échec de la récupération de la synchronisation cloud : %{detail}",
     "syncProviderPullStarted": "Récupération de la synchronisation cloud démarrée.",

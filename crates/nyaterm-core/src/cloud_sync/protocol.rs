@@ -245,6 +245,7 @@ pub(super) fn recover_current_remote_snapshot(
     local_store: &dyn CloudLocalStore,
     remote: &dyn CloudSyncRemote,
     options: &LocalCloudSyncOptions,
+    control: &super::control::CloudSyncOperationControl,
 ) -> Result<RawPortableSnapshot, CloudSyncError> {
     let Some(snapshot) = read_current_sync_snapshot_compat(local_store, remote, options)? else {
         return Err(CloudSyncError::SnapshotMissing {
@@ -268,6 +269,7 @@ pub(super) fn recover_current_remote_snapshot(
     )?;
     ensure_remote_head_unchanged(local_store, remote, &options.remote_root, expected.as_ref())?;
     read_snapshot_for_pointer(local_store, remote, options, &pointer)?;
+    control.begin_commit()?;
     write_sync_pointer(local_store, remote, &options.remote_root, &pointer)?;
     Ok(snapshot)
 }

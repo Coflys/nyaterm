@@ -2778,6 +2778,8 @@
     "syncMasterPasswordMissingDesc": "請先設定主密碼。未設定主密碼前，雲端同步保持停用。",
     "syncMasterPasswordReadyDesc": "雲端同步會使用你的主密碼加密遠端快照。",
     "syncMasterPasswordRequired": "請先設定主密碼再啟用雲端同步。",
+    "syncTimeoutStopping": "同步逾時，正在安全停止…",
+    "syncTimeoutFinishing": "同步逾時，正在完成目前提交…",
     "syncOperationInProgress": "雲端同步操作正在進行中。",
     "syncProvider": "提供方",
     "syncProviderConfig": "儲存提供方設定",

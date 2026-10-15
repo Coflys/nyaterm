@@ -185,32 +185,26 @@ impl NyaTermApp {
         let cached_target_dir = context.cached_target_dir.clone();
         let options = context.options.clone();
         let transfer_tx = self.transfer.transfer_event_sender();
-        self.submit_transfer_blocking_job(
-            "sftp-send-to",
-            id.clone(),
-            transfer_tx.clone(),
-            move || {
-                let mut progress =
-                    TransferProgressEventSender::new(id.clone(), transfer_tx.clone());
-                let result = run_send_to(
-                    SendToRequest {
-                        source_service,
-                        source_remote,
-                        target_service,
-                        cached_target_dir,
-                        entry_name,
-                        target_session_id,
-                        control,
-                        options,
-                    },
-                    move |value| progress.send(value),
-                );
-                let _ = transfer_tx.unbounded_send(TransferJobResult {
-                    id,
-                    event: TransferJobEvent::Finished(result),
-                });
-            },
-        );
+        self.submit_bulk_transfer_job("sftp-send-to", id.clone(), transfer_tx.clone(), move || {
+            let mut progress = TransferProgressEventSender::new(id.clone(), transfer_tx.clone());
+            let result = run_send_to(
+                SendToRequest {
+                    source_service,
+                    source_remote,
+                    target_service,
+                    cached_target_dir,
+                    entry_name,
+                    target_session_id,
+                    control,
+                    options,
+                },
+                move |value| progress.send(value),
+            );
+            let _ = transfer_tx.unbounded_send(TransferJobResult {
+                id,
+                event: TransferJobEvent::Finished(result),
+            });
+        });
         cx.notify();
     }
 }

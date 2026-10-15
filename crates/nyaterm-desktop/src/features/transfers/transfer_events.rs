@@ -31,7 +31,14 @@ use crate::models::{
 const TRANSFER_UI_COALESCE_WINDOW: Duration = Duration::from_millis(16);
 
 type ExternalEditorSyncStart = (Option<String>, String, String, Option<String>, PathBuf);
-type ExternalEditorWatchStart = (Option<String>, String, String, Option<String>, PathBuf);
+type ExternalEditorWatchStart = (
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    PathBuf,
+    crate::models::external_editor::ExternalEditorFileVersion,
+);
 
 use super::state::{TransferEditorSaveOutcome, TransferFeatureState};
 use super::transfer_widgets::{format_file_size, format_transfer_progress};
@@ -1098,6 +1105,7 @@ impl NyaTermApp {
                 remote_path,
                 raw_path_token,
                 local_path,
+                baseline,
             })) => {
                 job.status = TransferJobStatus::Completed;
                 job.detail = format!("Opened {}", local_path.display());
@@ -1115,6 +1123,7 @@ impl NyaTermApp {
                     remote_path,
                     raw_path_token,
                     local_path,
+                    baseline,
                 ));
             }
             TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(summary))) => {
@@ -1357,7 +1366,7 @@ impl NyaTermApp {
                 local_path,
             );
         }
-        if let Some((session_id, job_id, remote_path, raw_path_token, local_path)) =
+        if let Some((session_id, job_id, remote_path, raw_path_token, local_path, baseline)) =
             external_watch_to_start
             && session_id
                 .as_deref()
@@ -1368,6 +1377,7 @@ impl NyaTermApp {
                 remote_path,
                 raw_path_token,
                 local_path,
+                baseline,
             )
         {
             self.shell.set_status(error);

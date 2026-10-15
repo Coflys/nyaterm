@@ -46,6 +46,53 @@ fn transfer_state(cx: &TestAppContext) -> TransferFeatureState {
 }
 
 #[test]
+fn bulk_executor_is_lazy_and_shutdown_wakes_paused_transfers() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = transfer_state(&cx);
+    assert!(state.bulk_executor.is_none());
+    let job = transfer_job("paused", "session", TransferJobStatus::Paused, true);
+    let control = job.control.as_ref().unwrap().clone();
+    control.pause();
+    state.enqueue_transfer_job(job);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let worker_control = control.clone();
+    state
+        .bulk_executor()
+        .unwrap()
+        .submit_detached("paused", move |_| {
+            started_tx.send(()).unwrap();
+            while worker_control.is_paused() && !worker_control.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            finished_tx.send(()).unwrap();
+        })
+        .unwrap();
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let external_upload = state.external_editor_upload_control();
+    let overlapping_upload = state.external_editor_upload_control();
+    external_upload.pause();
+    let cleanup = state.begin_bulk_shutdown();
+    assert!(control.is_cancelled());
+    assert!(!control.is_paused());
+    assert!(external_upload.is_cancelled());
+    assert!(overlapping_upload.is_cancelled());
+    let reaper = std::thread::spawn(cleanup);
+    finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    reaper.join().unwrap();
+    assert!(
+        state
+            .bulk_executor()
+            .unwrap()
+            .submit_detached("late", |_| {})
+            .is_err()
+    );
+}
+
+#[test]
 fn inactive_delete_invalidates_cached_directory_until_its_session_is_restored() {
     use nyaterm_transport::{FileBrowserBackendKind, RemoteFilePath};
 

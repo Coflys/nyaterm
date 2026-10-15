@@ -25,7 +25,7 @@ mod selects;
 mod session;
 mod settings;
 pub(crate) mod shell;
-mod sync;
+pub(crate) mod sync;
 
 pub(crate) fn cloud_sync_operation_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

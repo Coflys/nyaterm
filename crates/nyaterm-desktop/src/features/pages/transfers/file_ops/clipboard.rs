@@ -410,19 +410,14 @@ impl NyaTermApp {
                 options: options.clone(),
             };
             let tx = self.transfer.transfer_event_sender();
-            self.submit_transfer_blocking_job(
-                "file-clipboard",
-                id.clone(),
-                tx.clone(),
-                move || {
-                    let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
-                    let result = run_clipboard_copy(request, move |value| progress.send(value));
-                    let _ = tx.unbounded_send(TransferJobResult {
-                        id,
-                        event: TransferJobEvent::Finished(result),
-                    });
-                },
-            );
+            self.submit_bulk_transfer_job("file-clipboard", id.clone(), tx.clone(), move || {
+                let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
+                let result = run_clipboard_copy(request, move |value| progress.send(value));
+                let _ = tx.unbounded_send(TransferJobResult {
+                    id,
+                    event: TransferJobEvent::Finished(result),
+                });
+            });
             started += 1;
         }
         self.shell

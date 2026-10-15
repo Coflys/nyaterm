@@ -2801,6 +2801,8 @@
     "syncForcePushingProvider": "%{provider}을(를) 통해 클라우드 동기화 스냅샷을 강제로 밀어넣고 있습니다.",
     "syncHistoryRefreshFailed": "클라우드 동기화 기록 새로고침에 실패했습니다: %{detail}",
     "syncMasterPasswordRequired": "클라우드 동기화를 사용하기 전에 마스터 비밀번호를 설정하세요.",
+    "syncTimeoutStopping": "동기화 시간이 초과되어 안전하게 중지하는 중…",
+    "syncTimeoutFinishing": "동기화 시간이 초과되어 현재 커밋을 완료하는 중…",
     "syncOperationInProgress": "클라우드 동기화 작업이 이미 진행 중입니다.",
     "syncProviderPullFailed": "클라우드 동기화를 당겨오지 못했습니다: %{detail}",
     "syncProviderPullStarted": "클라우드 동기화 당겨오기(공급자)를 시작했습니다.",

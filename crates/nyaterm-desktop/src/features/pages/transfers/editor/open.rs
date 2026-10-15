@@ -1,6 +1,8 @@
 use gpui::{Context, Window};
 use nyaterm_core::AiCustomActionConfig;
-use nyaterm_transport::{RemoteTextGeneration, SftpFileEntry, SftpFileType, SftpTransferControl};
+use nyaterm_transport::{
+    RemoteTextGeneration, SFTP_TRANSFER_CANCELLED, SftpFileEntry, SftpFileType, SftpTransferControl,
+};
 
 use crate::features::NyaTermApp;
 use crate::models::{
@@ -457,7 +459,7 @@ impl NyaTermApp {
 
         let progress_tx = self.transfer.transfer_event_sender();
         let finished_tx = self.transfer.transfer_event_sender();
-        self.submit_transfer_blocking_job(
+        self.submit_bulk_transfer_job(
             "sftp-open-external",
             id.clone(),
             finished_tx.clone(),
@@ -470,7 +472,7 @@ impl NyaTermApp {
                             .download_remote_file_with_progress_and_control_options(
                                 &remote_file_path,
                                 local_path.clone(),
-                                control,
+                                control.clone(),
                                 transfer_options,
                                 move |progress| {
                                     let _ = progress_tx.unbounded_send(TransferJobResult {
@@ -481,8 +483,23 @@ impl NyaTermApp {
                             )
                             .map_err(|error| error.to_string())
                             .and_then(|_| {
+                                let baseline = crate::features::transfers::external_sync_runtime::read_external_editor_version(
+                                    &local_path,
+                                    || control.is_cancelled(),
+                                )
+                                .map_err(|error| {
+                                    if error.kind() == std::io::ErrorKind::Interrupted {
+                                        SFTP_TRANSFER_CANCELLED.to_string()
+                                    } else {
+                                        error.to_string()
+                                    }
+                                })?;
+                                if control.is_cancelled() {
+                                    return Err(SFTP_TRANSFER_CANCELLED.to_string());
+                                }
                                 open_local_path_with_editor(&local_path, &default_editor).map(
                                     |_| TransferJobOutput::ExternalOpened {
+                                        baseline,
                                         remote_path: remote_path.clone(),
                                         raw_path_token: remote_file_path.raw_path_token.clone(),
                                         local_path: local_path.clone(),

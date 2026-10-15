@@ -2778,6 +2778,8 @@
     "syncMasterPasswordMissingDesc": "Set a master password first. Cloud sync stays disabled until one is configured.",
     "syncMasterPasswordReadyDesc": "Cloud sync uses your master password to encrypt the remote snapshot.",
     "syncMasterPasswordRequired": "Set a master password before enabling cloud sync.",
+    "syncTimeoutStopping": "Sync timed out; stopping safely…",
+    "syncTimeoutFinishing": "Sync timed out; finishing the current commit…",
     "syncOperationInProgress": "Cloud sync operation already in progress.",
     "syncProvider": "Provider",
     "syncProviderConfig": "Provider Configuration",
