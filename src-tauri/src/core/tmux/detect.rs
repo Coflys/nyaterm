@@ -1,24 +1,8 @@
-//! Detection of `tmux -CC` startup inside a normal terminal byte stream.
-//!
-//! Detection is deliberately two-sided so a program that merely *prints*
-//! tmux-looking lines can never hijack the channel:
-//!
-//! 1. **Arm** — the detector only watches output after the input side
-//!    submits a command line that invokes tmux with `-C`/`-CC` (typed by
-//!    the user, sent as a startup/post-login command, or wrapped in an AI
-//!    capture exec). Arming expires after [`ARM_WINDOW`] or when the next
-//!    non-matching command line is submitted.
-//! 2. **Confirm** — once armed, a whitelisted `%`-notification at a line
-//!    start hands the channel to the control session. The control loop
-//!    additionally bails back to the shell if it sees plain-text lines
-//!    where the protocol guarantees only `%` lines exist.
+//! Bounded passive confirmation of tmux startup in a normal SSH stream.
 
-use super::control::is_control_notification;
-use std::time::{Duration, Instant};
-
-/// Upper bound for a held-back candidate line; longer lines flush as normal
-/// output so a stray `%` can never stall the terminal.
-const MAX_CANDIDATE_LINE_BYTES: usize = 512;
+use super::handshake::{CONFIRM_MAX_BYTES, CONFIRM_TIMEOUT, CONTROL_PREFIX, Startup};
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// How long after a `tmux -CC` command line a control notification is still
 /// expected. tmux announces control mode essentially immediately; a longer
@@ -29,9 +13,8 @@ const ARM_WINDOW: Duration = Duration::from_secs(30);
 /// Shorter arm window for a *submitted but invisible* command line: shell
 /// history recall (arrow keys, Ctrl+R) sends only editing escapes — the
 /// recalled command text arrives as output redraw, so input-side matching
-/// can never see it. We arm briefly on that gesture and let the post-detect
-/// bail path (`unverified_lines`) reject a stream that is not really
-/// control protocol. Gated on having consumed an escape sequence so a bare
+/// can never see it. The gesture only enables passive startup detection;
+/// framing and the nonce query must still confirm the control protocol. Gated on having consumed an escape sequence so a bare
 /// Enter at an empty prompt never arms detection.
 const BLIND_ARM_WINDOW: Duration = Duration::from_secs(5);
 
@@ -187,12 +170,15 @@ pub(crate) fn is_tmux_control_command(line: &str) -> bool {
 pub(crate) enum TmuxFeed {
     /// Bytes to forward through the regular output pipeline.
     Passthrough(Vec<u8>),
-    /// A control notification was found at a line start.
+    /// A complete startup response and session notification were confirmed.
     ///
-    /// `passthrough` are bytes before the notification that still belong to
-    /// the normal terminal stream; `rest` are the bytes after the detected
-    /// line and must be consumed by the control-mode parser.
-    Detected { passthrough: Vec<u8>, rest: Vec<u8> },
+    /// `startup` preserves the full candidate for replay on probe failure.
+    /// `rest` follows it; `passthrough` precedes it in the normal stream.
+    Detected {
+        passthrough: Vec<u8>,
+        startup: Vec<u8>,
+        rest: Vec<u8>,
+    },
 }
 
 /// Escape-sequence state while tracking user input bytes. Cursor/editing
@@ -224,6 +210,9 @@ pub(crate) struct TmuxControlDetector {
     candidate: Option<Vec<u8>>,
     /// Set once control mode was detected; a dead detector passes through.
     done: bool,
+    startup: Startup,
+    startup_offset: usize,
+    candidate_deadline: Option<Instant>,
     /// Input line being composed on the user side; completed on Enter.
     input_line: Vec<u8>,
     /// Escape-sequence tracking state for [`Self::feed_input`].
@@ -245,6 +234,9 @@ impl TmuxControlDetector {
             line_start: true,
             candidate: None,
             done: false,
+            startup: Startup::default(),
+            startup_offset: 0,
+            candidate_deadline: None,
             input_line: Vec::new(),
             input_track: InputTrack::Normal,
             armed_at: None,
@@ -333,6 +325,10 @@ impl TmuxControlDetector {
                         self.evaluate_input_line(&line);
                     }
                 }
+                0x12 | 0x10 | 0x0e => {
+                    self.input_saw_escape = true;
+                    self.input_line.clear();
+                }
                 0x7f | 0x08 => {
                     self.input_line.pop();
                 }
@@ -365,78 +361,100 @@ impl TmuxControlDetector {
         }
     }
 
+    pub(crate) fn deadline(&self) -> Option<Instant> {
+        self.candidate_deadline
+    }
+
+    /// Called by the SSH select loop even if the peer sends no more bytes.
+    pub(crate) fn expire_candidate(&mut self) -> Vec<u8> {
+        self.armed_at = None;
+        self.blind_arm_at = None;
+        self.take_candidate()
+    }
+
+    fn take_candidate(&mut self) -> Vec<u8> {
+        self.candidate_deadline = None;
+        self.startup = Startup::default();
+        self.startup_offset = 0;
+        let bytes = self.candidate.take().unwrap_or_default();
+        self.line_start = bytes.last() == Some(&b'\n');
+        bytes
+    }
+
     pub(crate) fn feed(&mut self, data: &[u8]) -> TmuxFeed {
         if self.done {
             return TmuxFeed::Passthrough(data.to_vec());
         }
-
-        let mut out: Vec<u8> = Vec::with_capacity(data.len());
-        let mut i = 0;
-
-        while i < data.len() {
-            if let Some(candidate) = self.candidate.as_mut() {
-                let byte = data[i];
-                i += 1;
-                if byte == b'\n' {
-                    let mut line = std::mem::take(candidate);
-                    if line.last() == Some(&b'\r') {
-                        line.pop();
-                    }
-                    self.candidate = None;
-                    match std::str::from_utf8(&line) {
-                        Ok(text) if is_control_notification(text) && self.is_armed() => {
-                            self.done = true;
-                            return TmuxFeed::Detected {
-                                passthrough: out,
-                                rest: data[i..].to_vec(),
-                            };
-                        }
-                        Ok(_) => {
-                            // Not a notification: the line was ordinary output.
-                            out.extend_from_slice(&line);
-                            out.push(b'\n');
-                            self.line_start = true;
-                        }
-                        _ => {
-                            // Not a notification: the line was ordinary output.
-                            out.extend_from_slice(&line);
-                            out.push(b'\n');
-                            self.line_start = true;
-                        }
-                    }
-                } else {
-                    // Grammar: `%<keyword:[a-z-]+> [' ' <args>] '\n'.
-                    // Once a space ends the keyword, args may be arbitrary.
-                    let in_args = candidate[1..].contains(&b' ');
-                    let allowed = if in_args {
-                        true
-                    } else {
-                        byte.is_ascii_lowercase() || byte == b'-' || byte == b' '
-                    };
-                    if !allowed || candidate.len() >= MAX_CANDIDATE_LINE_BYTES {
-                        // Can never become a notification: flush as output.
-                        out.extend_from_slice(candidate);
-                        out.push(byte);
-                        self.candidate = None;
-                        self.line_start = false;
-                    } else {
-                        candidate.push(byte);
-                    }
-                }
-                continue;
+        let mut out = Vec::new();
+        if self
+            .candidate_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            out.extend(self.expire_candidate());
+        }
+        if !self.is_armed() {
+            if self.candidate.is_some() {
+                out.extend(self.take_candidate());
             }
-
-            let byte = data[i];
-            i += 1;
-            if self.line_start && byte == b'%' {
-                self.candidate = Some(vec![b'%']);
-                self.line_start = false;
-            } else {
-                out.push(byte);
-                self.line_start = byte == b'\n';
+            out.extend_from_slice(data);
+            if let Some(last) = data.last() {
+                self.line_start = *last == b'\n';
+            }
+            return TmuxFeed::Passthrough(out);
+        }
+        for (i, &byte) in data.iter().enumerate() {
+            if self.candidate.is_none() {
+                if byte == 0x1b || (self.line_start && byte == b'%') {
+                    self.candidate = Some(Vec::new());
+                    self.candidate_deadline = Some(Instant::now() + CONFIRM_TIMEOUT);
+                } else {
+                    out.push(byte);
+                    self.line_start = byte == b'\n';
+                    continue;
+                }
+            }
+            let candidate = self.candidate.as_mut().unwrap();
+            candidate.push(byte);
+            if candidate.len() > CONFIRM_MAX_BYTES {
+                out.extend(self.expire_candidate());
+                out.extend_from_slice(&data[i + 1..]);
+                return TmuxFeed::Passthrough(out);
+            }
+            if self.startup_offset == 0 {
+                // -CC's DCS may start mid-prompt; unrelated terminal escapes
+                // and ordinary '%' notifications are forwarded immediately.
+                let prefix = if candidate[0] == 0x1b {
+                    CONTROL_PREFIX
+                } else {
+                    b"%begin "
+                };
+                if candidate.len() <= prefix.len() && !prefix.starts_with(candidate) {
+                    out.extend(self.take_candidate());
+                    continue;
+                }
+            }
+            if byte == b'\n' {
+                let mut line = &candidate[self.startup_offset..candidate.len() - 1];
+                if self.startup_offset == 0 {
+                    line = line.strip_prefix(CONTROL_PREFIX).unwrap_or(line);
+                }
+                let result = self.startup.line(line);
+                self.startup_offset = candidate.len();
+                match result {
+                    Some(true) => {
+                        let startup = self.take_candidate();
+                        self.done = true;
+                        return TmuxFeed::Detected {
+                            passthrough: out,
+                            startup,
+                            rest: data[i + 1..].to_vec(),
+                        };
+                    }
+                    Some(false) => {}
+                    None => out.extend(self.take_candidate()),
+                }
             }
         }
-
         TmuxFeed::Passthrough(out)
     }
 }
@@ -444,15 +462,18 @@ impl TmuxControlDetector {
 #[cfg(test)]
 mod tests {
     use super::{TmuxControlDetector, TmuxFeed, is_tmux_control_command};
+    const STARTUP: &[u8] = b"%begin 1 2 0\r\n%end 1 2 0\r\n%window-add @0\r\n%sessions-changed\r\n%session-changed $0 0\r\n";
 
     #[test]
     fn detects_control_line_and_splits_stream() {
         let mut detector = TmuxControlDetector::new();
         detector.feed_input(b"tmux -CC new -As0\r");
         let chunk =
-            b"user@host:~$ tmux -CC new -As0\r\n%session-changed $0 0\r\n%window-add @1\r\n";
+            b"user@host:~$ tmux -CC new -As0\r\n\x1bP1000p%begin 1 2 0\r\n%end 1 2 0\r\n%session-changed $0 0\r\n%window-add @1\r\n";
         match detector.feed(chunk) {
-            TmuxFeed::Detected { passthrough, rest } => {
+            TmuxFeed::Detected {
+                passthrough, rest, ..
+            } => {
                 assert_eq!(passthrough, b"user@host:~$ tmux -CC new -As0\r\n");
                 assert_eq!(rest, b"%window-add @1\r\n");
             }
@@ -490,7 +511,7 @@ mod tests {
     fn startup_command_can_pre_arm() {
         let mut detector = TmuxControlDetector::new();
         detector.arm();
-        match detector.feed(b"%session-changed $0 0\nrest") {
+        match detector.feed(&[STARTUP, b"rest"].concat()) {
             TmuxFeed::Detected { rest, .. } => assert_eq!(rest, b"rest"),
             TmuxFeed::Passthrough(_) => panic!("pre-armed detector must detect"),
         }
@@ -504,10 +525,7 @@ mod tests {
         detector.feed_input(
             b" printf '\\n__DF_CMD_''START_x__\\n'; { tmux -CC attach -t 0; }; _dfec=$?; printf '\\n__DF_CMD_''END_x__\\n'\r",
         );
-        assert!(matches!(
-            detector.feed(b"%session-changed $0 0\n"),
-            TmuxFeed::Detected { .. }
-        ));
+        assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
     }
 
     #[test]
@@ -516,9 +534,9 @@ mod tests {
         // string must not arm, or `echo 'x; tmux -CC'` would hijack.
         let mut detector = TmuxControlDetector::new();
         detector.feed_input(b"echo 'x; tmux -CC'\r");
-        match detector.feed(b"%session-changed $0 0\n") {
+        match detector.feed(STARTUP) {
             TmuxFeed::Passthrough(bytes) => {
-                assert_eq!(bytes, b"%session-changed $0 0\n");
+                assert_eq!(bytes, STARTUP);
             }
             TmuxFeed::Detected { .. } => panic!("quoted tmux text must not arm"),
         }
@@ -558,22 +576,87 @@ mod tests {
     }
 
     #[test]
-    fn detection_spans_chunk_boundaries() {
+    fn detection_spans_every_chunk_boundary() {
+        let bytes = [
+            b"prompt\x1bP1000p".as_slice(),
+            STARTUP,
+            b"%output %0 hello\n",
+        ]
+        .concat();
+        for split in 0..bytes.len() {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(b"\x1b[A\r");
+            let mut visible = Vec::new();
+            let mut detected = false;
+            for chunk in [&bytes[..split], &bytes[split..]] {
+                match detector.feed(chunk) {
+                    TmuxFeed::Passthrough(data) => {
+                        if !detected {
+                            visible.extend(data);
+                        }
+                    }
+                    TmuxFeed::Detected {
+                        passthrough,
+                        startup,
+                        ..
+                    } => {
+                        visible.extend(passthrough);
+                        assert_eq!(startup, [b"\x1bP1000p".as_slice(), STARTUP].concat());
+                        detected = true;
+                    }
+                }
+            }
+            assert!(detected, "split {split}");
+            assert_eq!(visible, b"prompt");
+        }
+    }
+
+    #[test]
+    fn recalled_non_tmux_commands_never_take_over() {
+        for input in [b"\x1b[A\r".as_slice(), b"\x12\r", b"\x1bOA\r"] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(input);
+            let output = b"printf '%%window-add @1\\n'\r\n%window-add @1\r\nuser@host$ ";
+            assert!(
+                matches!(detector.feed(output), TmuxFeed::Passthrough(bytes) if bytes == output)
+            );
+        }
+    }
+
+    #[test]
+    fn startup_needs_matching_response_and_session() {
+        for bytes in [
+            b"%begin 1 2 0\n%end 1 3 0\n%session-changed $0 x\n".as_slice(),
+            b"%begin 1 2 0\n%error 1 2 0\n%session-changed $0 x\n",
+        ] {
+            let mut detector = TmuxControlDetector::new();
+            detector.arm();
+            assert!(matches!(detector.feed(bytes), TmuxFeed::Passthrough(data) if data == bytes));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn candidate_timeout_replays_raw_bytes_without_new_data() {
         let mut detector = TmuxControlDetector::new();
-        detector.feed_input(b"tmux -CC attach\r");
-        assert!(matches!(
-            detector.feed(b"prompt%window-ad"),
-            TmuxFeed::Passthrough(_)
-        ));
-        // `%window-ad` was not at a line start, second chunk continues normal.
-        match detector.feed(b"\n%wind") {
-            TmuxFeed::Passthrough(bytes) => assert_eq!(bytes, b"\n"),
-            TmuxFeed::Detected { .. } => panic!("line not complete yet"),
-        }
-        match detector.feed(b"ow-add @1\n%exit\n") {
-            TmuxFeed::Detected { rest, .. } => assert_eq!(rest, b"%exit\n"),
-            TmuxFeed::Passthrough(_) => panic!("expected detection"),
-        }
+        detector.arm();
+        let bytes = b"\x1bP1000p%begin 1 2 0\r\n\xffincomplete";
+        assert!(matches!(detector.feed(bytes), TmuxFeed::Passthrough(data) if data.is_empty()));
+        tokio::time::sleep_until(detector.deadline().unwrap()).await;
+        assert_eq!(detector.expire_candidate(), bytes);
+        assert!(detector.deadline().is_none());
+    }
+
+    #[test]
+    fn startup_buffer_is_bounded_and_preserves_overflow() {
+        let mut detector = TmuxControlDetector::new();
+        detector.arm();
+        let bytes = [
+            b"%begin 1 2 0\n".as_slice(),
+            &vec![b'x'; super::CONFIRM_MAX_BYTES],
+        ]
+        .concat();
+        assert!(matches!(detector.feed(&bytes), TmuxFeed::Passthrough(data) if data == bytes));
+        assert!(detector.candidate.is_none());
     }
 
     #[test]
@@ -623,10 +706,7 @@ mod tests {
         // leaking `A` into the line made re-attach detection impossible.
         let mut detector = TmuxControlDetector::new();
         detector.feed_input(b"\x1b[A\r");
-        assert!(matches!(
-            detector.feed(b"%session-changed $0 0\n"),
-            TmuxFeed::Detected { .. }
-        ));
+        assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
     }
 
     #[test]
@@ -638,10 +718,7 @@ mod tests {
         detector.feed_input(b"tmux -CC new -As0");
         // word-jump left then more editing noise before submitting
         detector.feed_input(b"\x1b[1;5D\x1b[1;5C\r");
-        assert!(matches!(
-            detector.feed(b"%session-changed $0 0\n"),
-            TmuxFeed::Detected { .. }
-        ));
+        assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
     }
 
     #[test]
@@ -651,10 +728,7 @@ mod tests {
         let mut detector = TmuxControlDetector::new();
         detector.feed_input(b"\x1bOA\x1bb"); // SS3 arrow-up, Alt+b
         detector.feed_input(b"tmux -CC new -As0\r");
-        assert!(matches!(
-            detector.feed(b"%session-changed $0 0\n"),
-            TmuxFeed::Detected { .. }
-        ));
+        assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
     }
 
     #[test]
@@ -663,9 +737,6 @@ mod tests {
         // sequences and must not push `200~`/`201~` into the line.
         let mut detector = TmuxControlDetector::new();
         detector.feed_input(b"\x1b[200~tmux -CC new -As0\x1b[201~\r");
-        assert!(matches!(
-            detector.feed(b"%session-changed $0 0\n"),
-            TmuxFeed::Detected { .. }
-        ));
+        assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
     }
 }

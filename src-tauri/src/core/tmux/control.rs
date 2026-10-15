@@ -10,17 +10,34 @@
 //! never have to care about line boundaries.
 
 use serde::Serialize;
-use std::collections::VecDeque;
+
+/// Identity shared by the opening and closing markers of a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlockId {
+    pub time: u64,
+    pub number: u64,
+    pub flags: u64,
+}
+
+fn parse_block_id(line: &str) -> Option<BlockId> {
+    let mut parts = line.split_whitespace().skip(1);
+    let id = BlockId {
+        time: parts.next()?.parse().ok()?,
+        number: parts.next()?.parse().ok()?,
+        flags: parts.next()?.parse().ok()?,
+    };
+    parts.next().is_none().then_some(id)
+}
 
 /// A completed control-mode line.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ControlMessage {
     /// `%begin <time> <num> <flags>` — start of a command response block.
-    Begin,
+    Begin(BlockId),
     /// `%end <time> <num> <flags>` — successful end of the current block.
-    End,
+    End(BlockId),
     /// `%error <time> <num> <flags>` — failed end of the current block.
-    Error,
+    Error(BlockId),
     /// `%output %<pane> <octal-escaped data>`
     Output {
         pane: String,
@@ -151,13 +168,12 @@ impl LayoutCell {
     }
 }
 
-/// Incremental line-based parser for the control channel.
+/// Incremental parser. Lines are consumed individually so bytes after `%exit`
+/// remain untouched, including shell prompts in the same SSH packet.
 #[derive(Default)]
 pub(crate) struct ControlParser {
-    /// Bytes of the current incomplete line.
-    line: Vec<u8>,
-    /// Completed lines pending dispatch.
-    lines: VecDeque<String>,
+    bytes: Vec<u8>,
+    consumed: usize,
 }
 
 impl ControlParser {
@@ -165,34 +181,35 @@ impl ControlParser {
         Self::default()
     }
 
-    /// Feed raw channel bytes; returns complete control lines in order.
-    ///
-    /// Control output over a PTY may arrive with `\r\n` endings, so a trailing
-    /// `\r` is stripped from every completed line.
-    pub(crate) fn feed(&mut self, data: &[u8]) -> Vec<String> {
-        let mut start = 0;
-        for (index, byte) in data.iter().enumerate() {
-            if *byte == b'\n' {
-                let mut end = index;
-                if end > start && data[end - 1] == b'\r' {
-                    end -= 1;
-                }
-                self.line.extend_from_slice(&data[start..end]);
-                if let Ok(text) = std::str::from_utf8(&self.line) {
-                    self.lines.push_back(text.to_string());
-                }
-                self.line.clear();
-                start = index + 1;
-            }
+    pub(crate) fn push(&mut self, data: &[u8]) {
+        if self.consumed > 0 {
+            self.bytes.drain(..self.consumed);
+            self.consumed = 0;
         }
-        self.line.extend_from_slice(&data[start..]);
-        self.lines.drain(..).collect()
+        self.bytes.extend_from_slice(data);
     }
 
-    /// Bytes still buffered mid-line; used to hand leftovers back when the
-    /// control session ends and the channel returns to a normal shell.
+    pub(crate) fn next_line(&mut self) -> Option<String> {
+        let start = self.consumed;
+        let end = start + self.bytes[start..].iter().position(|b| *b == b'\n')?;
+        self.consumed = end + 1;
+        let line = self.bytes[start..end]
+            .strip_suffix(b"\r")
+            .unwrap_or(&self.bytes[start..end]);
+        Some(String::from_utf8_lossy(line).into_owned())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn feed(&mut self, data: &[u8]) -> Vec<String> {
+        self.push(data);
+        std::iter::from_fn(|| self.next_line()).collect()
+    }
+
     pub(crate) fn take_pending(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.line)
+        let pending = self.bytes.split_off(self.consumed);
+        self.bytes.clear();
+        self.consumed = 0;
+        pending
     }
 }
 
@@ -244,9 +261,9 @@ pub(crate) fn parse_line(line: &str) -> Option<ControlMessage> {
 
     match keyword {
         "begin" | "end" | "error" => Some(match keyword {
-            "begin" => ControlMessage::Begin,
-            "end" => ControlMessage::End,
-            _ => ControlMessage::Error,
+            "begin" => ControlMessage::Begin(parse_block_id(line)?),
+            "end" => ControlMessage::End(parse_block_id(line)?),
+            _ => ControlMessage::Error(parse_block_id(line)?),
         }),
         "output" => {
             let args = rest_after_keyword(line, "%output")?;
@@ -375,59 +392,6 @@ pub(crate) fn parse_line(line: &str) -> Option<ControlMessage> {
 fn args_id(line: &str, keyword: &str) -> Option<String> {
     rest_after_keyword(line, keyword)
         .and_then(|args| args.split_whitespace().next().and_then(id_arg))
-}
-
-/// True when a completed line at column 0 looks like a control-mode
-/// notification. Used to detect `tmux -CC` startup in a normal data stream;
-/// the whitelist keeps stray `%` text from false-triggering.
-pub(crate) fn is_control_notification(line: &str) -> bool {
-    const KEYWORDS: &[&str] = &[
-        "begin",
-        "end",
-        "error",
-        "exit",
-        "output",
-        "extended-output",
-        "layout-change",
-        "pane-exited",
-        "pane-mode-changed",
-        "window-pane-changed",
-        "session-changed",
-        "session-window-changed",
-        "session-renamed",
-        "sessions-changed",
-        "window-add",
-        "window-close",
-        "window-renamed",
-        "unlinked-window-add",
-        "unlinked-window-close",
-        "unlinked-window-renamed",
-        "client-detached",
-        "client-session-changed",
-        "config-error",
-        "continue",
-        "pause",
-        "message",
-        "subscription-changed",
-        "paste-buffer-changed",
-        "paste-buffer-deleted",
-    ];
-
-    let Some(rest) = line.strip_prefix('%') else {
-        return false;
-    };
-    let keyword_len = rest
-        .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-'))
-        .unwrap_or(rest.len());
-    // A bare `%` or a nameless line is not a notification.
-    if keyword_len == 0 {
-        return false;
-    }
-    // The keyword must be followed by a space or end the line.
-    if keyword_len != rest.len() && rest.as_bytes()[keyword_len] != b' ' {
-        return false;
-    }
-    KEYWORDS.contains(&&rest[..keyword_len])
 }
 
 /// Parse a tmux layout cell starting at `pos` in `input`.
@@ -627,5 +591,42 @@ mod tests {
     fn non_control_lines_rejected() {
         assert_eq!(parse_line("regular output"), None);
         assert_eq!(parse_line(""), None);
+    }
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::*;
+
+    #[test]
+    fn response_markers_require_identity() {
+        let id = BlockId {
+            time: 12,
+            number: 34,
+            flags: 1,
+        };
+        assert_eq!(
+            parse_line("%begin 12 34 1"),
+            Some(ControlMessage::Begin(id))
+        );
+        assert_eq!(parse_line("%end 12 34 1"), Some(ControlMessage::End(id)));
+        for invalid in [
+            "%begin",
+            "%end fake",
+            "%error 12 34",
+            "%end 12 34 1 garbage",
+        ] {
+            assert_eq!(parse_line(invalid), None);
+        }
+    }
+
+    #[test]
+    fn exit_keeps_same_packet_shell_bytes_and_split_crlf_intact() {
+        let mut parser = ControlParser::new();
+        parser.push(b"%exit\r");
+        assert!(parser.next_line().is_none());
+        parser.push(b"\n\x1b\\\r\nshell\xff\r\nprompt> ");
+        assert_eq!(parser.next_line().as_deref(), Some("%exit"));
+        assert_eq!(parser.take_pending(), b"\x1b\\\r\nshell\xff\r\nprompt> ");
     }
 }

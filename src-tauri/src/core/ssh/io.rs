@@ -1295,6 +1295,50 @@ pub(super) async fn ssh_io_loop(
         tokio::select! {
             biased;
 
+            () = async {
+                if let Some(deadline) = tmux_detector.deadline() {
+                    tokio::time::sleep_until(deadline).await;
+                }
+            }, if tmux_detector.deadline().is_some() => {
+                let bytes = tmux_detector.expire_candidate();
+                if let Some(ref recorder) = recording_mgr {
+                    recorder.write_raw_output(&session_id, &bytes);
+                }
+                let text = output_decoder.decode(&bytes);
+                let mut result = stripper.push(&text);
+
+                if capture_processor.has_active() {
+                    result.visible = capture_processor.process(&result.visible);
+                    if result.ready {
+                        capture_processor.finish_abandoned_at_prompt();
+                    }
+                }
+
+                handle_osc_result(
+                    &app,
+                    &output,
+                    &cwd_event,
+                    &cwd,
+                    &recording_mgr,
+                    &session_id,
+                    &manager,
+                    &mut channel,
+                    &mut pending_script,
+                    &mut inject_deadline,
+                    &mut phase,
+                    &result,
+                    &mut suppressed_visible_fallback,
+                    shell_kind,
+                    &mut injection_sent_at,
+                    &mut suppression_diagnostics,
+                ).await;
+                arm_post_login_timer(
+                    &phase,
+                    &pending_post_login,
+                    &mut post_login_deadline,
+                );
+            }
+
             _ = &mut inject_deadline,
                 if phase == IoPhase::Suppressing && injection_sent_at.is_some() =>
             {
@@ -1514,12 +1558,11 @@ pub(super) async fn ssh_io_loop(
                             continue;
                         }
 
-                        // tmux control mode (`tmux -CC`): watch for `%`-notifications
-                        // at a line start; on the first one the channel switches to
-                        // the control session until `%exit` hands it back.
+                        // tmux control mode: confirm startup framing and a nonce response
+                        // before changing session ownership or workspace state.
                         let data = match tmux_detector.feed(data) {
                             TmuxFeed::Passthrough(data) => data,
-                            TmuxFeed::Detected { passthrough, rest } => {
+                            TmuxFeed::Detected { passthrough, startup, rest } => {
                                 // Flush the bytes preceding the notification through
                                 // the regular path, then hand the channel over.
                                 if !passthrough.is_empty() {
@@ -1535,6 +1578,51 @@ pub(super) async fn ssh_io_loop(
                                         &result.visible,
                                     );
                                 }
+                                let rest = match tmux::verify_control_channel(&mut channel, &startup, &rest).await {
+                                    Ok(rest) => rest,
+                                    Err(leftover) => {
+                                        // No UI/session state was changed. Replay the exact bytes
+                                        // through the shell pipeline; queued user input stays intact.
+                                        tmux_detector = TmuxControlDetector::new();
+                                        if let Some(ref recorder) = recording_mgr {
+                                            recorder.write_raw_output(&session_id, &leftover);
+                                        }
+                                        let text = output_decoder.decode(&leftover);
+                                        let mut result = stripper.push(&text);
+
+                                        if capture_processor.has_active() {
+                                            result.visible = capture_processor.process(&result.visible);
+                                            if result.ready {
+                                                capture_processor.finish_abandoned_at_prompt();
+                                            }
+                                        }
+
+                                        handle_osc_result(
+                                            &app,
+                                            &output,
+                                            &cwd_event,
+                                            &cwd,
+                                            &recording_mgr,
+                                            &session_id,
+                                            &manager,
+                                            &mut channel,
+                                            &mut pending_script,
+                                            &mut inject_deadline,
+                                            &mut phase,
+                                            &result,
+                                            &mut suppressed_visible_fallback,
+                                            shell_kind,
+                                            &mut injection_sent_at,
+                                            &mut suppression_diagnostics,
+                                        ).await;
+                                        arm_post_login_timer(
+                                            &phase,
+                                            &pending_post_login,
+                                            &mut post_login_deadline,
+                                        );
+                                        continue;
+                                    }
+                                };
                                 let stamp = tmux_local_stamp();
                                 emit_visible_text(
                                     &output,

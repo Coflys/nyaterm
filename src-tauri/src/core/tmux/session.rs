@@ -14,7 +14,7 @@
 //! - `%exit` (after `detach` or a remote kill) hands the channel back to the
 //!   regular SSH loop, which continues as a normal shell.
 
-use super::control::{ControlMessage, ControlParser, LayoutCell, TmuxUiNode, parse_line};
+use super::control::{BlockId, ControlMessage, ControlParser, LayoutCell, TmuxUiNode, parse_line};
 use crate::core::capture::OutputCaptureProcessor;
 use crate::core::terminal_session::TerminalOutputDecoder;
 use crate::core::{
@@ -49,11 +49,6 @@ const PENDING_PANE_OUTPUT_MAX_BYTES: usize = 512 * 1024;
 const DETACH_EXIT_TIMEOUT_MS: u64 = 3000;
 /// Flow control: after a `%pause`, let the pane breathe, then continue it.
 const PAUSE_CONTINUE_DELAY_MS: u64 = 250;
-/// Plain lines tolerated before the control stream is considered verified.
-/// Real control-mode output is exclusively `%` lines, so any shell text
-/// means the channel was taken over by mistake; the margin only exists so
-/// a stray artifact cannot abort a legitimate session.
-const MAX_UNVERIFIED_LINES: usize = 8;
 /// `resize-pane` retries per distinct target; the echoed `%layout-change`
 /// retriggers the fixup, so without a cap an unreachable target would loop.
 const RESIZE_PANE_MAX_ATTEMPTS: u8 = 2;
@@ -209,6 +204,7 @@ pub(crate) struct ControlSession<'a> {
     parser: ControlParser,
     /// Lines collected inside a `%begin`..`%end` block.
     block_lines: Option<Vec<String>>,
+    block_id: Option<BlockId>,
     /// When the current response block opened. Used as the capture snapshot
     /// boundary: output produced before this instant is guaranteed inside a
     /// capture executed within the block, while output produced after may
@@ -263,18 +259,6 @@ pub(crate) struct ControlSession<'a> {
     exit_mode: Option<ExitMode>,
     exit_seen: bool,
     detach_deadline: Option<Pin<Box<Sleep>>>,
-
-    /// Set once any line parses as a control message — a real control
-    /// stream is exclusively `%` lines, so reaching this proves the channel
-    /// truly speaks the protocol.
-    verified: bool,
-    /// Plain-text lines received before verification. A false takeover
-    /// (armed detector + a program printing `%` lines) lands shell output
-    /// here; past [`MAX_UNVERIFIED_LINES`] the session bails back to the
-    /// normal shell path and replays them so nothing is swallowed.
-    unverified_lines: Vec<String>,
-    /// Bail out of control mode back to the shell (see `unverified_lines`).
-    bail: bool,
 }
 
 impl<'a> ControlSession<'a> {
@@ -294,6 +278,7 @@ impl<'a> ControlSession<'a> {
             connection_id,
             parser: ControlParser::new(),
             block_lines: None,
+            block_id: None,
             block_started_at: None,
             pending_responses: VecDeque::new(),
             windows: HashMap::new(),
@@ -319,9 +304,6 @@ impl<'a> ControlSession<'a> {
             exit_mode: None,
             exit_seen: false,
             detach_deadline: None,
-            verified: false,
-            unverified_lines: Vec::new(),
-            bail: false,
         }
     }
 
@@ -944,20 +926,23 @@ impl<'a> ControlSession<'a> {
         if let Some(lines) = self.block_lines.as_mut() {
             let message = parse_line(&line);
             match message {
-                Some(ControlMessage::End | ControlMessage::Error) => {
+                Some(ControlMessage::End(id) | ControlMessage::Error(id))
+                    if self.block_id == Some(id) =>
+                {
                     let collected = std::mem::take(lines);
-                    let failed = matches!(message, Some(ControlMessage::Error));
+                    let failed = matches!(message, Some(ControlMessage::Error(_)));
                     self.block_lines = None;
+                    self.block_id = None;
                     let kind = self
                         .pending_responses
                         .pop_front()
                         .unwrap_or(PendingKind::Ignore);
                     self.handle_block(channel, kind, collected, failed).await;
                 }
-                Some(ControlMessage::Begin) => {
-                    tracing::warn!("tmux control: nested %begin; discarding outer block");
-                    self.block_lines = None;
-                    self.pending_responses.pop_front();
+                Some(
+                    ControlMessage::Begin(_) | ControlMessage::End(_) | ControlMessage::Error(_),
+                ) => {
+                    tracing::warn!("tmux control: mismatched response marker");
                 }
                 Some(ControlMessage::Exit { .. }) => {
                     self.mark_exit();
@@ -970,40 +955,21 @@ impl<'a> ControlSession<'a> {
         }
 
         let Some(message) = parse_line(&line) else {
-            if self.verified {
-                tracing::debug!(
-                    session_id = %self.control_session_id,
-                    bytes = line.len(),
-                    "tmux control: unparsed line"
-                );
-            } else {
-                // A real control stream is exclusively `%` lines; plain text
-                // means a program printed tmux-looking output into an armed
-                // detector. Count it, and bail back to the shell if our
-                // bootstrap commands keep coming back as shell noise.
-                self.unverified_lines.push(line);
-                if self.unverified_lines.len() >= MAX_UNVERIFIED_LINES {
-                    tracing::warn!(
-                        session_id = %self.control_session_id,
-                        "tmux control: not a control stream; returning to shell"
-                    );
-                    self.bail = true;
-                }
-            }
+            tracing::debug!(session_id = %self.control_session_id, bytes = line.len(), "tmux control: unparsed line");
             return;
         };
-        self.verified = true;
         tracing::debug!(
             session_id = %self.control_session_id,
             message = ?std::mem::discriminant(&message),
             "tmux control: message"
         );
         match message {
-            ControlMessage::Begin => {
+            ControlMessage::Begin(id) => {
+                self.block_id = Some(id);
                 self.block_lines = Some(Vec::new());
                 self.block_started_at = Some(std::time::Instant::now());
             }
-            ControlMessage::End | ControlMessage::Error => {
+            ControlMessage::End(_) | ControlMessage::Error(_) => {
                 // Unsolicited end without a begin: ignore.
             }
             ControlMessage::Output { pane, data } => {
@@ -1692,7 +1658,8 @@ pub(crate) async fn run_control_session(
     session.refresh_lists(channel).await;
 
     // Feed the bytes that arrived together with the first notification.
-    for line in session.parser.feed(initial) {
+    session.parser.push(initial);
+    while let Some(line) = session.parser.next_line() {
         session.handle_message(channel, line).await;
         if session.exit_seen {
             break;
@@ -1700,17 +1667,8 @@ pub(crate) async fn run_control_session(
     }
 
     let exit = loop {
-        if session.exit_seen || session.bail {
-            let mut leftover = Vec::new();
-            if session.bail {
-                // Replay the swallowed plain lines so the user sees what
-                // their shell actually answered to our probe commands.
-                leftover.extend_from_slice(session.unverified_lines.join("\r\n").as_bytes());
-                if !leftover.is_empty() {
-                    leftover.extend_from_slice(b"\r\n");
-                }
-            }
-            leftover.extend_from_slice(&session.parser.take_pending());
+        if session.exit_seen {
+            let leftover = session.parser.take_pending();
             break match session.exit_mode {
                 Some(ExitMode::Close) => ControlExit::Closed,
                 _ => ControlExit::ReturnToShell { leftover },
@@ -1863,8 +1821,10 @@ pub(crate) async fn run_control_session(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { data }) => {
-                        for line in session.parser.feed(&data) {
+                        session.parser.push(&data);
+                        while let Some(line) = session.parser.next_line() {
                             session.handle_message(channel, line).await;
+                            if session.exit_seen { break; }
                         }
                     }
                     None | Some(ChannelMsg::Eof | ChannelMsg::Close) => {

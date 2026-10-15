@@ -7,7 +7,10 @@
 
 pub(crate) mod control;
 pub(crate) mod detect;
+mod handshake;
 pub(crate) mod session;
 
 pub(crate) use detect::{TmuxControlDetector, TmuxFeed, is_tmux_control_command};
 pub(crate) use session::{ControlExit, run_control_session};
+
+pub(crate) use handshake::verify as verify_control_channel;
