@@ -724,8 +724,16 @@ impl NyaTermApp {
                     target_parent_path: target_parent_path.clone(),
                 };
                 job.entries.clear();
-                job.summary = None;
-                job.progress = None;
+                job.summary = Some(nyaterm_transport::SftpTransferSummary {
+                    remote_path: target_path.clone(),
+                    local_path: job
+                        .progress
+                        .as_ref()
+                        .map(|progress| progress.local_path.clone())
+                        .unwrap_or_default(),
+                    bytes,
+                    skipped: false,
+                });
                 job.control = None;
                 if let (Some(source_session_id), Some(parent)) =
                     (job_session_id.as_deref(), source_parent_path.as_deref())

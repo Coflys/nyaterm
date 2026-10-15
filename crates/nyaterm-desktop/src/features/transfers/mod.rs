@@ -14,7 +14,7 @@ mod state;
 pub(in crate::features) use state::TransferSessionTransferBundle;
 pub(in crate::features) use state::TransferTreePresentation;
 mod transfer_events;
-mod transfer_jobs;
+pub(in crate::features) mod transfer_jobs;
 mod transfer_options;
 mod transfer_paths;
 mod transfer_widgets;

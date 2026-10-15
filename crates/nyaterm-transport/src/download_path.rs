@@ -410,7 +410,7 @@ impl DownloadTemporary {
     /// from the temporary file without replacing a name that appeared during the transfer. The
     /// root and its ancestors must be user-controlled because path checks do not protect against
     /// concurrent directory replacement.
-    fn commit(self, root: &Path, target: &Path) -> anyhow::Result<FileIdentity> {
+    pub(crate) fn commit(self, root: &Path, target: &Path) -> anyhow::Result<FileIdentity> {
         ensure_no_symlink(root, target)?;
         ensure_no_symlink(root, &self.path)?;
         if let DownloadTargetAccess::ReplaceKnownTarget(identity, _) = &self.access {

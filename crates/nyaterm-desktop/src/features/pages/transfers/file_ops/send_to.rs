@@ -8,6 +8,7 @@ use nyaterm_transport::{
 };
 
 use crate::features::NyaTermApp;
+use crate::features::transfers::transfer_jobs::TransferProgressEventSender;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
@@ -189,16 +190,21 @@ impl NyaTermApp {
             id.clone(),
             transfer_tx.clone(),
             move || {
-                let result = run_send_to(SendToRequest {
-                    source_service,
-                    source_remote,
-                    target_service,
-                    cached_target_dir,
-                    entry_name,
-                    target_session_id,
-                    control,
-                    options,
-                });
+                let mut progress =
+                    TransferProgressEventSender::new(id.clone(), transfer_tx.clone());
+                let result = run_send_to(
+                    SendToRequest {
+                        source_service,
+                        source_remote,
+                        target_service,
+                        cached_target_dir,
+                        entry_name,
+                        target_session_id,
+                        control,
+                        options,
+                    },
+                    move |value| progress.send(value),
+                );
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -234,7 +240,10 @@ struct SendToRequest {
 ///
 /// Backend selection is left to `FileCopyRequest`: SFTP-to-SFTP copies directly,
 /// mixed backends stage through a local temp directory.
-fn run_send_to(request: SendToRequest) -> Result<TransferJobOutput, String> {
+fn run_send_to(
+    request: SendToRequest,
+    progress: impl FnMut(nyaterm_transport::SftpTransferProgress) + Send + 'static,
+) -> Result<TransferJobOutput, String> {
     let SendToRequest {
         source_service,
         source_remote,
@@ -270,7 +279,7 @@ fn run_send_to(request: SendToRequest) -> Result<TransferJobOutput, String> {
         options,
     };
     let summary = request
-        .execute()
+        .execute_with_progress(progress)
         .map_err(|error| t!("fileTransfer.errorSend", error = error.to_string()).to_string())?;
     let target_path = summary.destination_path;
     let target_parent_path = file_browser_parent(target_service.kind(), &target_path);
@@ -292,4 +301,55 @@ fn run_send_to(request: SendToRequest) -> Result<TransferJobOutput, String> {
         used_local_staging: summary.used_local_staging,
         entries,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SendToRequest, run_send_to};
+    use crate::models::TransferJobOutput;
+    use nyaterm_transport::{
+        FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
+    };
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn send_to_reports_partial_progress_and_keeps_the_content_size_in_its_output() {
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-send-progress");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let source = root.join("source");
+        let target = root.join("target");
+        std::fs::create_dir(&target).unwrap();
+        let payload = vec![7_u8; 512 * 1024];
+        std::fs::write(&source, &payload).unwrap();
+        let values = Arc::new(Mutex::new(Vec::new()));
+        let record = values.clone();
+        let output = run_send_to(
+            SendToRequest {
+                source_service: FileBrowserService::local(),
+                target_service: FileBrowserService::local(),
+                source_remote: RemoteFilePath::new(source.to_string_lossy()),
+                cached_target_dir: Some(target.to_string_lossy().into_owned()),
+                entry_name: "copy".into(),
+                target_session_id: "target".into(),
+                control: SftpTransferControl::new(),
+                options: SftpPathTransferOptions::default(),
+            },
+            move |p| record.lock().unwrap().push(p),
+        )
+        .unwrap();
+        assert!(
+            matches!(output, TransferJobOutput::Sent { bytes, .. } if bytes == payload.len() as u64)
+        );
+        let values = values.lock().unwrap();
+        assert!(
+            values
+                .iter()
+                .any(|p| p.bytes_transferred > 0 && p.bytes_transferred < payload.len() as u64)
+        );
+        assert_eq!(
+            values.last().unwrap().bytes_transferred,
+            payload.len() as u64
+        );
+        assert_eq!(std::fs::read(target.join("copy")).unwrap(), payload);
+    }
 }

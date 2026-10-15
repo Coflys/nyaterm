@@ -41,7 +41,7 @@ pub(in crate::features) fn submit_transfer_blocking_job(
     }
 }
 
-pub(in crate::features::transfers) struct TransferProgressEventSender {
+pub(in crate::features) struct TransferProgressEventSender {
     id: String,
     tx: UnboundedSender<TransferJobResult>,
     last_sent_at: Option<Instant>,
@@ -49,10 +49,7 @@ pub(in crate::features::transfers) struct TransferProgressEventSender {
 }
 
 impl TransferProgressEventSender {
-    pub(in crate::features::transfers) fn new(
-        id: String,
-        tx: UnboundedSender<TransferJobResult>,
-    ) -> Self {
+    pub(in crate::features) fn new(id: String, tx: UnboundedSender<TransferJobResult>) -> Self {
         Self {
             id,
             tx,
@@ -61,7 +58,7 @@ impl TransferProgressEventSender {
         }
     }
 
-    pub(in crate::features::transfers) fn send(&mut self, progress: SftpTransferProgress) {
+    pub(in crate::features) fn send(&mut self, progress: SftpTransferProgress) {
         let now = Instant::now();
         let completed = progress
             .total_bytes

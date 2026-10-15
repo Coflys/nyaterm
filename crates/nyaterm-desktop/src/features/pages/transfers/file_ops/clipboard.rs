@@ -12,6 +12,7 @@ use nyaterm_transport::{
 
 use crate::features::NyaTermApp;
 use crate::features::transfers::TransferFileClipboard;
+use crate::features::transfers::transfer_jobs::TransferProgressEventSender;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
@@ -414,7 +415,8 @@ impl NyaTermApp {
                 id.clone(),
                 tx.clone(),
                 move || {
-                    let result = run_clipboard_copy(request);
+                    let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
+                    let result = run_clipboard_copy(request, move |value| progress.send(value));
                     let _ = tx.unbounded_send(TransferJobResult {
                         id,
                         event: TransferJobEvent::Finished(result),
@@ -440,7 +442,10 @@ struct ClipboardCopyRequest {
     options: SftpPathTransferOptions,
 }
 
-fn run_clipboard_copy(request: ClipboardCopyRequest) -> Result<TransferJobOutput, String> {
+fn run_clipboard_copy(
+    request: ClipboardCopyRequest,
+    progress: impl FnMut(nyaterm_transport::SftpTransferProgress) + Send + 'static,
+) -> Result<TransferJobOutput, String> {
     let ClipboardCopyRequest {
         source_service,
         target_service,
@@ -475,7 +480,7 @@ fn run_clipboard_copy(request: ClipboardCopyRequest) -> Result<TransferJobOutput
         control: control.clone(),
         options,
     }
-    .execute()
+    .execute_with_progress(progress)
     .map_err(|error| error.to_string())?;
     if !summary.copied {
         return Err("copy skipped; source was kept".into());
@@ -531,6 +536,53 @@ mod tests {
     use nyaterm_transport::SftpFileType;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    #[test]
+    fn clipboard_copy_reports_partial_progress_before_the_finished_output() {
+        use super::{ClipboardCopyRequest, run_clipboard_copy};
+        use crate::models::TransferJobOutput;
+        use nyaterm_transport::{
+            FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-progress");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let source = root.join("source");
+        let target = root.join("target");
+        let payload = vec![7_u8; 512 * 1024];
+        std::fs::write(&source, &payload).unwrap();
+        let values = Arc::new(Mutex::new(Vec::new()));
+        let record = values.clone();
+        let output = run_clipboard_copy(
+            ClipboardCopyRequest {
+                source_service: FileBrowserService::local(),
+                target_service: FileBrowserService::local(),
+                source: RemoteFilePath::new(source.to_string_lossy()),
+                target_path: target.to_string_lossy().into_owned(),
+                target_session_id: "target".into(),
+                cut: false,
+                control: SftpTransferControl::new(),
+                options: SftpPathTransferOptions::default(),
+            },
+            move |p| record.lock().unwrap().push(p),
+        )
+        .unwrap();
+        assert!(
+            matches!(output, TransferJobOutput::Sent { bytes, .. } if bytes == payload.len() as u64)
+        );
+        let values = values.lock().unwrap();
+        assert!(
+            values
+                .iter()
+                .any(|p| p.bytes_transferred > 0 && p.bytes_transferred < payload.len() as u64)
+        );
+        assert_eq!(
+            values.last().unwrap().bytes_transferred,
+            payload.len() as u64
+        );
+        assert_eq!(std::fs::read(target).unwrap(), payload);
+    }
 
     #[test]
     fn remote_copy_rejects_self_descendant_and_root_after_normalization() {

@@ -9,6 +9,8 @@ use crate::{
 
 const REMOTE_FILE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+mod transfer;
+
 #[derive(Debug, Default)]
 pub(super) struct ShellOutput {
     pub(super) stdout: Vec<u8>,
