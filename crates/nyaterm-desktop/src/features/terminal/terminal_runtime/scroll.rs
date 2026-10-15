@@ -2151,6 +2151,7 @@ mod tests {
     #[test]
     fn a_second_tab_is_measured_even_though_it_paints_the_same_rect_as_the_first() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_for_resize(&mut cx);
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(1200.), px(700.)));
 
@@ -2197,6 +2198,7 @@ mod tests {
     #[test]
     fn a_view_created_after_its_bounds_were_recorded_still_gets_measured() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_for_resize(&mut cx);
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(1200.), px(700.)));
 

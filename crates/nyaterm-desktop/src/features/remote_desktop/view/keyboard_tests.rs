@@ -51,6 +51,7 @@ fn focused_rdp_and_vnc_surfaces_keep_tab_and_shift_tab_out_of_local_navigation()
     for protocol in ["rdp", "vnc", "vnc-view-only"] {
         let root = TestTempDir::new("nyaterm-remote-tab");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "remote");
         cx.update(|cx| {
             init_key_bindings(cx);

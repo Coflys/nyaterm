@@ -1070,6 +1070,8 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
 
 #[cfg(test)]
 mod focus_tests {
+    use std::collections::VecDeque;
+    use std::sync::Arc;
     use std::time::Instant;
 
     use gpui::TestAppContext;
@@ -1081,7 +1083,7 @@ mod focus_tests {
     use crate::features::test_support::{
         app_with_visible_local_session, session_focus_test_window,
     };
-    use crate::models::SessionLaunchConfig;
+    use crate::models::{SessionLaunchConfig, TransferBrowserSessionCacheState};
     use crate::test_support::TestConfigDir;
 
     #[test]
@@ -1089,10 +1091,25 @@ mod focus_tests {
         for switch_tab in [false, true] {
             let root = TestConfigDir::new("nyaterm-background-ssh-focus");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = app_with_visible_local_session(&mut cx, root.path(), "source");
             let cx = session_focus_test_window(&mut cx, &app);
             cx.update(|window, cx| {
                 app.update(cx, |app, cx| {
+                    // The completion is synthetic: retain a browser cache so
+                    // activation cannot start file operations against a fake SSH peer.
+                    app.transfer.store_browser_session_cache(
+                        "new-ssh".into(),
+                        TransferBrowserSessionCacheState {
+                            entries: Arc::new(Vec::new()),
+                            current_path: "/".into(),
+                            current_raw_path_token: None,
+                            home_dir: "/".into(),
+                            history: VecDeque::from(["/".into()]),
+                            history_index: 0,
+                            visited_history: VecDeque::new(),
+                        },
+                    );
                     let request_id = app.register_pending_session_start(
                         PendingSessionStartRegistration {
                             connection_name: "SSH".into(),

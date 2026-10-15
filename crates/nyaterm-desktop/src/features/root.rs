@@ -1633,6 +1633,7 @@ mod tests {
             .stack_size(16 * 1024 * 1024)
             .spawn(|| {
                 let mut cx = TestAppContext::single();
+                let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
                 run_root_render_benchmark(&mut cx);
             })
             .expect("spawn root render benchmark thread")

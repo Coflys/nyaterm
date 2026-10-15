@@ -36,6 +36,7 @@ fn vnc_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
 
     let root = TestTempDir::new("nyaterm-vnc-retry-password-dialog");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "vnc-retry");
     app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
     let (_, cx) = cx.add_window_view(|window, cx| {

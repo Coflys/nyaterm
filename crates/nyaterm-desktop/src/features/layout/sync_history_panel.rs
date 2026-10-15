@@ -544,6 +544,7 @@ mod tests {
     fn sync_sidebar_actions_open_visible_password_dialogs_and_cancel_cleanly() {
         let test_dir = TestConfigDir::new("nyaterm-sync-sidebar");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         let host_app = app.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -604,6 +605,7 @@ mod tests {
     fn local_backup_restore_requires_confirmation_before_password() {
         let test_dir = TestConfigDir::new("nyaterm-backup-restore-confirm");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         let host_app = app.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -649,6 +651,7 @@ mod tests {
         let (endpoint, server) = spawn_webdav_service_unavailable_server();
         let test_dir = TestConfigDir::new("nyaterm-sync-sidebar-webdav");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, _| {
             let mut settings = app.cloud_sync.settings().clone();
@@ -702,6 +705,7 @@ mod tests {
     fn sync_sidebar_password_submission_runs_push_and_pull_and_records_history() {
         let test_dir = TestConfigDir::new("nyaterm-sync-sidebar-roundtrip");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         let host_app = app.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {

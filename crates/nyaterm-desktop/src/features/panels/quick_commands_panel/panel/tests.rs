@@ -99,6 +99,7 @@ fn quick_command_context_menu_copies_each_row_and_resets_to_blank_in_every_view(
     ] {
         let root = TestTempDir::new("nyaterm-quick-command-context");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, &root);
         app.update(&mut cx, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -167,6 +168,7 @@ fn quick_command_toolbar_and_empty_state_create_in_an_empty_selected_category() 
     for selector in ["quick-command-add", "quick-command-empty-add"] {
         let root = TestTempDir::new("nyaterm-quick-command-toolbar-category");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, &root);
         app.update(&mut cx, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -204,6 +206,7 @@ fn quick_command_toolbar_and_empty_state_create_in_an_empty_selected_category() 
 fn quick_command_category_blank_menu_creates_a_root_category() {
     let root = TestTempDir::new("nyaterm-quick-command-category-blank");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         app.commands.replace_quick_command_catalog(
@@ -281,6 +284,7 @@ fn category_drag_tracks_only_the_hovered_row_and_shows_before_after_inside() {
     ] {
         let root = TestTempDir::new("nyaterm-category-drag");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, &root);
         app.update(&mut cx, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -343,6 +347,7 @@ fn category_drag_tracks_only_the_hovered_row_and_shows_before_after_inside() {
 fn category_drag_to_all_moves_to_root_and_keeps_children() {
     let root = TestTempDir::new("nyaterm-category-root-drag");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         app.commands.replace_quick_command_catalog(
@@ -420,6 +425,7 @@ fn category_drag_to_all_moves_to_root_and_keeps_children() {
 fn category_drag_rejects_descendants_and_clears_marks_on_leave_and_cancel() {
     let root = TestTempDir::new("nyaterm-category-drag-cancel");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         app.commands.replace_quick_command_catalog(
@@ -479,6 +485,7 @@ fn quick_command_external_release_escape_and_capture_loss_preserve_order() {
     for cancellation in [None, Some(false), Some(true)] {
         let root = TestTempDir::new("nyaterm-command-external-cancel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, &root);
         app.update(&mut cx, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -553,6 +560,7 @@ fn category_rename_resets_cached_input_and_retires_it_on_cancel_and_confirm() {
     use crate::features::text_inputs::TextInputSetup;
     let root = TestTempDir::new("nyaterm-category-rename");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         app.commands.replace_quick_command_catalog(
@@ -650,6 +658,7 @@ fn category_rename_resets_cached_input_and_retires_it_on_cancel_and_confirm() {
 fn category_menu_outdents_one_level_at_a_time_and_persists() {
     let root = TestTempDir::new("nyaterm-category-menu-outdent");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         app.commands.replace_quick_command_catalog(
@@ -717,6 +726,7 @@ fn command_drop_near_category_edges_always_means_inside() {
     for fraction in [0.1, 0.9] {
         let root = TestTempDir::new("nyaterm-command-category-drag");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, &root);
         app.update(&mut cx, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -752,6 +762,7 @@ fn command_drop_near_category_edges_always_means_inside() {
 fn category_after_marker_follows_the_whole_subtree_and_root_target_stays_visible() {
     let root = TestTempDir::new("nyaterm-category-tree-indicator");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         let mut categories = vec![
@@ -813,6 +824,7 @@ fn category_after_marker_follows_the_whole_subtree_and_root_target_stays_visible
 fn all_category_drop_target_clears_on_leave_and_cancel() {
     let root = TestTempDir::new("nyaterm-category-all-cancel");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         app.commands.replace_quick_command_catalog(
@@ -874,6 +886,7 @@ fn all_category_drop_target_clears_on_leave_and_cancel() {
 fn command_drag_to_all_keeps_category_but_uncategorized_removes_it() {
     let root = TestTempDir::new("nyaterm-command-all-drag");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app(&mut cx, &root);
     app.update(&mut cx, |app, _| {
         let mut cmd = command("cmd", "pwd");

@@ -3046,6 +3046,7 @@ mod tests {
         ] {
             let test_dir = TestConfigDir::new("nyaterm-ssh-algorithm-list-scroll");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = test_app(&mut cx, test_dir.path());
             cx.update_entity(&app, |app, cx| app.sync_component_theme(cx));
             let host_app = app.clone();
@@ -3612,6 +3613,7 @@ mod tests {
         for (width, height, font_size) in [(520., 620., 12.), (420., 480., 24.)] {
             let test_dir = TestConfigDir::new("nyaterm-connection-editor-layout");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let (app, vcx) = hosted_editor(&mut cx, test_dir.path(), width, height, font_size);
 
             for kind in [

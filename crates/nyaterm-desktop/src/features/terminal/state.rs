@@ -611,6 +611,7 @@ mod tests {
 
     fn terminal_state() -> TerminalFeatureState {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         cx.update(|cx| {
             TerminalFeatureState::new(
                 TerminalScreen::new(80, 24),

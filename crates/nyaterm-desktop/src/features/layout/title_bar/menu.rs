@@ -609,6 +609,7 @@ mod tests {
     #[test]
     fn custom_menu_shortcut_and_native_semantic_action_each_execute_once() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let before = cx.read_entity(&app, |app, _| app.settings.summary().terminal_font_size);
         cx.update(|cx| {
@@ -650,6 +651,7 @@ mod tests {
     #[test]
     fn commands_recheck_lock_state_instead_of_executing_a_stale_enabled_menu() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         assert!(cx.read_entity(&app, |app, cx| {
             app.title_menu_command_enabled(&TitleMenuCommand::ToggleLineNumbers, cx)
@@ -719,6 +721,7 @@ mod tests {
     #[test]
     fn help_menu_keeps_check_command_and_shows_available_status() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let update = cx.read_entity(&app, |app, _| app.update.clone());
         cx.update_entity(&update, |update, _| {
@@ -764,6 +767,7 @@ mod tests {
     #[test]
     fn title_view_menu_matches_tauri_structure() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::View, cx)
@@ -786,6 +790,7 @@ mod tests {
     #[test]
     fn title_terminal_menu_matches_tauri_structure_and_default_state() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::Terminal, cx)
@@ -827,6 +832,7 @@ mod tests {
     #[test]
     fn terminal_display_submenu_has_expected_checks() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::Terminal, cx)
@@ -849,6 +855,7 @@ mod tests {
     #[test]
     fn panels_submenu_exposes_independent_modes_and_dynamic_sides() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::View, cx)

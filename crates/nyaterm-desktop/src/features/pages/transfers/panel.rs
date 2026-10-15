@@ -423,6 +423,7 @@ mod tests {
         for remote in [false, true] {
             let test_dir = TestConfigDir::new("nyaterm-file-drag");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
             let entries: Vec<_> = (0..3)
                 .map(super::super::tests_support::browser_entry)
@@ -531,6 +532,7 @@ mod tests {
     fn tree_drag_preserves_selected_files_and_directories_from_the_first_press() {
         let test_dir = TestConfigDir::new("nyaterm-tree-file-drag");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
         let mut entries: Vec<_> = (0..2)
             .map(super::super::tests_support::browser_entry)
@@ -617,6 +619,7 @@ mod tests {
     fn path_edit_button_builds_a_focused_selected_input_and_preserves_editing_shortcuts() {
         let test_dir = TestConfigDir::new("nyaterm-path-edit");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
         let button = vcx
             .debug_bounds("transfer-browser-path-edit")
@@ -675,6 +678,7 @@ mod tests {
     fn path_edit_shortcut_and_focus_restore_work_in_both_browser_views() {
         let test_dir = TestConfigDir::new("nyaterm-path-shortcut");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
         for mode in [
             nyaterm_core::TransferBrowserViewMode::List,
@@ -734,6 +738,7 @@ mod tests {
     fn blank_path_stays_in_edit_mode_and_clicking_outside_cancels() {
         let test_dir = TestConfigDir::new("nyaterm-path-empty");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
         let display = vcx
             .debug_bounds("transfer-browser-path-display")
@@ -759,6 +764,7 @@ mod tests {
         let test_dir = TestConfigDir::new("nyaterm-path-navigation");
         std::fs::create_dir_all(test_dir.path()).unwrap();
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
         let open_editor = |vcx: &mut VisualTestContext| {
             let button = vcx
@@ -839,6 +845,7 @@ mod tests {
         };
         let test_dir = TestConfigDir::new("nyaterm-path-scroll");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
         let entries = (0..80)
             .map(|index| {
@@ -981,6 +988,7 @@ mod tests {
             .save(&image_path)
             .expect("write test wallpaper");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.settings
@@ -1053,6 +1061,7 @@ mod tests {
     fn ui_font_size_changes_refresh_the_transfer_snapshot_without_panel_interaction() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-font-size");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
 
         for font_size in [12, 24, 18] {
@@ -1097,6 +1106,7 @@ mod tests {
 
         let test_dir = TestConfigDir::new("nyaterm-transfer-queue-layout");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
         let panel = cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);
@@ -1193,6 +1203,7 @@ mod tests {
 
         let test_dir = TestConfigDir::new("nyaterm-transfer-duplicate");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);
@@ -1336,6 +1347,7 @@ mod tests {
     fn an_unrelated_app_notify_does_not_repaint_the_panel() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
 
         let before = vcx.update(|_, cx| paints(&app, cx));
@@ -1362,6 +1374,7 @@ mod tests {
     fn a_flush_reaches_the_snapshot_before_any_paint() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
 
         vcx.update(|_, cx| {
@@ -1384,6 +1397,7 @@ mod tests {
     fn only_the_visible_range_is_materialised() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -1414,6 +1428,7 @@ mod tests {
     fn the_panel_owns_the_cwd_clock() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         vcx.update(|_, cx| {
             assert!(
@@ -1428,6 +1443,7 @@ mod tests {
     fn opening_inline_rename_builds_the_input_before_snapshotting() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
 
         cx.update_entity(&app, |app, cx| {
@@ -1462,6 +1478,7 @@ mod tests {
     fn inline_rename_is_compact_focused_selected_and_places_the_cursor_at_the_end() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let entry = super::super::tests_support::browser_entry(7);
         let old_path = entry.path.clone();
@@ -1521,6 +1538,7 @@ mod tests {
     fn selected_name_renames_immediately_and_the_input_preserves_double_click() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let entry = super::super::tests_support::browser_entry(7);
         let identity = entry.identity_key();
@@ -1609,6 +1627,7 @@ mod tests {
     fn a_panel_callback_does_not_double_lease_the_panel() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);

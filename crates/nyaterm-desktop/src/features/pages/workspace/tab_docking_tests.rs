@@ -118,6 +118,7 @@ fn tab_drag_back_to_first_group_previews_and_splits_in_horizontal_vertical_and_n
     for initial_edge in [TabDockEdge::Right, TabDockEdge::Bottom] {
         let root = TestTempDir::new("nyaterm-tab-dock-back");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = setup(&mut cx, &root, initial_edge);
         let fixture_app = app.clone();
         let (_, cx) = cx.add_window_view(move |_, cx| {
@@ -176,6 +177,7 @@ fn tab_drag_back_to_first_group_previews_and_splits_in_horizontal_vertical_and_n
 fn tab_drag_clears_preview_outside_content_and_on_cancellation_then_can_merge_into_first_group() {
     let root = TestTempDir::new("nyaterm-tab-dock-clear");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = setup(&mut cx, &root, TabDockEdge::Right);
     let fixture_app = app.clone();
     let (_, cx) = cx.add_window_view(move |_, cx| {

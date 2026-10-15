@@ -2106,6 +2106,7 @@ mod tests {
     fn panel_lease_callback_does_not_double_lease() {
         let test_dir = TestConfigDir::new("nyaterm-settings-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);
@@ -2165,6 +2166,7 @@ mod tests {
     fn repeated_refresh_requests_coalesce_and_clear_for_next_cycle() {
         let test_dir = TestConfigDir::new("nyaterm-settings-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let panel = vcx.update(|_, cx| main_panel(&app, cx));
         let initial = vcx.update(|_, cx| rebuilds(&panel, cx));
@@ -2201,6 +2203,7 @@ mod tests {
     fn unrelated_app_notify_does_not_repaint_cached_settings_panel() {
         let test_dir = TestConfigDir::new("nyaterm-settings-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let before = vcx.update(|_, cx| paints(&app, cx));
         assert!(
@@ -2223,6 +2226,7 @@ mod tests {
     fn inactive_cloud_sync_state_does_not_rebuild_settings_snapshot() {
         let test_dir = TestConfigDir::new("nyaterm-settings-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let panel = vcx.update(|_, cx| main_panel(&app, cx));
         let (initial_rebuilds, initial_status) = vcx.update(|_, cx| {
@@ -2269,6 +2273,7 @@ mod tests {
     fn main_and_native_surfaces_receive_updates_independently() {
         let test_dir = TestConfigDir::new("nyaterm-settings-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, test_dir.path());
         let native = cx.new(|cx| {
             SettingsPanel::new_for_surface(app.downgrade(), SettingsSurface::NativeWindow, cx)
@@ -2395,6 +2400,7 @@ mod tests {
     fn every_settings_surface_draws_only_inputs_it_built() {
         let test_dir = TestConfigDir::new("nyaterm-settings-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
 
         // First, before the loop below has visited Security: enabling cloud sync

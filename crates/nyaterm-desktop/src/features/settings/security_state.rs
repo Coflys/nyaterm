@@ -1222,6 +1222,7 @@ mod tests {
 
     fn security_state() -> SecurityFeatureState {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = || cx.update(|cx| cx.focus_handle());
         SecurityFeatureState::new(
             SecurityCatalogState::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()),
@@ -1761,6 +1762,7 @@ mod tests {
     fn screen_lock_lifecycle_clears_password_and_resets_activity() {
         let mut security = security_state();
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let previous_focus = cx.update(|cx| cx.focus_handle());
         security.remember_screen_lock_focus(Some(previous_focus.clone()));
         security.set_screen_lock_password_draft("secret".to_string(), "ready".to_string());

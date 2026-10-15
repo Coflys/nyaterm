@@ -1343,6 +1343,7 @@ mod tests {
     fn dragging_across_a_half_cell_updates_same_cell_and_mouse_up_boundary() {
         let dir = TestConfigDir::new("nyaterm-half-cell-drag");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             seed_click_selection_fixture(app);
@@ -1498,6 +1499,7 @@ mod tests {
     fn shift_click_after_stationary_click_selects_multiple_lines_and_keeps_anchor() {
         let dir = TestConfigDir::new("nyaterm-shift-click-selection");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             seed_click_selection_fixture(app);
@@ -1546,6 +1548,7 @@ mod tests {
     fn shift_click_uses_latest_ordinary_click_anchor_and_respects_explicit_clear() {
         let dir = TestConfigDir::new("nyaterm-shift-click-reset");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             seed_click_selection_fixture(app);
@@ -1569,6 +1572,7 @@ mod tests {
     fn shift_click_does_not_reuse_another_sessions_click_anchor() {
         let dir = TestConfigDir::new("nyaterm-shift-click-session");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             seed_click_selection_fixture(app);
@@ -1630,6 +1634,7 @@ mod tests {
     fn scrolling_a_drag_preserves_sides_and_rehit_uses_the_painted_half_cell() {
         let dir = TestConfigDir::new("nyaterm-half-cell-scroll");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             seed_click_selection_fixture(app);
@@ -1674,6 +1679,7 @@ mod tests {
     fn pointer_cancel_keeps_selection_without_copying_on_select() {
         let dir = TestConfigDir::new("nyaterm-selection-pointer-cancel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         app.update(&mut cx, |app, cx| {
             seed_click_selection_fixture(app);

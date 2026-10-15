@@ -117,6 +117,7 @@ fn controller(root: &TestTempDir, cx: &mut TestAppContext) -> Entity<DesktopCont
 fn tab_drag_escape_cancels_before_release_and_unrelated_drags_stay_unrelated() {
     let root = TestTempDir::new("nyaterm-tab-drag-escape");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let controller = controller(&root, &mut cx);
     let app_root = TestTempDir::new("nyaterm-tab-drag-escape-app");
     let app = app_with_visible_local_session(&mut cx, app_root.path(), "tab");
@@ -194,6 +195,7 @@ fn pointer_cancel_clears_hover_and_resize_without_detaching_or_removing_the_tab(
         let root = TestTempDir::new("nyaterm-tab-pointer-cancel");
         let app_root = TestTempDir::new("nyaterm-tab-pointer-cancel-app");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let controller = controller(&root, &mut cx);
         let app = app_with_visible_local_session(&mut cx, app_root.path(), "tab");
         app.update(&mut cx, |app, _| {
@@ -262,6 +264,7 @@ fn pointer_cancel_clears_hover_and_resize_without_detaching_or_removing_the_tab(
 fn tab_drag_target_drop_observes_release_candidate_then_prevents_detach() {
     let root = TestTempDir::new("nyaterm-tab-drag-drop-order");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let controller = controller(&root, &mut cx);
     let source_root = TestTempDir::new("nyaterm-tab-drag-source");
     let target_root = TestTempDir::new("nyaterm-tab-drag-target");
@@ -349,6 +352,7 @@ fn tab_drag_into_empty_workspace_moves_session_without_opening_another_window() 
         let source_root = TestTempDir::new("nyaterm-empty-workspace-tab-source");
         let target_root = TestTempDir::new("nyaterm-empty-workspace-tab-target");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let controller = controller(&root, &mut cx);
         let source = app_with_visible_local_session(&mut cx, source_root.path(), "tab");
         let target = app_with_visible_local_session(&mut cx, target_root.path(), "placeholder");

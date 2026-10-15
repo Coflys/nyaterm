@@ -291,6 +291,7 @@ mod tests {
     fn connecting_and_reconnecting_preserve_the_painted_workbench_background() {
         let root = TestTempDir::new("nyaterm-workspace-background");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "s0");
         let (terminal_color, expected_alpha) = cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);

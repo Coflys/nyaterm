@@ -1596,6 +1596,7 @@ mod tests {
     fn disabling_credential_autofill_releases_command_suggestions_and_smart_input() {
         let dir = TestConfigDir::new("nyaterm-credential-mode-cancel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = crate::features::test_support::app_with_visible_local_session(
             &mut cx,
             dir.path(),
@@ -1625,6 +1626,7 @@ mod tests {
     fn uncertain_input_cannot_start_or_publish_a_suggestion_search() {
         let dir = TestConfigDir::new("nyaterm-suggestions-confidence");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = crate::features::test_support::app_with_visible_local_session(
             &mut cx,
             dir.path(),
@@ -1815,6 +1817,7 @@ mod tests {
     #[test]
     fn failed_suggestion_write_does_not_leave_a_pending_history_command() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let root = std::env::temp_dir().join(format!(
             "nyaterm-suggestion-write-{}-{}",
             std::process::id(),
@@ -1907,6 +1910,7 @@ mod tests {
     fn alternate_screen_keeps_command_suggestions_from_intercepting_keys() {
         let dir = TestConfigDir::new("nyaterm-alt-screen-suggestions");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = crate::features::test_support::app_with_visible_local_session(
             &mut cx,
             dir.path(),
@@ -1964,6 +1968,7 @@ mod tests {
     fn alternate_screen_blocks_the_manual_trigger_and_the_deferred_publisher() {
         let dir = TestConfigDir::new("nyaterm-alt-screen-manual");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = crate::features::test_support::app_with_visible_local_session(
             &mut cx,
             dir.path(),
@@ -2001,6 +2006,7 @@ mod tests {
     fn alternate_screen_drops_a_search_that_was_already_in_flight() {
         let dir = TestConfigDir::new("nyaterm-alt-screen-inflight");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = crate::features::test_support::app_with_visible_local_session(
             &mut cx,
             dir.path(),
@@ -2045,6 +2051,7 @@ mod tests {
     fn leaving_the_alternate_screen_restores_shell_line_suggestions() {
         let dir = TestConfigDir::new("nyaterm-alt-screen-return");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = crate::features::test_support::app_with_visible_local_session(
             &mut cx,
             dir.path(),

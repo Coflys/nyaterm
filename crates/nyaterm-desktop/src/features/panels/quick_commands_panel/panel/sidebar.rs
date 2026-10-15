@@ -569,6 +569,7 @@ mod tests {
     #[test]
     fn selecting_and_deleting_a_category_updates_and_persists_settings() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.replace_quick_command_catalog(Vec::new(), vec![category("category-a", 0)], cx);
@@ -614,6 +615,7 @@ mod tests {
     #[test]
     fn group_menu_matches_tauri_structure_and_marks_delete_dangerous() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         cx.update_entity(&app, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -652,6 +654,7 @@ mod tests {
     #[test]
     fn group_menu_disables_the_move_that_would_leave_the_sibling_run() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         cx.update_entity(&app, |app, _| {
             app.commands.replace_quick_command_catalog(
@@ -682,6 +685,7 @@ mod tests {
     #[test]
     fn group_menu_enables_outdent_only_for_nested_categories() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         cx.update_entity(&app, |app, _| {
             let mut child = category("child", 0);
@@ -703,6 +707,7 @@ mod tests {
     #[test]
     fn pseudo_group_menu_offers_only_the_add_actions() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.quick_command_pseudo_category_menu_items_for_test(cx)

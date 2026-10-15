@@ -1507,6 +1507,7 @@ mod tests {
     fn closing_shared_app_child_window_keeps_transfer_events_alive() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-child-close");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, main) = hosted(&mut cx, test_dir.path());
         let mut main = main.clone();
         let sender = main.update(|_, cx| {
@@ -1571,6 +1572,7 @@ mod tests {
     fn skipped_job_does_not_cancel_other_batch_jobs() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-batch-skip");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -1736,6 +1738,7 @@ mod tests {
     fn unchanged_cwd_sync_keeps_browser_state_and_shell_status() {
         let test_dir = TestConfigDir::new("nyaterm-cwd-sync-unchanged");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let entries = vec![browser_entry("alpha")];
         let result_entries = entries.clone();
@@ -1792,6 +1795,7 @@ mod tests {
     fn changed_cwd_listing_drops_only_selections_that_disappeared() {
         let test_dir = TestConfigDir::new("nyaterm-cwd-sync-selection");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -1852,6 +1856,7 @@ mod tests {
     fn changed_cwd_path_clears_selection() {
         let test_dir = TestConfigDir::new("nyaterm-cwd-sync-path-change");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -1956,6 +1961,7 @@ mod tests {
         let one_dir = TestConfigDir::new("nyaterm-transfer-drain");
         let many_dir = TestConfigDir::new("nyaterm-transfer-drain");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (one_batch, one_sent) = stress(&mut cx, one_dir.path(), 1);
         let (many_batch, many_sent) = stress(&mut cx, many_dir.path(), 8);
 
@@ -2003,6 +2009,7 @@ mod tests {
     fn the_batch_deadline_is_not_extended_by_later_events() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-drain");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2051,6 +2058,7 @@ mod tests {
     fn a_progress_batch_does_not_recompute_the_browser_listing() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-drain");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2109,6 +2117,7 @@ mod tests {
     fn a_terminal_event_ends_the_batch_without_waiting_for_the_window() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-drain");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2154,6 +2163,7 @@ mod tests {
     fn wrapped_transfer_cancellation_marks_the_job_cancelled() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-cancelled");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2191,6 +2201,7 @@ mod tests {
     fn successful_transfer_releases_retry_state_while_failure_keeps_it() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-retry-state");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let (app, vcx) = hosted(&mut cx, test_dir.path());
         let sender = vcx.update(|_, cx| {
             app.update(cx, |app, cx| {

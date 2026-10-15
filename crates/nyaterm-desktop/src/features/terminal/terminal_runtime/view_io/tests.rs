@@ -328,6 +328,7 @@ fn terminal_cursor_position_change_is_detected_for_a_new_live_position() {
 fn moving_the_live_cursor_resets_a_hidden_blink_phase_before_paint() {
     let root = TestConfigDir::new("nyaterm-cursor-position");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), CURSOR_POSITION_SESSION_ID);
 
     cx.update_entity(&app, |app, cx| {
@@ -1041,6 +1042,7 @@ fn rejected_input_and_paste_leave_recording_empty_and_preserve_session_encoding(
     use crate::models::SessionLaunchConfig;
     let root = TestConfigDir::new("nyaterm-rejected-encoding-input");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "encoded");
     cx.update_entity(&app, |app, cx| {
         let mut metadata = app
@@ -1103,6 +1105,7 @@ fn paste_targets_use_their_own_charset_and_bracketed_mode() {
     use crate::models::SessionLaunchConfig;
     let root = TestConfigDir::new("nyaterm-paste-charset-targets");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "gbk");
     cx.update_entity(&app, |app, _| {
         let mut metadata = app
@@ -1160,6 +1163,7 @@ fn encoding_failures_write_nothing_and_mouse_and_protocol_bytes_bypass_charset()
 
     let root = TestConfigDir::new("nyaterm-encoding-wire");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1310,6 +1314,7 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
 
     let root = TestConfigDir::new("nyaterm-sync-paste-wire");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1415,6 +1420,7 @@ fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw
 
     let root = TestConfigDir::new("nyaterm-sensitive-recording-wire");
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

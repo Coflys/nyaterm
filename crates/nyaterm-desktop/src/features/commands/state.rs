@@ -1153,6 +1153,7 @@ mod tests {
         categories: Vec<QuickCommandCategory>,
     ) -> CommandFeatureState {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = || cx.update(|cx| cx.focus_handle());
         let store = blocking_test_store(root);
         CommandFeatureState::new(CommandFeatureInit {
@@ -1227,6 +1228,7 @@ mod tests {
     #[test]
     fn quick_tooltip_control_dismisses_and_resets_on_the_next_hover() {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let control = QuickCommandTooltipControl::default();
         let dismiss_count = Rc::new(Cell::new(0));
         let dismiss_count_for_handler = dismiss_count.clone();

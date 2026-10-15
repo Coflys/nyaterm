@@ -462,6 +462,7 @@ fn session_exit_preserves_history_with_settled_or_pending_output_frames() {
     for pending_output in [false, true] {
         let root = TestTempDir::new("nyaterm-disconnect-history");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "old");
         cx.update_entity(&app, |app, cx| {
             let history = format!("HISTORY-FIRST\r\n{}HISTORY-END\r\n", "line\r\n".repeat(70));

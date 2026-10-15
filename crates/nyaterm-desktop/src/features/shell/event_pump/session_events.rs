@@ -776,6 +776,7 @@ mod recording_tests {
         for include_binary in [false, true] {
             let root = TestTempDir::new("nyaterm-raw-ui-filter");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = app_with_visible_local_session(&mut cx, root.path(), "raw");
             cx.update_entity(&app, |app, cx| {
                 let path = root.join("output.log");

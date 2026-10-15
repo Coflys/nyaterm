@@ -328,6 +328,7 @@ mod tests {
     fn half_cell_selection_deletes_and_replaces_only_the_highlighted_input() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-half-cell");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abcdef", cx);
@@ -417,6 +418,7 @@ mod tests {
     fn foreground_echo_cannot_move_delete_or_replace_shell_input() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-foreground");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"cat", cx);
@@ -455,6 +457,7 @@ mod tests {
     fn docker_line_editor_supports_custom_prompt_but_loses_permission_on_cat() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-docker-context");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"docker exec -it box sh", cx);
@@ -487,6 +490,7 @@ mod tests {
     fn ime_preedit_stays_local_and_committed_selection_replacement_is_sent_once() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-ime");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         let manager = cx.update_entity(&app, |app, _| app.session.manager_handle());
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -566,6 +570,7 @@ mod tests {
     fn nested_shell_echo_enables_editing_even_with_suppressed_or_disabled_suggestions() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-nested");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             let mut settings = app.settings.summary().clone();
@@ -591,6 +596,7 @@ mod tests {
     fn submitted_marked_outer_command_does_not_poison_unmarked_child_input() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-outer-boundary");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"docker exec box sh", cx);
@@ -626,6 +632,7 @@ mod tests {
     fn selection_is_retained_and_write_failure_keeps_input_and_selection() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-selection");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abcdef", cx);
@@ -666,6 +673,7 @@ mod tests {
     fn partial_echo_cannot_confirm_and_ordinary_input_invalidates_edit_selection() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-echo");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abc", cx);
@@ -703,6 +711,7 @@ mod tests {
     fn password_and_native_mouse_modes_cannot_authorize_shell_edits() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-gates");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abc", cx);
@@ -728,6 +737,7 @@ mod tests {
     fn pending_clicks_keep_latest_target_and_timeout_cancels_it() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-queued");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abcd", cx);
@@ -759,6 +769,7 @@ mod tests {
     fn snapshotless_output_cannot_reauthorize_edits_from_cached_cells() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-stale-frame");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abcd", cx);
@@ -786,6 +797,7 @@ mod tests {
     fn ending_marked_input_cancels_queued_edit_instead_of_using_unmarked_echo() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-boundary");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"abcd", cx);

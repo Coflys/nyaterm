@@ -844,6 +844,7 @@ mod tests {
     fn right_click_keeps_entry_target_and_blank_space_uses_bar_target() {
         let test_dir = TestConfigDir::new("nyaterm-activity-bar-view");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| app.sync_component_theme(cx));
         let host_app = app.clone();
@@ -893,6 +894,7 @@ mod tests {
     fn bar_menu_hidden_items_opener_tracks_current_side_recovery() {
         let test_dir = TestConfigDir::new("nyaterm-activity-bar-view");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| app.sync_component_theme(cx));
         let host_app = app.clone();
@@ -943,6 +945,7 @@ mod tests {
     fn hidden_recovery_is_side_scoped_and_availability_filtered() {
         let test_dir = TestConfigDir::new("nyaterm-activity-bar-view");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.hide_activity_entry("fileExplorer".to_string(), cx);
@@ -970,6 +973,7 @@ mod tests {
     fn activity_entry_released_outside_preserves_every_zone() {
         let test_dir = TestConfigDir::new("nyaterm-activity-external-drop");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
         let host_app = app.clone();

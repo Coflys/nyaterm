@@ -710,6 +710,7 @@ mod tests {
     fn editing_or_clearing_external_editor_refreshes_the_draft_and_persists() {
         for next in ["", r"D:\Softwares\Microsoft VS Code\Code.exe"] {
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = app(&mut cx);
             let input = cx.update_entity(&app, |app, cx| {
                 let saved = app
@@ -757,6 +758,7 @@ mod tests {
     fn tray_preference_persists_without_saving_unrelated_settings_drafts() {
         for draft_open in [false, true] {
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = app(&mut cx);
             let baseline = cx
                 .update_entity(&app, |app, _| {
@@ -808,6 +810,7 @@ mod tests {
     #[test]
     fn applying_a_draft_persists_the_header_status_mode() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         assert_eq!(
             stored_header_status(&app, &mut cx),
@@ -838,6 +841,7 @@ mod tests {
     #[test]
     fn canceling_a_draft_restores_ui_typography_source() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
 
         cx.update_entity(&app, |app, cx| {
@@ -868,6 +872,7 @@ mod tests {
     #[test]
     fn applying_a_draft_persists_a_header_status_turned_back_on() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             // No draft open, so this takes the immediate-persist path.
@@ -898,6 +903,7 @@ mod tests {
     #[test]
     fn stale_draft_cannot_overwrite_settings_saved_by_another_window() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -925,6 +931,7 @@ mod tests {
     #[test]
     fn applying_unrelated_settings_does_not_rewrite_updated_keyword_catalog() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -953,6 +960,7 @@ mod tests {
     #[test]
     fn enabling_master_password_without_a_password_blocks_apply() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         let draft_survived = cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -990,6 +998,7 @@ mod tests {
     #[test]
     fn enabling_master_password_with_a_password_persists() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -1022,6 +1031,7 @@ mod tests {
         use crate::models::CloudSyncInputField;
 
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -1090,6 +1100,7 @@ mod tests {
         use crate::models::CloudSyncInputField;
 
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         let draft_survived = cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -1148,6 +1159,7 @@ mod tests {
         use crate::models::CloudSyncInputField;
 
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
@@ -1192,6 +1204,7 @@ mod tests {
         use crate::models::CloudSyncInputField;
 
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         let panel = cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);

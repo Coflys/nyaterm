@@ -434,6 +434,7 @@ fn visible_connection_ids_for_list_state_tracks_expanded_tree_order() {
 #[test]
 fn connection_list_model_cache_hits_for_unchanged_revisions() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     seed_cached_connections(&mut cx, &app);
 
@@ -451,6 +452,7 @@ fn connection_list_model_cache_hits_for_unchanged_revisions() {
 #[test]
 fn connection_list_model_cache_misses_when_search_changes() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     seed_cached_connections(&mut cx, &app);
     cx.update_entity(&app, |app, _| {
@@ -470,6 +472,7 @@ fn connection_list_model_cache_misses_when_search_changes() {
 #[test]
 fn connection_search_overlay_only_collapses_after_the_query_is_cleared() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
 
     cx.update_entity(&app, |app, _| {
@@ -491,6 +494,7 @@ fn connection_search_overlay_only_collapses_after_the_query_is_cleared() {
 #[test]
 fn connection_list_model_cache_misses_when_expansion_changes() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     seed_cached_connections(&mut cx, &app);
     cx.update_entity(&app, |app, _| {
@@ -509,6 +513,7 @@ fn connection_list_model_cache_misses_when_expansion_changes() {
 #[test]
 fn connection_list_model_cache_ignores_unrelated_shell_state() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     seed_cached_connections(&mut cx, &app);
     cx.update_entity(&app, |app, _| {
@@ -526,6 +531,7 @@ fn connection_list_model_cache_ignores_unrelated_shell_state() {
 #[test]
 fn all_folder_expansion_updates_nested_rows_and_only_invalidates_on_change() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     seed_cached_connections(&mut cx, &app);
 
@@ -737,6 +743,7 @@ fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState 
 #[test]
 fn connection_editor_group_select_is_mutually_exclusive_with_icon_picker() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut owner = connection_editor_owner(&cx);
 
     assert!(owner.set_icon_picker_open(true));
@@ -751,6 +758,7 @@ fn connection_editor_group_select_is_mutually_exclusive_with_icon_picker() {
 #[test]
 fn connection_editor_group_selection_closes_select_and_clears_pending_group() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut owner = connection_editor_owner(&cx);
     owner.toggle_group_select();
     owner.draft.as_mut().expect("draft").pending_group_name = Some("pending".to_string());
@@ -768,6 +776,7 @@ fn connection_editor_group_selection_closes_select_and_clears_pending_group() {
 #[test]
 fn connection_editor_new_group_commit_closes_select_and_keeps_pending_parent() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut owner = connection_editor_owner(&cx);
     owner.toggle_group_select();
     owner.draft.as_mut().expect("draft").group_id = Some("parent".to_string());
@@ -1292,6 +1301,7 @@ fn toggle_connection_editor_advanced_closed_resets_hidden_focus() {
 #[test]
 fn connection_editor_credential_overlay_closes_competing_popups() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut owner = connection_editor_owner(&cx);
     assert!(owner.set_icon_picker_open(true));
 
@@ -1413,6 +1423,7 @@ fn apply_connection_editor_paths_update_field_and_clear_error() {
 #[test]
 fn connection_editor_password_can_be_revealed_and_is_masked_again_when_reopened() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     cx.update_entity(&app, |app, cx| {
         let draft = connection_editor_state_with_secret_draft();
@@ -1441,6 +1452,7 @@ fn connection_editor_password_can_be_revealed_and_is_masked_again_when_reopened(
 #[test]
 fn connection_path_pickers_update_existing_inputs_and_preserve_them_on_cancel() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     cx.update_entity(&app, |app, cx| {
         app.connection_state
@@ -1869,6 +1881,7 @@ fn asset_snapshots_reuse_records_and_invalidate_for_catalog_and_view_changes() {
     }
 
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = cache_test_app(&mut cx);
     seed_cached_connections(&mut cx, &app);
     cx.update_entity(&app, |app, cx| {

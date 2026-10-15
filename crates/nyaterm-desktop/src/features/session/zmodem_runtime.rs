@@ -1151,6 +1151,7 @@ mod tests {
     fn idle_zmodem_asterisk_reaches_terminal_without_a_second_output_event() {
         let root = TestConfigDir::new("nyaterm-zmodem-idle-asterisk");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
         cx.update_entity(&app, |app, cx| {
             assert_eq!(
@@ -1176,6 +1177,7 @@ mod tests {
     fn output_discontinuity_discards_zmodem_prefix_before_idle_flush() {
         let root = TestConfigDir::new("nyaterm-zmodem-idle-reset");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
         cx.update_entity(&app, |app, cx| {
             app.process_zmodem_output(SESSION_ID, b"**", cx);
@@ -1207,6 +1209,7 @@ mod tests {
     #[test]
     fn manual_rz_prompts_for_upload_files_and_starts_worker() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
 
         cx.update_entity(&app, |app, cx| {
@@ -1242,6 +1245,7 @@ mod tests {
     #[test]
     fn prepared_zmodem_upload_starts_without_another_picker() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
 
         cx.update_entity(&app, |app, cx| {
@@ -1261,6 +1265,7 @@ mod tests {
     #[test]
     fn zmodem_progress_refreshes_transfer_panel_without_root_notify() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         let observer = cx.new(|cx| RootNotifyObserver::new(app.clone(), cx));
 

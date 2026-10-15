@@ -1668,6 +1668,7 @@ mod tests {
 
     fn settings_state() -> SettingsFeatureState {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = || cx.update(|cx| cx.focus_handle());
         SettingsFeatureState::new(
             SettingsFeatureInit {

@@ -2450,6 +2450,7 @@ mod tests {
     fn idle_zmodem_output_stays_in_active_trzsz_protocol() {
         let root = TestConfigDir::new("nyaterm-zmodem-idle-trzsz");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "protocol-session");
         cx.update_entity(&app, |app, cx| {
             let state = app.trzsz_state_mut("protocol-session");
@@ -2481,6 +2482,7 @@ mod tests {
     fn idle_trzsz_prefix_reaches_terminal_without_a_second_output_event() {
         let root = TestConfigDir::new("nyaterm-trzsz-idle-colon");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "colon-session");
         cx.update_entity(&app, |app, cx| {
             assert_eq!(
@@ -2505,6 +2507,7 @@ mod tests {
     fn idle_trzsz_prefix_stays_in_active_transfer_protocol_instead_of_terminal() {
         let root = TestConfigDir::new("nyaterm-trzsz-idle-protocol");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "protocol-session");
         cx.update_entity(&app, |app, cx| {
             let state = app.trzsz_state_mut("protocol-session");
@@ -2539,6 +2542,7 @@ mod tests {
     fn output_discontinuity_discards_pending_trzsz_prefix_before_idle_flush() {
         let root = TestConfigDir::new("nyaterm-trzsz-idle-reset");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "reset-session");
         cx.update_entity(&app, |app, cx| {
             app.process_trzsz_output("reset-session", b":", cx);

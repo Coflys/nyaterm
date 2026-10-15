@@ -104,6 +104,7 @@ impl Render for TerminalSurfaceLayoutTestView {
 
 fn rendered_terminal_grid_bounds(show_line_numbers: bool) -> gpui::Bounds<gpui::Pixels> {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let surface = cx.new(|_| TerminalSurface::new("session"));
     let snapshot = Arc::new(TerminalScreen::default().viewport_snapshot(0));
     let rows = snapshot.row_count();
@@ -175,6 +176,7 @@ fn clear_all_paints_input_at_top_and_keeps_host_rows_for_hit_testing() {
     for older_rows in [0, 16] {
         let snapshot = Arc::new(screen.viewport_snapshot_with_window(0, older_rows, 16));
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let surface = cx.new(|_| TerminalSurface::new("session"));
         cx.update_entity(&surface, |surface, _cx| {
             surface.show_line_numbers = true;
@@ -231,6 +233,7 @@ fn enriched_snapshot_keeps_existing_rows_at_the_same_pixel_height() {
     let scrollback_len = plain.scrollback_len;
     let (plain_geometry, enriched_geometry) = {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let surface = cx.new(|_| {
             let mut surface = TerminalSurface::new("session");
             surface.cell_height = 21.12;
@@ -294,6 +297,7 @@ fn enriched_snapshot_keeps_existing_rows_at_the_same_pixel_height() {
 #[test]
 fn real_window_draw_renders_visible_inactive_but_skips_unmounted_surface() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let layout_cache = Arc::new(Mutex::new(NyaTerminalLayoutCache::default()));
     let mut screen = TerminalScreen::default();
     screen.advance_decoded_text(&terminal_test_output_lines(32));
@@ -914,6 +918,7 @@ fn keyword_highlight_pressure_delay_uses_throttle_window() {
 #[test]
 fn keyword_highlight_deferred_task_coalesces_latest_snapshot_under_pressure() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let surface = cx.new(|_| TerminalSurface::new("session"));
     let mut first_screen = TerminalScreen::default();
     first_screen.advance_decoded_text("alpha\n");
@@ -2154,6 +2159,7 @@ fn local_surface_wheel_respects_protocol_scroll_modes() {
 #[test]
 fn protocol_scroll_wheel_defers_parent_update_until_surface_lease_is_released() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let root = std::env::temp_dir().join(format!(
         "nyaterm-terminal-scroll-wheel-{}-{}",
         std::process::id(),

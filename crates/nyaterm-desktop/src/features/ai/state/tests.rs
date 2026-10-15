@@ -19,6 +19,7 @@ use super::{AiFeatureFocus, AiFeatureInit, AiFeatureState, AiSettingsMutation};
 #[test]
 fn history_load_keeps_the_current_chat_on_failure_or_after_a_new_request() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("original".into(), AiMode::Ask, None);
     state.apply_chat_delta(launch.job_id, "answer", None);
@@ -58,6 +59,7 @@ fn history_load_keeps_the_current_chat_on_failure_or_after_a_new_request() {
 #[test]
 fn switching_terminals_or_starting_a_new_chat_invalidates_the_history_binding_guard() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.switch_visible_scope("terminal:a");
     let source = state.chat_session_id().to_string();
@@ -83,6 +85,7 @@ fn switching_terminals_or_starting_a_new_chat_invalidates_the_history_binding_gu
 #[test]
 fn stream_refreshes_coalesce_and_immediate_flush_invalidates_old_timers() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let generation = state.request_stream_refresh().unwrap();
     assert!(state.request_stream_refresh().is_none());
@@ -98,6 +101,7 @@ fn native_questions_keep_the_owner_run_across_scope_switches_and_reject_stale_an
     use nyaterm_core::ai::harness::{AgentRunStatus, AgentToolRegistry, AgentToolResult};
     use serde_json::json;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.switch_scope("terminal:a");
     let request = serde_json::from_value(
@@ -159,6 +163,7 @@ fn native_provider_failure_preserves_the_previous_completed_tool_step() {
     use nyaterm_core::ai::harness::{AgentRunStatus, AgentToolRegistry, AgentToolResult};
     use serde_json::json;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.begin_native_run(
         serde_json::from_value(
@@ -223,6 +228,7 @@ fn state(cx: &TestAppContext) -> AiFeatureState {
 #[test]
 fn settings_draft_restore_and_replacement_keep_related_values_together() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.apply_settings_input(crate::models::AiInputField::ApiKey, "secret".to_string());
     let snapshot = state.settings_draft_snapshot();
@@ -242,6 +248,7 @@ fn settings_draft_restore_and_replacement_keep_related_values_together() {
 #[test]
 fn pending_settings_preserve_masked_secret_until_a_new_draft_exists() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.provider_profiles[0].api_key = Some("__SET__".to_string().into());
     state.settings.config.provider_credentials[0].api_key = Some("__SET__".to_string().into());
@@ -274,6 +281,7 @@ fn pending_settings_preserve_masked_secret_until_a_new_draft_exists() {
 #[test]
 fn external_agent_mcp_integration_toggles_fail_closed_setting() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
 
     state.toggle_settings_codex_mcp_integration();
@@ -298,6 +306,7 @@ fn external_agent_mcp_integration_toggles_fail_closed_setting() {
 #[test]
 fn ai_settings_persistence_ignores_old_completion_and_retries_latest_snapshot() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let first_snapshot = state.settings_config_cloned();
     let (first_generation, _) = state
@@ -332,6 +341,7 @@ fn ai_settings_persistence_ignores_old_completion_and_retries_latest_snapshot() 
 #[test]
 fn model_catalog_mutations_keep_default_model_valid() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let first = "openai:model-a".to_string();
     let fallback = "openai:model-b".to_string();
@@ -399,6 +409,7 @@ fn model_catalog_mutations_keep_default_model_valid() {
 #[test]
 fn credential_edits_move_secret_drafts_into_both_compatible_records() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     assert!(state.apply_settings_credential_input("openai.api-key", "new-key".to_string()));
     state.commit_settings_credential_edits("openai");
@@ -426,6 +437,7 @@ fn credential_edits_move_secret_drafts_into_both_compatible_records() {
 #[test]
 fn credential_catalog_changes_preserve_an_absent_default_model() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.default_model_id = None;
     state.settings.config.models.push(AiModelConfigItem {
@@ -471,6 +483,7 @@ fn credential_catalog_changes_preserve_an_absent_default_model() {
 #[test]
 fn action_and_discovery_catalog_updates_stay_on_settings_owner() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.add_settings_action(
         crate::models::AiActionListKind::Terminal,
@@ -512,6 +525,7 @@ fn action_and_discovery_catalog_updates_stay_on_settings_owner() {
 #[test]
 fn transient_ai_menus_are_mutually_exclusive() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
 
     assert!(!state.transient_menus_are_open());
@@ -539,6 +553,7 @@ fn transient_ai_menus_are_mutually_exclusive() {
 #[test]
 fn history_and_auto_execution_confirmations_transition_on_the_owner() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.history.sessions.push(AiSession {
         agent_kind: Default::default(),
@@ -563,6 +578,7 @@ fn history_and_auto_execution_confirmations_transition_on_the_owner() {
 #[test]
 fn history_jobs_reject_overlap_and_ignore_stale_completions() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
 
     let first = state.begin_history_operation("first").unwrap();
@@ -584,6 +600,7 @@ fn history_jobs_reject_overlap_and_ignore_stale_completions() {
 #[test]
 fn history_usage_counts_ignore_superseded_jobs() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
 
     let first = state.begin_history_usage_count_job();
@@ -611,6 +628,7 @@ fn history_usage_counts_ignore_superseded_jobs() {
 #[test]
 fn history_completion_updates_history_and_chat_atomically() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.history.sessions = vec![AiSession {
         id: "session-a".to_string(),
@@ -669,6 +687,7 @@ fn history_completion_updates_history_and_chat_atomically() {
 #[test]
 fn discovery_job_and_picker_lifecycles_stay_on_the_owner() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
 
     let mut rx = state
@@ -700,6 +719,7 @@ fn discovery_job_and_picker_lifecycles_stay_on_the_owner() {
 #[test]
 fn chat_start_stream_and_finish_are_reduced_by_the_owner() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.set_chat_prompt_draft("deploy".to_string());
 
@@ -769,6 +789,7 @@ fn chat_start_stream_and_finish_are_reduced_by_the_owner() {
 #[test]
 fn streaming_snapshot_does_not_share_mutable_message_arc() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".to_string(), AiMode::Ask, None);
     assert!(state.apply_chat_delta(launch.job_id, "hello", None));
@@ -798,6 +819,7 @@ fn streaming_snapshot_does_not_share_mutable_message_arc() {
 #[test]
 fn chat_cancel_invalidates_the_job_and_clears_agent_lifecycle() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".to_string(), AiMode::Agent, None);
 
@@ -817,6 +839,7 @@ fn chat_cancel_invalidates_the_job_and_clears_agent_lifecycle() {
 #[test]
 fn awaiting_agent_approval_remains_an_active_cancellable_run() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".to_string(), AiMode::Agent, None);
     let card = nyaterm_core::AiCommandCard {
@@ -862,6 +885,7 @@ fn awaiting_agent_approval_remains_an_active_cancellable_run() {
 #[test]
 fn a_matching_job_id_cannot_finish_another_ai_session() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".to_string(), AiMode::Ask, None);
     assert!(
@@ -880,6 +904,7 @@ fn a_matching_job_id_cannot_finish_another_ai_session() {
 #[test]
 fn agent_step_limit_ends_the_run_and_removes_pending_approval() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.begin_chat_request("inspect".to_string(), AiMode::Agent, None);
     state.chat.pending = false;
@@ -891,6 +916,7 @@ fn agent_step_limit_ends_the_run_and_removes_pending_approval() {
 #[test]
 fn parallel_terminal_chats_isolate_cancel_and_late_results() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.switch_scope("terminal:a");
     let first = state.begin_chat_request("first".to_string(), AiMode::Ask, None);
@@ -933,6 +959,7 @@ fn parallel_terminal_chats_isolate_cancel_and_late_results() {
 #[test]
 fn terminal_scopes_keep_run_mode_and_agent_protocol_independent() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.codex.enabled = true;
     // Existing terminal drafts retain their mode; fresh drafts inherit the saved default.
@@ -957,6 +984,7 @@ fn terminal_scopes_keep_run_mode_and_agent_protocol_independent() {
 #[test]
 fn new_chat_preserves_idle_agent_steps_for_history_reload() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.switch_scope("terminal:a");
     let session_id = state.chat_session_id().to_string();
@@ -997,6 +1025,7 @@ fn new_chat_preserves_idle_agent_steps_for_history_reload() {
 #[test]
 fn mention_selection_and_navigation_are_atomic_owner_transitions() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.set_chat_prompt_draft("run @server".to_string());
     assert!(state.chat_mention_is_open());
@@ -1022,6 +1051,7 @@ fn mention_selection_and_navigation_are_atomic_owner_transitions() {
 #[test]
 fn background_completion_distinguishes_foreign_and_matched_stale_jobs() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_job();
     let now = Instant::now();
@@ -1064,6 +1094,7 @@ fn background_completion_distinguishes_foreign_and_matched_stale_jobs() {
 #[test]
 fn agent_step_limit_and_observation_poll_stay_on_the_owner() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     assert!(state.begin_agent_step(1).is_err());
 
@@ -1095,6 +1126,7 @@ fn agent_step_limit_and_observation_poll_stay_on_the_owner() {
 #[test]
 fn external_request_preparation_sets_request_status_focus_and_closes_menus() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.toggle_history();
     let request = AiPreparedRequest {
@@ -1115,6 +1147,7 @@ fn external_request_preparation_sets_request_status_focus_and_closes_menus() {
 #[test]
 fn detected_error_throttle_and_picker_indices_are_owned_transitions() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let now = Instant::now();
 
@@ -1141,6 +1174,7 @@ fn detected_error_throttle_and_picker_indices_are_owned_transitions() {
 #[test]
 fn panel_status_and_error_banner_change_only_through_owner_operations() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let now = Instant::now();
 
@@ -1160,6 +1194,7 @@ fn panel_status_and_error_banner_change_only_through_owner_operations() {
 fn provider_presets_keep_accounts_models_and_secret_drafts_isolated() {
     use nyaterm_core::ai::provider_settings::model_belongs_to_provider;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.provider_credentials.clear();
     state.settings.config.models.clear();
@@ -1222,6 +1257,7 @@ fn provider_presets_keep_accounts_models_and_secret_drafts_isolated() {
 #[test]
 fn manual_model_add_updates_visible_rows_and_preserves_a_valid_default() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.provider_credentials.clear();
     state.settings.config.models.clear();
@@ -1254,6 +1290,7 @@ fn manual_model_add_updates_visible_rows_and_preserves_a_valid_default() {
 #[test]
 fn provider_model_rows_keep_order_when_toggled_and_deleted_default_falls_back() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.provider_credentials.clear();
     state.settings.config.models.clear();
@@ -1279,6 +1316,7 @@ fn provider_model_rows_keep_order_when_toggled_and_deleted_default_falls_back() 
 #[test]
 fn provider_changes_and_cancel_invalidate_background_results_and_secret_drafts() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let baseline = state.settings_draft_snapshot();
     assert!(state.settings_draft_matches(&baseline.0, &baseline.1, &baseline.2, &baseline.3));
@@ -1309,6 +1347,7 @@ fn provider_batch_keeps_successes_when_an_account_fails_and_ignores_stale_result
     use crate::features::ai::ConnectionStatus;
     use nyaterm_core::ai::AiModelDiscovery;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let id = state.add_settings_provider_preset(AiProviderKind::OpenaiCompatible);
     let generation = state.provider_view().generation;
@@ -1357,6 +1396,7 @@ fn provider_batch_keeps_successes_when_an_account_fails_and_ignores_stale_result
 fn connection_checks_do_not_modify_settings_and_reasoning_edits_fall_back_to_auto() {
     use nyaterm_core::ai::{AiModelDiscovery, AiModelReasoningEffort, AiReasoningEffort};
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let id = state.add_settings_provider_preset(AiProviderKind::OpenaiCompatible);
     state.add_settings_manual_model(&id, "fixture");
@@ -1389,6 +1429,7 @@ fn connection_checks_do_not_modify_settings_and_reasoning_edits_fall_back_to_aut
 #[test]
 fn selected_run_mode_survives_settings_round_trip_and_seeds_new_terminal_drafts() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.codex.enabled = true;
     assert!(state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex));
@@ -1410,6 +1451,7 @@ fn selected_run_mode_survives_settings_round_trip_and_seeds_new_terminal_drafts(
 #[test]
 fn disabled_external_agent_cannot_replace_the_current_mode_or_saved_default() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     assert!(state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Nyaterm));
     for kind in [AiAgentKind::Codex, AiAgentKind::ClaudeCode] {
@@ -1426,6 +1468,7 @@ fn disabled_external_agent_cannot_replace_the_current_mode_or_saved_default() {
 #[test]
 fn disabling_an_external_agent_falls_back_to_ask_for_its_existing_terminal_draft() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.settings.config.codex.enabled = true;
     state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex);
@@ -1438,6 +1481,7 @@ fn disabling_an_external_agent_falls_back_to_ask_for_its_existing_terminal_draft
 fn response_phases_stop_thinking_when_visible_text_or_tool_arguments_arrive() {
     use crate::features::ai::presentation::AiResponsePhase;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".into(), AiMode::Ask, None);
     assert_eq!(state.response_phase(), AiResponsePhase::Waiting);
@@ -1482,6 +1526,7 @@ fn presentation_command(id: &str) -> nyaterm_core::AiCommandCard {
 fn agent_proposals_link_the_exact_message_and_card_before_execution() {
     use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiResponsePhase};
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     for automatic in [false, true] {
         let mut state = state(&cx);
         let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
@@ -1532,6 +1577,7 @@ fn agent_proposals_link_the_exact_message_and_card_before_execution() {
 fn final_answers_are_not_classified_as_thoughts_commands_or_output() {
     use crate::features::ai::presentation::AiAgentStepKind;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
     let id = state.chat_streaming_assistant_id().unwrap().to_string();
@@ -1561,6 +1607,7 @@ fn final_answers_are_not_classified_as_thoughts_commands_or_output() {
 fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messages() {
     use crate::features::ai::presentation::{AiAgentStepKind, AiResponsePhase};
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     for automatic in [false, true] {
         let mut state = state(&cx);
         let mut launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
@@ -1665,6 +1712,7 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
 #[test]
 fn foreign_agent_continuation_cannot_claim_the_active_response() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
     let assistant_id = state.chat_streaming_assistant_id().unwrap().to_string();
@@ -1704,6 +1752,7 @@ fn foreign_agent_continuation_cannot_claim_the_active_response() {
 fn command_results_distinguish_success_failure_and_unknown_exit_codes() {
     use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     for (index, code, phase) in [
         (0, Some(0), AiCommandPhase::Completed),
@@ -1743,6 +1792,7 @@ fn command_results_distinguish_success_failure_and_unknown_exit_codes() {
 fn payload_categories_do_not_depend_on_english_titles() {
     use crate::features::ai::presentation::AiAgentStepKind;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.upsert_agent_step(
         0,
@@ -1762,6 +1812,7 @@ fn payload_categories_do_not_depend_on_english_titles() {
 #[test]
 fn message_disclosure_choices_follow_their_conversation_scope() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     state.switch_scope("terminal:a");
     state.toggle_message_thought("assistant-a".into());
@@ -1794,6 +1845,7 @@ fn message_disclosure_choices_follow_their_conversation_scope() {
 fn settled_agent_cards_cannot_be_approved_again_and_keep_their_identity() {
     use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
     state
@@ -1846,6 +1898,7 @@ fn settled_agent_cards_cannot_be_approved_again_and_keep_their_identity() {
 #[test]
 fn mismatched_background_card_does_not_clear_current_cancellation_or_update_output() {
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let launch = state.begin_chat_job();
     let now = Instant::now();
@@ -1900,6 +1953,7 @@ fn native_run_freezes_only_its_session_history_before_the_current_task() {
     use nyaterm_core::ai::{AiChatRequest, AiMessage, AiMessageRole};
     use std::sync::Arc;
     let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     let session = state.chat.session_id.clone();
     let message = |owner: &str, role, content: &str| {

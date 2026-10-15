@@ -290,6 +290,7 @@ mod tests {
     #[test]
     fn removing_the_last_session_wakes_disposal_without_protocol_events() {
         let cx = gpui::TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = cx.update(|cx| cx.focus_handle());
         let mut state = RemoteDesktopFeatureState::new(focus);
         let mut wake = state.take_wake_receiver().unwrap();
@@ -303,6 +304,7 @@ mod tests {
     #[test]
     fn failed_session_transition_clears_transient_protocol_state() {
         let cx = gpui::TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = cx.update(|cx| cx.focus_handle());
         let mut state = RemoteDesktopFeatureState::new(focus);
         state.insert_failed_session(
