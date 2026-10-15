@@ -30,7 +30,9 @@ export function findTmuxHostTab(
 
 /** Tabs rendering windows of `controlSessionId`, in tab-bar order. */
 export function tmuxWindowTabs(tabs: Tab[], controlSessionId: string): Tab[] {
-  return tabs.filter((tab) => tab.tmux?.controlSessionId === controlSessionId);
+  return tabs
+    .filter((tab) => tab.tmux?.controlSessionId === controlSessionId)
+    .sort((a, b) => a.tmux!.windowIndex - b.tmux!.windowIndex);
 }
 
 /** The workspace pane id currently rendering each tmux pane — leaf ids are
@@ -243,5 +245,10 @@ export function reconcileTmuxWindowTabs(
       insertAfter = newTab.id;
     }
   }
+  const ordered = tmuxWindowTabs(nextTabs, controlSessionId);
+  let index = 0;
+  nextTabs = nextTabs.map((tab) =>
+    tab.tmux?.controlSessionId === controlSessionId ? ordered[index++] : tab,
+  );
   return { tabs: nextTabs };
 }

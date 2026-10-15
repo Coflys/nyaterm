@@ -43,6 +43,9 @@ const INPUT_FLUSH_DELAY_MS: u64 = 4;
 const SEND_KEYS_CHUNK_BYTES: usize = 1024;
 /// Debounce for structural refreshes (`list-windows`/`list-panes`).
 const STATE_REFRESH_DELAY_MS: u64 = 120;
+/// Index changes (notably silent swaps) do not always emit useful notifications.
+const WINDOW_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const WINDOWS_QUERY: &str = "list-windows -F '#{window_id} #{window_index} #{window_active} #{window_layout} #{window_visible_layout} #{window_flags} #{pane_id} #{window_name}'";
 /// Buffer cap for output belonging to panes we have not mapped yet.
 const PENDING_PANE_OUTPUT_MAX_BYTES: usize = 512 * 1024;
 /// How long to wait for `%exit` after `detach-client` before giving up.
@@ -342,24 +345,32 @@ impl<'a> ControlSession<'a> {
         }
     }
 
+    async fn refresh_windows(&mut self, channel: &mut russh::Channel<client::Msg>) {
+        // The entry stays queued until the matching response block completes.
+        if !self
+            .pending_responses
+            .iter()
+            .any(|kind| matches!(kind, PendingKind::WindowsRefresh))
+        {
+            self.send_query(channel, PendingKind::WindowsRefresh, WINDOWS_QUERY)
+                .await;
+        }
+    }
+
     async fn refresh_lists(&mut self, channel: &mut russh::Channel<client::Msg>) {
-        // `window_name` goes last: names may contain tabs/spaces.
-        self.send_query(
-            channel,
-            PendingKind::WindowsRefresh,
-            // Space-separated like iTerm2's gateway: tmux renders control
-            // characters in -F output as `_`, so tabs cannot be used as
-            // separators. The name field goes last since it may contain
-            // spaces; splitn(4, ' ') preserves it.
-            "list-windows -F '#{window_id} #{window_index} #{window_active} #{window_layout} #{window_visible_layout} #{window_flags} #{window_name}'",
-        )
-        .await;
-        self.send_query(
-            channel,
-            PendingKind::PanesRefresh,
-            "list-panes -s -F '#{pane_id} #{window_id} #{pane_current_command}'",
-        )
-        .await;
+        self.refresh_windows(channel).await;
+        if !self
+            .pending_responses
+            .iter()
+            .any(|kind| matches!(kind, PendingKind::PanesRefresh))
+        {
+            self.send_query(
+                channel,
+                PendingKind::PanesRefresh,
+                "list-panes -s -F '#{pane_id} #{window_id} #{pane_current_command}'",
+            )
+            .await;
+        }
     }
 
     async fn spawn_pane(&mut self, pane_id: &str) {
@@ -1195,6 +1206,9 @@ impl<'a> ControlSession<'a> {
     ) {
         match kind {
             PendingKind::WindowsRefresh => {
+                if failed {
+                    return;
+                }
                 self.apply_window_list(lines);
                 self.reconcile_panes(channel).await;
             }
@@ -1347,38 +1361,10 @@ impl<'a> ControlSession<'a> {
     }
 
     fn apply_window_list(&mut self, lines: Vec<String>) {
-        for line in lines {
-            let mut parts = line.splitn(7, ' ');
-            let (Some(id), Some(index), Some(active), Some(layout_str)) =
-                (parts.next(), parts.next(), parts.next(), parts.next())
-            else {
-                continue;
-            };
-            let visible_str = parts.next().unwrap_or_default();
-            let flags = parts.next().unwrap_or_default();
-            let name = parts.next().unwrap_or_default();
-            let entry = self.windows.entry(id.to_string()).or_insert(WindowState {
-                name: String::new(),
-                index: 0,
-                layout: None,
-                visible_layout: None,
-                zoomed: false,
-            });
-            entry.name = name.to_string();
-            entry.index = index.parse().unwrap_or(entry.index);
-            if let Some((layout, _)) = super::control::parse_layout(layout_str) {
-                entry.visible_layout = Some(
-                    super::control::parse_layout(visible_str)
-                        .map(|(cell, _)| cell)
-                        .unwrap_or_else(|| layout.clone()),
-                );
-                entry.layout = Some(layout);
-            }
-            entry.zoomed = flags.contains('Z');
-            if active == "1" {
-                self.active_window = Some(id.to_string());
-            }
-        }
+        let snapshot = parse_window_snapshot(lines);
+        self.windows = snapshot.windows;
+        self.active_window = snapshot.active_window;
+        self.active_pane = snapshot.active_pane;
         self.emit_state();
     }
 
@@ -1657,6 +1643,10 @@ pub(crate) async fn run_control_session(
         .await;
     session.refresh_lists(channel).await;
 
+    let mut window_poll = tokio::time::interval(WINDOW_POLL_INTERVAL);
+    window_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    window_poll.tick().await;
+
     // Feed the bytes that arrived together with the first notification.
     session.parser.push(initial);
     while let Some(line) = session.parser.next_line() {
@@ -1685,6 +1675,10 @@ pub(crate) async fn run_control_session(
             }, if session.detach_deadline.is_some() => {
                 // detach-client never produced %exit: fall back to closing.
                 break ControlExit::Closed;
+            }
+
+            _ = window_poll.tick(), if session.exit_mode.is_none() => {
+                session.refresh_windows(channel).await;
             }
 
             () = async {
@@ -1864,4 +1858,95 @@ fn needed_window_size(cell: &LayoutCell, panes: &HashMap<String, VirtualPane>) -
         }
     }
     (width, height)
+}
+
+#[derive(Default)]
+struct WindowSnapshot {
+    windows: HashMap<String, WindowState>,
+    active_window: Option<String>,
+    active_pane: Option<String>,
+}
+
+/// `window_name` is last because it may contain spaces. Empty flags still
+/// occupy their field; tmux replaces control characters in format output.
+fn parse_window_snapshot(lines: Vec<String>) -> WindowSnapshot {
+    let mut snapshot = WindowSnapshot::default();
+    for line in lines {
+        let mut fields = line.splitn(8, ' ');
+        let parsed = (|| {
+            let id = fields.next()?;
+            id.strip_prefix('@')?.parse::<u32>().ok()?;
+            let index = fields.next()?.parse::<u32>().ok()?;
+            let active = match fields.next()? {
+                "1" => true,
+                "0" => false,
+                _ => return None,
+            };
+            let (layout, _) = super::control::parse_layout(fields.next()?)?;
+            let visible_layout = super::control::parse_layout(fields.next()?)
+                .map(|(cell, _)| cell)
+                .unwrap_or_else(|| layout.clone());
+            let flags = fields.next()?;
+            let pane = fields.next()?;
+            pane.strip_prefix('%')?.parse::<u32>().ok()?;
+            let name = fields.next().unwrap_or_default();
+            Some((
+                id.to_string(),
+                WindowState {
+                    name: name.to_string(),
+                    index,
+                    layout: Some(layout),
+                    visible_layout: Some(visible_layout),
+                    zoomed: flags.contains('Z'),
+                },
+                active,
+                pane.to_string(),
+            ))
+        })();
+        if let Some((id, window, active, pane)) = parsed {
+            if active {
+                snapshot.active_window = Some(id.clone());
+                snapshot.active_pane = Some(pane);
+            }
+            snapshot.windows.insert(id, window);
+        }
+    }
+    snapshot
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    fn row(id: u32, index: u32, active: bool, name: &str) -> String {
+        format!(
+            "@{id} {index} {} b25f,80x24,0,0,{id} b25f,80x24,0,0,{id}  %{id} {name}",
+            u8::from(active)
+        )
+    }
+
+    #[test]
+    fn snapshots_follow_swap_move_close_and_remote_active_pane() {
+        let first = parse_window_snapshot(vec![
+            row(1, 0, true, "shell"),
+            row(2, 1, false, "server logs"),
+        ]);
+        assert_eq!(first.active_window.as_deref(), Some("@1"));
+        assert_eq!(first.active_pane.as_deref(), Some("%1"));
+        assert_eq!(first.windows["@2"].name, "server logs");
+        let swapped = parse_window_snapshot(vec![
+            row(1, 1, false, "shell"),
+            row(2, 0, true, "server logs"),
+        ]);
+        assert_eq!(swapped.windows["@1"].index, 1);
+        assert_eq!(swapped.windows["@2"].index, 0);
+        assert_eq!(swapped.active_pane.as_deref(), Some("%2"));
+        let moved_and_closed = parse_window_snapshot(vec![row(2, 9, true, "server logs")]);
+        assert_eq!(moved_and_closed.windows.len(), 1);
+        assert!(!moved_and_closed.windows.contains_key("@1"));
+        assert_eq!(moved_and_closed.windows["@2"].index, 9);
+        let empty = parse_window_snapshot(Vec::new());
+        assert!(empty.windows.is_empty());
+        assert!(empty.active_window.is_none());
+    }
 }

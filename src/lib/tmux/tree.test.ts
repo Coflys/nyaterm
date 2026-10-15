@@ -405,3 +405,53 @@ describe("collapseTmuxPanes", () => {
     expect(plain.connectionId).toBe("conn-1");
   });
 });
+
+describe("remote window ordering", () => {
+  it("reorders existing tabs on swap-window and move-window without replacing panes", () => {
+    const host = hostTab();
+    const windows = [
+      window("@1", "a", tmuxTree("%0"), true),
+      window("@2", "b", tmuxTree("%1")),
+      window("@3", "c", tmuxTree("%2")),
+    ];
+    const before = reconcileTmuxWindowTabs([host], state(windows), host).tabs;
+    const oldTabs = tmuxWindowTabs(before, CTRL);
+    const ids = new Map(
+      oldTabs.map((tab) => [tab.tmux!.windowId, { tabId: tab.id, paneId: tab.activePaneId }]),
+    );
+    const unrelated = { ...hostTab(), id: "other", root: localLeaf("other-pane") };
+    const interleaved = [host, oldTabs[0], unrelated, ...oldTabs.slice(1)];
+    const swapped = reconcileTmuxWindowTabs(
+      interleaved,
+      state([
+        { ...windows[0], index: 8 },
+        { ...windows[1], index: 1 },
+        { ...windows[2], index: 3 },
+      ]),
+      host,
+    ).tabs;
+    expect(swapped.filter((tab) => tab.tmux).map((tab) => tab.tmux!.windowId)).toEqual([
+      "@2",
+      "@3",
+      "@1",
+    ]);
+    expect(swapped[2]).toBe(unrelated);
+    const moved = reconcileTmuxWindowTabs(
+      swapped,
+      state([
+        { ...windows[0], index: 8, tree: null },
+        { ...windows[1], index: 1 },
+        { ...windows[2], index: 0 },
+      ]),
+      host,
+    ).tabs;
+    expect(tmuxWindowTabs(moved, CTRL).map((tab) => tab.tmux!.windowId)).toEqual([
+      "@3",
+      "@2",
+      "@1",
+    ]);
+    for (const tab of tmuxWindowTabs(moved, CTRL)) {
+      expect({ tabId: tab.id, paneId: tab.activePaneId }).toEqual(ids.get(tab.tmux!.windowId));
+    }
+  });
+});
