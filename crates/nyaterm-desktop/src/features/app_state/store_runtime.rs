@@ -161,7 +161,7 @@ impl NyaTermApp {
         let recording_shutdown = self.recording.take_shutdown();
         let stop_editor_watchers = self.transfer.begin_external_editor_shutdown();
         cx.background_spawn(async move {
-            stop_editor_watchers();
+            stop_editor_watchers.await;
             session_shutdown();
             if let Some(shutdown) = frame_worker {
                 shutdown();

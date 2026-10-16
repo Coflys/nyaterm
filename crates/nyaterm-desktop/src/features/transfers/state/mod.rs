@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::{FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle};
+use gpui::{BackgroundExecutor, FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle};
 use nyaterm_transport::{
     SftpDuplicatePolicy, SftpFileEntry, SftpFileProperties, SftpPathTransferOptions,
     SftpTransferControl,
@@ -49,6 +49,7 @@ use crate::models::{
 };
 
 use super::external_sync_runtime::ExternalEditorWatcher;
+use crate::thread_owner::BackgroundCleanup;
 
 struct TransferRetryContext {
     options: SftpPathTransferOptions,
@@ -63,6 +64,7 @@ pub(in crate::features) struct TransferFeatureState {
     tree_focus: FocusHandle,
     queue: TransferQueueState,
     bulk_executor: Option<crate::blocking_jobs::BlockingJobScheduler>,
+    worker_cleanup: BackgroundCleanup,
     paths: TransferPathState,
     pub(super) browser: TransferBrowserState,
     /// The memo over `browser.entries`.
@@ -324,6 +326,7 @@ impl TransferFeatureState {
         duplicate_policy: SftpDuplicatePolicy,
         panel_height: f32,
         focus: TransferFeatureFocus,
+        background_executor: BackgroundExecutor,
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
@@ -339,6 +342,7 @@ impl TransferFeatureState {
             file_ops: TransferFileOpsState::new(),
             queue: TransferQueueState::new(tx, rx, focus.queue),
             bulk_executor: None,
+            worker_cleanup: BackgroundCleanup::new(background_executor),
             paths: TransferPathState::new(remote_path, local_path, duplicate_policy),
             browser_filter: BrowserFilterCache::default(),
             browser: TransferBrowserState {
@@ -1117,6 +1121,7 @@ impl TransferFeatureState {
             local_path,
             self.transfer_event_sender(),
             baseline,
+            self.worker_cleanup.clone(),
         )
         .map_err(|error| format!("failed to start external editor watcher: {error}"))?;
         self.external_sync.watchers.insert(
@@ -1131,21 +1136,11 @@ impl TransferFeatureState {
 
     pub(in crate::features) fn begin_external_editor_shutdown(
         &mut self,
-    ) -> impl FnOnce() + Send + 'static {
-        let workers: Vec<_> = self
-            .external_sync
-            .watchers
-            .values_mut()
-            .filter_map(|entry| entry._watcher.stop())
-            .collect();
+    ) -> impl Future<Output = ()> + Send + 'static {
+        // Dropping each watcher signals stop and registers its join with the
+        // same owner as watchers already removed with their sessions.
         self.external_sync.watchers.clear();
-        move || {
-            for worker in workers {
-                if worker.join().is_err() {
-                    tracing::warn!("external editor watcher panicked during shutdown");
-                }
-            }
-        }
+        self.worker_cleanup.drain()
     }
 
     /// The window slot for one prompt, if that prompt still exists.
@@ -1415,16 +1410,10 @@ impl TransferExternalSyncState {
 
 impl Drop for TransferFeatureState {
     fn drop(&mut self) {
-        let has_workers = self.bulk_executor.is_some() || !self.external_sync.watchers.is_empty();
         let stop_bulk = self.begin_bulk_shutdown();
-        let stop_watchers = self.begin_external_editor_shutdown();
-        if has_workers {
-            let _ = std::thread::Builder::new()
-                .name("nyaterm-transfer-reaper".into())
-                .spawn(move || {
-                    stop_watchers();
-                    stop_bulk();
-                });
+        self.external_sync.watchers.clear();
+        if self.bulk_executor.is_some() {
+            self.worker_cleanup.submit(stop_bulk);
         }
     }
 }

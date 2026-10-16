@@ -346,6 +346,7 @@ impl NyaTermApp {
                     preview: cx.focus_handle(),
                     external_sync: cx.focus_handle(),
                 },
+                cx.background_executor().clone(),
             ),
             security: SecurityFeatureState::new(
                 SecurityCatalogState::new(

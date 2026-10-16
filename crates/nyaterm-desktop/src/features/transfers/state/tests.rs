@@ -42,7 +42,46 @@ fn transfer_state(cx: &TestAppContext) -> TransferFeatureState {
         SftpDuplicatePolicy::Ask,
         180.,
         transfer_focus(cx),
+        cx.background_executor.clone(),
     )
+}
+
+#[test]
+fn dropping_transfer_state_cancels_jobs_and_defers_joining_to_its_cleanup_owner() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = transfer_state(&cx);
+    let cleanup = state.worker_cleanup.clone();
+    let job = transfer_job("held", "session", TransferJobStatus::Paused, true);
+    let control = job.control.as_ref().unwrap().clone();
+    control.pause();
+    state.enqueue_transfer_job(job);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    state
+        .bulk_executor()
+        .unwrap()
+        .submit_detached("held", move |_| {
+            started_tx.send(()).unwrap();
+            let released = release_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            finished_tx.send(released).unwrap();
+        })
+        .unwrap();
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    drop(state);
+    assert!(control.is_cancelled());
+    assert!(!control.is_paused());
+    release_tx.send(()).unwrap();
+    cx.foreground_executor().block_test(cleanup.drain());
+    assert!(
+        finished_rx.try_recv().unwrap(),
+        "drop blocked on the worker"
+    );
 }
 
 #[test]
@@ -80,7 +119,7 @@ fn bulk_executor_is_lazy_and_shutdown_wakes_paused_transfers() {
     assert!(!control.is_paused());
     assert!(external_upload.is_cancelled());
     assert!(overlapping_upload.is_cancelled());
-    let reaper = std::thread::spawn(cleanup);
+    let reaper = crate::thread_owner::spawn_joinable("transfer-cleanup-test", cleanup).unwrap();
     finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     reaper.join().unwrap();
     assert!(

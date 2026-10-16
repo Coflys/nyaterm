@@ -1,12 +1,13 @@
 //! Owned runtime for watching files opened in an external editor.
 
 use crate::models::external_editor::ExternalEditorFileVersion;
+use crate::thread_owner::{BackgroundCleanup, spawn_joinable};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
 use futures::channel::mpsc::UnboundedSender;
@@ -19,6 +20,7 @@ const UPLOAD_SETTLE: Duration = Duration::from_millis(450);
 pub(super) struct ExternalEditorWatcher {
     stop_tx: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<()>>,
+    cleanup: BackgroundCleanup,
 }
 
 impl ExternalEditorWatcher {
@@ -29,29 +31,29 @@ impl ExternalEditorWatcher {
         local_path: PathBuf,
         transfer_tx: UnboundedSender<TransferJobResult>,
         baseline: ExternalEditorFileVersion,
+        cleanup: BackgroundCleanup,
     ) -> std::io::Result<Self> {
         let (stop_tx, stop_rx) = mpsc::channel();
-        let worker = thread::Builder::new()
-            .name("nyaterm-external-editor-watch".to_string())
-            .spawn(move || {
-                watch_external_editor_file(
-                    job_id,
-                    remote_path,
-                    raw_path_token,
-                    local_path,
-                    transfer_tx,
-                    stop_rx,
-                    WatchTimings::default(),
-                    baseline,
-                );
-            })?;
+        let worker = spawn_joinable("nyaterm-external-editor-watch", move || {
+            watch_external_editor_file(
+                job_id,
+                remote_path,
+                raw_path_token,
+                local_path,
+                transfer_tx,
+                stop_rx,
+                WatchTimings::default(),
+                baseline,
+            );
+        })?;
         Ok(Self {
             stop_tx: Some(stop_tx),
             worker: Some(worker),
+            cleanup,
         })
     }
 
-    pub(super) fn stop(&mut self) -> Option<JoinHandle<()>> {
+    fn stop(&mut self) -> Option<JoinHandle<()>> {
         self.stop_tx.take();
         self.worker.take()
     }
@@ -62,11 +64,11 @@ impl Drop for ExternalEditorWatcher {
         if let Some(worker) = self.stop() {
             // Session removal can happen on the UI thread while a file read is
             // outstanding. Request stop now, but never join there.
-            let _ = thread::Builder::new()
-                .name("nyaterm-editor-watch-reaper".into())
-                .spawn(move || {
-                    let _ = worker.join();
-                });
+            self.cleanup.submit(move || {
+                if worker.join().is_err() {
+                    tracing::warn!("external editor watcher panicked during shutdown");
+                }
+            });
         }
     }
 }
@@ -257,7 +259,33 @@ mod tests {
 
     use futures::channel::mpsc::unbounded;
 
-    use super::{WatchTimings, read_external_editor_version, watch_external_editor_file};
+    use super::{
+        ExternalEditorWatcher, WatchTimings, read_external_editor_version,
+        watch_external_editor_file,
+    };
+
+    #[gpui::test]
+    fn dropping_a_watcher_signals_stop_and_registers_its_join(cx: &mut gpui::TestAppContext) {
+        let cleanup = crate::thread_owner::BackgroundCleanup::new(cx.background_executor.clone());
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker = crate::thread_owner::spawn_joinable("watch-drop-test", move || {
+            let stopped = matches!(
+                stop_rx.recv_timeout(Duration::from_secs(5)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
+            finished_tx.send(stopped).unwrap();
+        })
+        .unwrap();
+        let watcher = ExternalEditorWatcher {
+            stop_tx: Some(stop_tx),
+            worker: Some(worker),
+            cleanup: cleanup.clone(),
+        };
+        drop(watcher);
+        cx.foreground_executor().block_test(cleanup.drain());
+        assert!(finished_rx.try_recv().unwrap());
+    }
 
     fn next_modification(
         rx: &mut futures::channel::mpsc::UnboundedReceiver<crate::models::TransferJobResult>,
@@ -288,7 +316,7 @@ mod tests {
         let (tx, mut rx) = unbounded();
         let (stop_tx, stop_rx) = mpsc::channel();
         let worker_path = path.clone();
-        let worker = std::thread::spawn(move || {
+        let worker = crate::thread_owner::spawn_joinable("external-edit-test", move || {
             watch_external_editor_file(
                 "job".into(),
                 "/remote/edit".into(),
@@ -302,7 +330,8 @@ mod tests {
                 },
                 baseline,
             )
-        });
+        })
+        .expect("spawn watcher");
         next_modification(&mut rx);
         for value in 3..=5 {
             fs::write(&path, format!("value={value}")).unwrap();
@@ -337,7 +366,7 @@ mod tests {
         assert_eq!(baseline.digest, current.digest);
         let (tx, mut rx) = unbounded();
         let (stop_tx, stop_rx) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        let worker = crate::thread_owner::spawn_joinable("external-timestamp-test", move || {
             watch_external_editor_file(
                 "job".into(),
                 "/remote/edit".into(),
@@ -351,7 +380,8 @@ mod tests {
                 },
                 baseline,
             )
-        });
+        })
+        .expect("spawn watcher");
         std::thread::sleep(Duration::from_millis(50));
         drop(stop_tx);
         worker.join().unwrap();
@@ -393,9 +423,8 @@ mod tests {
         let (transfer_tx, _transfer_rx) = unbounded();
         let (stop_tx, stop_rx) = mpsc::channel();
         let worker_path = path.clone();
-        let worker = std::thread::Builder::new()
-            .name("nyaterm-external-watch-test".to_string())
-            .spawn(move || {
+        let worker =
+            crate::thread_owner::spawn_joinable("nyaterm-external-watch-test", move || {
                 watch_external_editor_file(
                     "job".to_string(),
                     "/remote/file".to_string(),

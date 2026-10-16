@@ -124,10 +124,11 @@ mod tests {
         let control = CloudSyncOperationControl::default();
         let worker_control = control.clone();
         let (result_tx, result_rx) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        let worker = crate::thread_owner::spawn_joinable("sync-lock-cancel-test", move || {
             let result = lock_cloud_sync_operation(&worker_control).map(|_| ());
             result_tx.send(result).unwrap();
-        });
+        })
+        .expect("spawn lock waiter");
         control.request_cancel();
         let result = result_rx.recv_timeout(Duration::from_secs(5));
         drop(guard);
