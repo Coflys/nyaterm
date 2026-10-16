@@ -160,6 +160,9 @@ impl CloudLocalStore for ControlledStore<'_> {
         self.control.begin_commit()?;
         self.store.persist_cloud_sync_state(state)
     }
+    fn verify_master_password(&self, password: &str) -> Result<Option<bool>, CloudSyncError> {
+        self.store.verify_master_password(password)
+    }
 }
 
 #[cfg(test)]

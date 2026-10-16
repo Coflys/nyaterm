@@ -2917,6 +2917,7 @@
     "uploadConcurrentTasks": "Téléversements parallèles",
     "uploadConcurrentTasksDesc": "Téléversements pouvant s'exécuter simultanément (1-10).",
     "uploadLocalVersion": "Téléverser la version locale",
+    "overwriteBlockedNotice": "Le téléversement de la version locale est désactivé : le mot de passe maître configuré ne correspond pas à cet appareil. Écraser la copie cloud pourrait la rendre illisible.",
     "uploadThreads": "Fils de téléversement",
     "uploadThreadsDesc": "Fils de téléversement parallèles (1-10).",
     "useOsKeyring": "Utiliser le trousseau du système",

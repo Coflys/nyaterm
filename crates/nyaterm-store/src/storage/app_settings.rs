@@ -585,12 +585,20 @@ impl ConnectionStore {
     }
 
     pub fn verify_master_password(&self, password: &str) -> Result<bool, StorageError> {
+        Ok(self.master_password_matches(password)?.unwrap_or(true))
+    }
+
+    /// Whether `password` is the stored master password.
+    ///
+    /// Returns `Ok(None)` when this store has no stored master password, so no
+    /// candidate can be checked; callers must not read that as a match.
+    pub fn master_password_matches(&self, password: &str) -> Result<Option<bool>, StorageError> {
         let Some(token) = self.load_encrypted_master_password()? else {
-            return Ok(true);
+            return Ok(None);
         };
         let bootstrap = CredentialCrypto::new(self.portable_key_path.clone(), None);
         let stored = bootstrap.decrypt_settings_secret(&token)?;
-        Ok(stored == password)
+        Ok(Some(stored == password))
     }
 
     pub fn save_master_password(
