@@ -1,13 +1,14 @@
-import i18n from "i18next";
-import { initReactI18next } from "react-i18next";
-import { runtime } from "@/lib/backend/runtime";
-import en from "./locales/en.json";
-import ko from "./locales/ko.json";
-import zhCN from "./locales/zh-CN.json";
-import zhTW from "./locales/zh-TW.json";
+import { runtime } from "@/lib/backend/runtime"
+import i18n from "i18next"
+import { initReactI18next } from "react-i18next"
+import en from "./locales/en.json"
+import ko from "./locales/ko.json"
+import ru from "./locales/ru.json"
+import zhCN from "./locales/zh-CN.json"
+import zhTW from "./locales/zh-TW.json"
 
 const WEB_LANGUAGE_CACHE_KEY = "nyaterm-web-language";
-const supportedLanguages = ["en", "zh-CN", "zh-TW", "ko"];
+const supportedLanguages = ["en", "zh-CN", "zh-TW", "ko", "ru"];
 function initialLanguage(): string {
   if (runtime !== "web") return "en";
   try {
@@ -16,7 +17,8 @@ function initialLanguage(): string {
   } catch {}
   const language = navigator.language.toLowerCase();
   if (language.startsWith("zh")) return /tw|hk|hant/.test(language) ? "zh-TW" : "zh-CN";
-  return language.startsWith("ko") ? "ko" : "en";
+  if (language.startsWith("ko")) return "ko";
+  return language.startsWith("ru") ? "ru" : "en";
 }
 
 i18n.use(initReactI18next).init({
@@ -25,6 +27,7 @@ i18n.use(initReactI18next).init({
     "zh-CN": { translation: zhCN },
     "zh-TW": { translation: zhTW },
     ko: { translation: ko },
+    ru: { translation: ru },
   },
   lng: initialLanguage(),
   fallbackLng: "en",
@@ -47,6 +50,7 @@ export const AVAILABLE_LANGUAGES = [
   { id: "zh-CN", name: "中文 (简体)" },
   { id: "zh-TW", name: "繁體中文" },
   { id: "ko", name: "한국어" },
+  { id: "ru", name: "Русский" },
 ];
 
 export default i18n;

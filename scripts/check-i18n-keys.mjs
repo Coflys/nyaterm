@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync } from "node:fs"
 function keys(value, prefix = "") {
   return Object.entries(value)
     .flatMap(([key, child]) => {
@@ -11,7 +11,7 @@ function keys(value, prefix = "") {
     .filter((key, index, all) => all.indexOf(key) === index)
     .sort();
 }
-const locales = ["en", "zh-CN", "zh-TW", "ko"];
+const locales = ["en", "zh-CN", "zh-TW", "ko", "ru"];
 const reference = keys(
   JSON.parse(readFileSync(`src/i18n/locales/en.json`, "utf8")),
 );
@@ -27,5 +27,5 @@ for (const locale of locales.slice(1)) {
     );
 }
 console.log(
-  `All four locales have the same ${reference.length} translation keys.`,
+  `All ${locales.length} locales have the same ${reference.length} translation keys.`,
 );
