@@ -2,6 +2,7 @@ import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalAppSettings } from "@/context/AppContext";
 import { writeClipboardText } from "@/lib/clipboard";
+import { registerTerminalUserInputMarker } from "@/lib/terminalControlInput";
 import { createTerminalInputState } from "@/lib/terminalInputTracker";
 import type { SessionType } from "@/types/global";
 import {
@@ -90,6 +91,7 @@ function createHarness(
       getSelection: vi.fn(() => ""),
       hasSelection: vi.fn(() => false),
       clearSelection: vi.fn(),
+      write: vi.fn(),
       input: vi.fn(),
       buffer: { active: { baseY: 0, viewportY: 0 } },
       scrollToBottom: vi.fn(),
@@ -195,6 +197,71 @@ function shortcutEvent(
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("installXTerminalKeyboardController clear shortcuts", () => {
+  it.each(["ctrl+l", "ctrl+alt+j"])(
+    "clears a Serial terminal locally for %s without sending input",
+    (keybinding) => {
+      const keybindings: Record<string, string> =
+        keybinding === "ctrl+l" ? {} : { "terminal.clear": keybinding };
+      const harness = createHarness("application", "Serial", keybindings);
+      const mark = vi.fn();
+      const unregister = registerTerminalUserInputMarker(harness.terminal, mark);
+      const event =
+        keybinding === "ctrl+l"
+          ? shortcutEvent("l", "KeyL")
+          : shortcutEvent("j", "KeyJ", { altKey: true });
+
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(harness.terminal.write).toHaveBeenCalledExactlyOnceWith("\x1b[2J");
+      expect(harness.terminal.clearSelection).toHaveBeenCalledOnce();
+      expect(harness.terminal.input).not.toHaveBeenCalled();
+      expect(harness.sendRawInput).not.toHaveBeenCalled();
+      expect(mark).not.toHaveBeenCalled();
+      unregister();
+    },
+  );
+
+  it.each(["SSH", "Telnet", "Local"] as const)(
+    "preserves Ctrl+L input for %s",
+    (sessionType) => {
+      const harness = createHarness("application", sessionType);
+      const mark = vi.fn();
+      const unregister = registerTerminalUserInputMarker(harness.terminal, mark);
+      const event = shortcutEvent("l", "KeyL");
+
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(harness.terminal.input).toHaveBeenCalledExactlyOnceWith("\x0c", true);
+      expect(harness.terminal.write).not.toHaveBeenCalled();
+      expect(mark).toHaveBeenCalledOnce();
+      unregister();
+    },
+  );
+
+  it("retains Serial Clear All dispatch without sending a control character", () => {
+    const harness = createHarness("application", "Serial");
+    const event = shortcutEvent("l", "KeyL", {
+      altKey: true,
+      shiftKey: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.clearAll).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.terminal.write).not.toHaveBeenCalled();
+  });
+
+  it("ignores Serial clear shortcuts while the app is locked", () => {
+    const harness = createHarness("application", "Serial", {}, { appLocked: true });
+    const event = shortcutEvent("l", "KeyL");
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+    expect(harness.terminal.write).not.toHaveBeenCalled();
+  });
 });
 
 describe("installXTerminalKeyboardController Shift IME toggle", () => {

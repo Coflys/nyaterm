@@ -12,6 +12,11 @@ import type React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalRightClickAction } from "@/lib/interactionSettings";
 import { invoke } from "@/lib/invoke";
+import {
+  clearTerminalScreen,
+  sendTerminalClearInput,
+} from "@/lib/terminalControlInput";
+import type { SessionType } from "@/types/global";
 import { toast } from "sonner";
 import TerminalContextMenu from "./TerminalContextMenu";
 
@@ -46,6 +51,7 @@ vi.mock("@/lib/aiEvents", () => ({ openAIAssistant: vi.fn() }));
 vi.mock("@/lib/clipboard", () => ({ writeClipboardText: vi.fn() }));
 vi.mock("@/lib/invoke", () => ({ invoke: vi.fn() }));
 vi.mock("@/lib/terminalControlInput", () => ({
+  clearTerminalScreen: vi.fn(),
   sendTerminalClearInput: vi.fn(),
 }));
 vi.mock("@/lib/windowManager", () => ({ openSettings: vi.fn() }));
@@ -57,6 +63,8 @@ beforeEach(() => {
   testRuntime.value = "web";
   vi.mocked(invoke).mockReset();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(clearTerminalScreen).mockClear();
+  vi.mocked(sendTerminalClearInput).mockClear();
 });
 
 describe("TerminalContextMenu right-click behavior", () => {
@@ -148,6 +156,56 @@ describe("TerminalContextMenu right-click behavior", () => {
       ).not.toBeNull();
     });
     expect(onPasteClipboard).not.toHaveBeenCalled();
+  });
+
+  it.each(["Serial", "SSH", "Telnet", "Local"] as const)(
+    "uses the appropriate clear-screen operation for %s",
+    async (sessionType) => {
+      const { getByTestId } = renderTerminalContextMenu({ sessionType });
+      fireEvent.contextMenu(getByTestId("terminal-child"));
+      await waitFor(() => expect(screen.getByText("terminalCtx.clearScreen")).not.toBeNull());
+      fireEvent.click(screen.getByText("terminalCtx.clearScreen"));
+
+      if (sessionType === "Serial") {
+        expect(clearTerminalScreen).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          { focus: true },
+        );
+        expect(sendTerminalClearInput).not.toHaveBeenCalled();
+      } else {
+        expect(sendTerminalClearInput).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          { focus: true },
+        );
+        expect(clearTerminalScreen).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps Clear All delegated for Serial without invoking either screen-only helper", async () => {
+    const onClearAll = vi.fn();
+    const { getByTestId } = renderTerminalContextMenu({
+      sessionType: "Serial",
+      onClearAll,
+    });
+    fireEvent.contextMenu(getByTestId("terminal-child"));
+    await waitFor(() => expect(screen.getByText("terminalCtx.clearAll")).not.toBeNull());
+    fireEvent.click(screen.getByText("terminalCtx.clearAll"));
+    expect(onClearAll).toHaveBeenCalledOnce();
+    expect(clearTerminalScreen).not.toHaveBeenCalled();
+    expect(sendTerminalClearInput).not.toHaveBeenCalled();
+  });
+
+  it("blocks local and remote clear-screen operations while locked", async () => {
+    const { getByTestId } = renderTerminalContextMenu({
+      sessionType: "Serial",
+      appLocked: true,
+    });
+    fireEvent.contextMenu(getByTestId("terminal-child"));
+    await waitFor(() => expect(screen.getByText("terminalCtx.clearScreen")).not.toBeNull());
+    fireEvent.click(screen.getByText("terminalCtx.clearScreen"));
+    expect(clearTerminalScreen).not.toHaveBeenCalled();
+    expect(sendTerminalClearInput).not.toHaveBeenCalled();
   });
 
   it("preserves the terminal DOM node when switching between actions", () => {
@@ -342,6 +400,7 @@ function renderFocusHarness(selection: string) {
       <>
         <TerminalContextMenu
           sessionId="session-1"
+          sessionType="SSH"
           appLocked={false}
           terminalRef={{ current: terminal }}
           onFind={() => {
@@ -369,6 +428,8 @@ function renderTerminalContextMenu({
   focus = vi.fn(),
   selection = "",
   appLocked = false,
+  sessionType = "SSH",
+  onClearAll = vi.fn(),
 }: {
   onAncestorContextMenu?: () => void;
   onPasteClipboard?: () => Promise<void> | void;
@@ -376,6 +437,8 @@ function renderTerminalContextMenu({
   focus?: () => void;
   selection?: string;
   appLocked?: boolean;
+  sessionType?: SessionType;
+  onClearAll?: () => void;
 } = {}) {
   const terminal = {
     clearSelection,
@@ -388,12 +451,13 @@ function renderTerminalContextMenu({
     <div onContextMenu={onAncestorContextMenu}>
       <TerminalContextMenu
         sessionId="session-1"
+        sessionType={sessionType}
         appLocked={appLocked}
         terminalRef={terminalRef}
         onFind={vi.fn()}
         onPasteText={vi.fn()}
         onPasteClipboard={onPasteClipboard}
-        onClearAll={vi.fn()}
+        onClearAll={onClearAll}
       >
         <div data-testid="terminal-child" />
       </TerminalContextMenu>

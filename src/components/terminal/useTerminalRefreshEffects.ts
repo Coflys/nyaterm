@@ -2,7 +2,11 @@ import type { Terminal } from "@xterm/xterm";
 import { type RefObject, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@/lib/backend/platform/window";
 import { logger } from "@/lib/logger";
-import { sendTerminalClearInput } from "@/lib/terminalControlInput";
+import {
+  clearTerminalScreen,
+  sendTerminalClearInput,
+} from "@/lib/terminalControlInput";
+import type { SessionType } from "@/types/global";
 import type { TerminalFitScheduler } from "./terminalFitScheduler";
 import type { PerformanceMode } from "./xterminalTypes";
 
@@ -15,6 +19,7 @@ interface UseTerminalRefreshEffectsParams {
   terminalReady: boolean;
   performanceMode: PerformanceMode;
   sessionId: string;
+  sessionType: SessionType;
   showGutter: boolean;
   showContentPadding: boolean;
   workspacePaddingSetting?: boolean;
@@ -30,6 +35,7 @@ export function useTerminalRefreshEffects({
   terminalReady,
   performanceMode,
   sessionId,
+  sessionType,
   showGutter,
   showContentPadding,
   workspacePaddingSetting,
@@ -288,12 +294,16 @@ export function useTerminalRefreshEffects({
     const handleClear = () => {
       const terminal = terminalRef.current;
       if (appLockedRef.current || !active || !terminal) return;
-      sendTerminalClearInput(terminal, { focus: active });
+      if (sessionType === "Serial") {
+        clearTerminalScreen(terminal, { focus: active });
+      } else {
+        sendTerminalClearInput(terminal, { focus: active });
+      }
     };
 
     window.addEventListener("nyaterm:clear-terminal", handleClear);
     return () => {
       window.removeEventListener("nyaterm:clear-terminal", handleClear);
     };
-  }, [active, terminalRef]);
+  }, [active, sessionType, terminalRef]);
 }

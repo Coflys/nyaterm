@@ -32,12 +32,16 @@ import { runtime, supports } from "@/lib/backend/runtime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { normalizeTerminalRightClickAction } from "@/lib/interactionSettings";
 import { invoke } from "@/lib/invoke";
-import { sendTerminalClearInput } from "@/lib/terminalControlInput";
+import {
+  clearTerminalScreen,
+  sendTerminalClearInput,
+} from "@/lib/terminalControlInput";
 import { openQuickCommand, openSettings } from "@/lib/windowManager";
 import type {
   RecordingMode,
   RecordingStatus,
   SearchEngine,
+  SessionType,
 } from "@/types/global";
 import TranslationDialog from "../dialog/terminal/TranslationDialog";
 import { type QuickIconDef, SEARCH_ICONS } from "../icons";
@@ -58,6 +62,7 @@ const SESSION_ENCODINGS = ["UTF-8", "GBK", "GB2312", "GB18030"] as const;
 interface TerminalContextMenuProps {
   children: React.ReactNode;
   sessionId: string;
+  sessionType: SessionType;
   sessionName?: string;
   appLocked: boolean;
   terminalRef: React.RefObject<Terminal | null>;
@@ -79,6 +84,7 @@ interface TerminalContextMenuProps {
 export default function TerminalContextMenu({
   children,
   sessionId,
+  sessionType,
   sessionName,
   appLocked,
   terminalRef,
@@ -253,8 +259,12 @@ export default function TerminalContextMenu({
   const doClearScreen = useCallback(() => {
     const terminal = terminalRef.current;
     if (appLockedRef.current || !terminal) return;
-    sendTerminalClearInput(terminal, { focus: true });
-  }, [terminalRef]);
+    if (sessionType === "Serial") {
+      clearTerminalScreen(terminal, { focus: true });
+    } else {
+      sendTerminalClearInput(terminal, { focus: true });
+    }
+  }, [sessionType, terminalRef]);
 
   const doClearAll = useCallback(() => {
     onClearAll();
