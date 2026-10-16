@@ -186,20 +186,31 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn reveal_log_dir(&mut self, cx: &mut Context<Self>) {
-        match std::fs::create_dir_all(self.runtime.log_dir()) {
-            Ok(()) => {
-                cx.reveal_path(self.runtime.log_dir());
-                self.shell.set_status(format!(
-                    "opened log directory {}",
-                    self.runtime.log_dir().display()
-                ));
-            }
-            Err(error) => {
-                self.shell
-                    .set_status(format!("failed to prepare log directory: {error}"));
-            }
-        }
-        cx.notify();
+        let log_dir = self.runtime.log_dir().to_path_buf();
+        let job_dir = log_dir.clone();
+        let task = self
+            .blocking_jobs
+            .submit_task("reveal-log-dir", move |_| std::fs::create_dir_all(&job_dir));
+        cx.spawn(async move |this, cx| {
+            let result = await_blocking_job(task)
+                .await
+                .and_then(|result| result.map_err(|error| error.to_string()));
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        cx.reveal_path(&log_dir);
+                        this.shell
+                            .set_status(format!("opened log directory {}", log_dir.display()));
+                    }
+                    Err(error) => {
+                        this.shell
+                            .set_status(format!("failed to prepare log directory: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(in crate::features) fn prompt_diagnostics_export(&mut self, cx: &mut Context<Self>) {

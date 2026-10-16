@@ -90,6 +90,10 @@ impl NyaTermApp {
             .session
             .active_id()
             .is_some_and(|active_id| close_ids.iter().any(|id| id == active_id));
+        // A pane that fails to close must not abandon the rest of the tab tree half
+        // torn down: the remaining panes still close and the layout is still pruned.
+        let mut close_error = None;
+        let mut closed_any = false;
         for close_id in &close_ids {
             let disconnected = self.session.is_disconnected(close_id);
             let close_result = if self.remote_desktop.is_session(close_id) {
@@ -104,14 +108,19 @@ impl NyaTermApp {
                 Ok(()) => {}
                 Err(_) if disconnected => {}
                 Err(error) if !disconnected && !self.session.has_session(close_id) => {
-                    self.shell.set_status(format!("close failed: {error}"));
-                    cx.notify();
-                    return;
+                    close_error.get_or_insert(error);
+                    continue;
                 }
                 Err(_) => {}
             }
             self.cleanup_recording_for_session(close_id);
             self.remove_session_state(close_id, cx);
+            closed_any = true;
+        }
+        if !closed_any && let Some(error) = close_error.take() {
+            self.shell.set_status(format!("close failed: {error}"));
+            cx.notify();
+            return;
         }
         self.prune_workspace_split();
         if was_active {
@@ -146,6 +155,9 @@ impl NyaTermApp {
         } else {
             self.shell
                 .set_status(format!("closed {}", short_id(&session_id)));
+        }
+        if let Some(error) = close_error {
+            self.shell.set_status(format!("close failed: {error}"));
         }
         cx.notify();
     }

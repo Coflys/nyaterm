@@ -434,14 +434,40 @@ impl CommandFeatureState {
 
     pub(in crate::features) fn open_quick_editor(&mut self, editor: QuickCommandEditorState) {
         self.quick.editor.draft = Some(editor);
+        self.quick.editor.save_in_flight = None;
         self.quick.editor.category_search_draft.clear();
         self.quick.editor.new_category_draft.clear();
         self.quick.editor.category_picker_open = false;
         self.quick.editor.icon_picker_open = false;
     }
 
+    /// Claim the editor's single save slot; `None` while a save is already running.
+    pub(in crate::features) fn begin_quick_editor_save(&mut self) -> Option<u64> {
+        let editor = &mut self.quick.editor;
+        if editor.draft.is_none() || editor.save_in_flight.is_some() {
+            return None;
+        }
+        editor.save_generation = editor.save_generation.wrapping_add(1);
+        editor.save_in_flight = Some(editor.save_generation);
+        Some(editor.save_generation)
+    }
+
+    /// Release the save slot; false when the reply belongs to a superseded draft.
+    pub(in crate::features) fn finish_quick_editor_save(&mut self, generation: u64) -> bool {
+        if self.quick.editor.save_in_flight != Some(generation) {
+            return false;
+        }
+        self.quick.editor.save_in_flight = None;
+        true
+    }
+
+    pub(in crate::features) fn quick_editor_save_in_flight(&self) -> bool {
+        self.quick.editor.save_in_flight.is_some()
+    }
+
     pub(in crate::features) fn close_quick_editor(&mut self) {
         self.quick.editor.draft = None;
+        self.quick.editor.save_in_flight = None;
         self.quick.editor.category_search_draft.clear();
         self.quick.editor.new_category_draft.clear();
         self.quick.editor.window.clear();
@@ -1029,6 +1055,10 @@ struct QuickCommandEditorFeatureState {
     icon_picker_open: bool,
     category_search_draft: String,
     new_category_draft: String,
+    save_generation: u64,
+    /// Generation of the in-flight save; cleared when the draft is replaced or
+    /// closed, so a late store reply cannot close or fail a different draft.
+    save_in_flight: Option<u64>,
 }
 
 /// Delete/details/create/rename confirmations and the variable prompt.
@@ -1078,6 +1108,8 @@ impl QuickCommandFeatureState {
                 icon_picker_open: false,
                 category_search_draft: String::new(),
                 new_category_draft: String::new(),
+                save_generation: 0,
+                save_in_flight: None,
             },
             dialogs: QuickCommandDialogState {
                 details: None,

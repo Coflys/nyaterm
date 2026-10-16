@@ -903,11 +903,14 @@ impl NyaTermApp {
             }
         };
 
+        let Some(save_generation) = self.connection_state.begin_editor_save() else {
+            return;
+        };
         let saved_id = built.id.clone();
         let persisted = built.clone();
         let connect_after_save = editor.connect_after_save;
         self.shell.set_status("saving connection...".to_string());
-        self.submit_store_request(
+        let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 let mut persisted = persisted;
@@ -930,6 +933,13 @@ impl NyaTermApp {
                         .find(|connection| connection.id == saved_id)
                         .cloned();
                     this.apply_loaded_sessions(sessions, cx);
+                    if !this
+                        .connection_state
+                        .finish_editor_save_request(save_generation)
+                    {
+                        cx.notify();
+                        return;
+                    }
                     let Some(saved) = saved else {
                         this.set_connection_editor_error(
                             "saved connection was not returned by storage".to_string(),
@@ -948,12 +958,22 @@ impl NyaTermApp {
                     }
                 }
                 Err(error) => {
+                    if !this
+                        .connection_state
+                        .finish_editor_save_request(save_generation)
+                    {
+                        return;
+                    }
                     let message = t!("dialog.connectionSaveFailed", error = error).to_string();
                     this.set_connection_editor_error(message, cx);
                 }
             },
             cx,
         );
+        if !submitted {
+            self.connection_state
+                .finish_editor_save_request(save_generation);
+        }
         cx.notify();
     }
 }

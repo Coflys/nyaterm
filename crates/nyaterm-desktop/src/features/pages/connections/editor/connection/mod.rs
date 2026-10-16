@@ -1176,7 +1176,8 @@ impl NyaTermApp {
         let credential_overlay = self.connection_state.editor_credential_overlay();
         let baud_popover_open = self.connection_state.editor_baud_popover_is_open();
         let validation_error = self.connection_editor_validation_error(&editor);
-        let save_enabled = validation_error.is_none();
+        let save_enabled =
+            validation_error.is_none() && !self.connection_state.editor_save_in_flight();
         let editor_focus = self.connection_state.editor_focus_handle();
         let section_context = ConnectionEditorSectionContext {
             palette,

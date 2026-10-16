@@ -207,6 +207,10 @@ struct ConnectionEditorFeatureState {
     baud_popover_open: bool,
     agent_preview_generation: u64,
     group_select_trigger_bounds: Option<Bounds<Pixels>>,
+    save_generation: u64,
+    /// Generation of the in-flight save; cleared when the draft is replaced or
+    /// closed, so a late store reply cannot finish or fail a different draft.
+    save_in_flight: Option<u64>,
 }
 
 struct ConnectionGroupEditorFeatureState {
@@ -299,6 +303,8 @@ impl ConnectionFeatureState {
                 baud_popover_open: false,
                 agent_preview_generation: 0,
                 group_select_trigger_bounds: None,
+                save_generation: 0,
+                save_in_flight: None,
             },
             group_editor: ConnectionGroupEditorFeatureState {
                 draft: None,
@@ -1478,7 +1484,31 @@ impl ConnectionFeatureState {
         self.editor.forwarding_endpoint_field_subscriptions.clear();
     }
 
+    /// Claim the editor's single save slot; `None` while a save is already running.
+    pub fn begin_editor_save(&mut self) -> Option<u64> {
+        if self.editor.draft.is_none() || self.editor.save_in_flight.is_some() {
+            return None;
+        }
+        self.editor.save_generation = self.editor.save_generation.wrapping_add(1);
+        self.editor.save_in_flight = Some(self.editor.save_generation);
+        Some(self.editor.save_generation)
+    }
+
+    /// Release the save slot; false when the reply belongs to a superseded draft.
+    pub fn finish_editor_save_request(&mut self, generation: u64) -> bool {
+        if self.editor.save_in_flight != Some(generation) {
+            return false;
+        }
+        self.editor.save_in_flight = None;
+        true
+    }
+
+    pub fn editor_save_in_flight(&self) -> bool {
+        self.editor.save_in_flight.is_some()
+    }
+
     pub fn finish_editor_save(&mut self, connection_id: String, group_id: Option<String>) {
+        self.editor.save_in_flight = None;
         self.editor.agent_identity_picker_open = false;
         clear_connection_editor_runtime_state(
             &mut self.editor.draft,
@@ -1787,6 +1817,7 @@ impl ConnectionEditorFeatureState {
         self.baud_popover_open = false;
         self.agent_preview_generation = self.agent_preview_generation.wrapping_add(1);
         self.group_select_trigger_bounds = None;
+        self.save_in_flight = None;
         self.draft = Some(draft);
     }
 
@@ -2089,6 +2120,7 @@ impl ConnectionEditorFeatureState {
         self.credential_overlay = None;
         self.baud_popover_open = false;
         self.agent_preview_generation = self.agent_preview_generation.wrapping_add(1);
+        self.save_in_flight = None;
         clear_connection_editor_runtime_state(
             &mut self.draft,
             &mut self.icon_picker_open,

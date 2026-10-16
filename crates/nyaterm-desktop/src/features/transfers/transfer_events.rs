@@ -363,7 +363,12 @@ impl NyaTermApp {
             navigation_job_key.as_deref(),
             &event_id,
         ) {
-            self.transfer.browser.pending_navigations.remove(&event_id);
+            if matches!(event.event, TransferJobEvent::Finished(_)) {
+                self.transfer.browser.pending_navigations.remove(&event_id);
+            } else {
+                self.transfer
+                    .restore_transfer_job_after_event((job_index, job));
+            }
             return false;
         }
         dirty |= transfer_event_needs_ui_refresh(

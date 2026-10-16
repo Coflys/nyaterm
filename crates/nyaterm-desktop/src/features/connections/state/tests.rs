@@ -735,6 +735,8 @@ fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState 
         baud_popover_open: false,
         agent_preview_generation: 0,
         group_select_trigger_bounds: None,
+        save_generation: 0,
+        save_in_flight: None,
     };
     owner.begin_edit(connection_editor_state_with_secret_draft());
     owner
