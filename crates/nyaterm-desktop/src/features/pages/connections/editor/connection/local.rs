@@ -11,7 +11,6 @@ use gpui::{
 
 use crate::features::{NyaTermApp, connections::ConnectionEditorToggle};
 use crate::models::{ConnectionEditorField, ConnectionEditorSelect};
-use crate::widgets::small_button;
 
 use super::super::super::list::{
     ConnectionEditorRenderContext, connection_editor_select, editor_field,
@@ -73,25 +72,10 @@ pub(super) fn connection_editor_local_section(
                             cx,
                         )))
                         .child(
-                            div()
-                                .id("connection-editor-shell-browse")
-                                .size(px(30.))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(rgb(palette.border))
-                                .bg(rgb(palette.input))
-                                .cursor_pointer()
-                                .hover(|this| this.bg(rgb(palette.hover)))
-                                .child(
-                                    svg()
-                                        .size(px(14.))
-                                        .path("icons/conn/folder.svg")
-                                        .text_color(rgb(palette.text_muted)),
-                                )
+                            nyaterm_ui::NyaButton::new("connection-editor-shell-browse", "")
+                                .form_control()
+                                .icon("icons/conn/folder.svg")
+                                .tooltip(t!("settings.browse"))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.prompt_connection_editor_shell_path(cx);
                                 })),
@@ -117,14 +101,16 @@ pub(super) fn connection_editor_local_section(
                     fields,
                     cx,
                 )))
-                .child(small_button(
-                    palette,
-                    "connection-editor-cwd-browse",
-                    t!("settings.browse"),
-                    cx.listener(|this, _, _, cx| {
+                .child(
+                    nyaterm_ui::NyaButton::new(
+                        "connection-editor-cwd-browse",
+                        t!("settings.browse"),
+                    )
+                    .form_control()
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.prompt_connection_editor_working_dir(cx);
-                    }),
-                )),
+                    })),
+                ),
         )
         .child(
             div()

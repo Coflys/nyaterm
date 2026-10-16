@@ -527,6 +527,7 @@ pub(super) fn connection_editor_ssh_section(
                                             "connection-editor-manage-passwords",
                                             t!("dialog.managePasswords"),
                                         )
+                                        .form_control()
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.set_connection_editor_credential_overlay(
                                                 Some(ConnectionEditorCredentialOverlay::Passwords),
@@ -645,6 +646,7 @@ pub(super) fn connection_editor_ssh_section(
                                 "connection-editor-manage-keys",
                                 t!("dialog.manageKeys"),
                             )
+                            .form_control()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.set_connection_editor_credential_overlay(
                                     Some(ConnectionEditorCredentialOverlay::Keys),

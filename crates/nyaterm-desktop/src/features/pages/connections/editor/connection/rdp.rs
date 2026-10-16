@@ -243,6 +243,7 @@ pub(super) fn connection_editor_rdp_section(
                                             "connection-editor-rdp-manage-passwords",
                                             t!("dialog.managePasswords"),
                                         )
+                                        .form_control()
                                         .on_click(
                                             cx.listener(|this, _, _, cx| {
                                                 this.set_connection_editor_credential_overlay(

@@ -5,7 +5,7 @@ use rust_i18n::t;
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, MouseButton,
-    SharedString, Window, div, prelude::*, px, rgb, rgba, svg,
+    SharedString, Window, div, prelude::*, px, rgb, rgba,
 };
 use nyaterm_ui::{NYA_FORM_CONTROL_HEIGHT_PX, NyaSelectOption, NyaSlider};
 
@@ -20,7 +20,6 @@ use crate::features::{
     },
 };
 use crate::theme::ThemePalette;
-use nyaterm_ui::NyaTooltip;
 
 use super::super::{settings_form_row, settings_form_section, settings_switch};
 
@@ -142,11 +141,12 @@ impl SettingsPanel {
                                 .gap_2()
                                 .child(
                                     div()
-                                        .min_h(px(36.))
+                                        .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+                                        .flex()
+                                        .items_center()
                                         .min_w_0()
                                         .flex_1()
                                         .px_3()
-                                        .py_2()
                                         .rounded_sm()
                                         .border_1()
                                         .border_color(rgb(palette.border))
@@ -158,7 +158,7 @@ impl SettingsPanel {
                                         } else {
                                             palette.text_muted
                                         }))
-                                        .child(path_label),
+                                        .child(div().min_w_0().truncate().child(path_label)),
                                 )
                                 .child(appearance_icon_text_button(
                                     palette,
@@ -883,40 +883,14 @@ fn appearance_icon_text_button(
     label: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
-    let destructive = icon_path == "icons/fe/delete.svg";
-    let hover = if destructive {
-        rgba((palette.danger << 8) | 0x18)
-    } else {
-        rgb(palette.hover)
-    };
-    div()
-        .id(id)
-        .h(px(28.))
-        .px_2()
-        .rounded_sm()
-        .flex()
-        .items_center()
-        .gap_1()
-        .text_size(px(11.))
-        .text_color(rgb(if destructive {
+    nyaterm_ui::NyaButton::new(id, label)
+        .form_control()
+        .icon(icon_path)
+        .text_color(rgb(if icon_path == "icons/fe/delete.svg" {
             palette.danger
         } else {
-            palette.primary
+            palette.text
         }))
-        .cursor_pointer()
-        .hover(move |this| this.bg(hover))
-        .child(
-            svg()
-                .size(px(14.))
-                .path(icon_path)
-                .text_color(rgb(if destructive {
-                    palette.danger
-                } else {
-                    palette.primary
-                })),
-        )
-        .child(label)
         .on_click(on_click)
 }
 
@@ -927,25 +901,10 @@ fn appearance_icon_button(
     tooltip: impl Into<SharedString>,
     on_click: AppearanceClickHandler,
 ) -> impl IntoElement {
-    let tooltip: SharedString = tooltip.into();
-    let hover = rgba((palette.danger << 8) | 0x18);
-    div()
-        .id(SharedString::from(id))
-        .size(px(28.))
-        .flex_none()
-        .rounded_sm()
-        .flex()
-        .items_center()
-        .justify_center()
+    nyaterm_ui::NyaButton::new(id, "")
+        .form_control()
+        .icon(icon_path)
         .text_color(rgb(palette.danger))
-        .cursor_pointer()
-        .hover(move |this| this.bg(hover))
-        .child(
-            svg()
-                .size(px(15.))
-                .path(icon_path)
-                .text_color(rgb(palette.danger)),
-        )
-        .tooltip(move |window, cx| NyaTooltip::new(tooltip.clone()).build(window, cx))
+        .tooltip(tooltip)
         .on_click(on_click)
 }

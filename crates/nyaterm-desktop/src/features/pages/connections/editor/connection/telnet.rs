@@ -246,6 +246,7 @@ pub(super) fn connection_editor_telnet_section(
                                                 "connection-editor-telnet-manage-passwords",
                                                 t!("dialog.managePasswords"),
                                             )
+                                            .form_control()
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.set_connection_editor_credential_overlay(
                                                     Some(

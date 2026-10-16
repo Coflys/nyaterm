@@ -77,6 +77,7 @@ impl NyaTermApp {
                                 "icons/eye.svg"
                             },
                         )
+                        .form_control()
                         .tooltip(t!(if editor.show_password {
                             "passwordManager.hidePassword"
                         } else {
