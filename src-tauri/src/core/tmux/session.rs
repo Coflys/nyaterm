@@ -170,6 +170,63 @@ struct VirtualPane {
     routed_bytes: usize,
 }
 
+impl VirtualPane {
+    fn replay_pending_output(&mut self) {
+        while let Some((produced_at, data)) = self.pending_output.pop_front() {
+            self.pending_bytes -= data.len();
+            // Plain %output has no production timestamp. It may have arrived
+            // during capture, so prefer a duplicate over losing new output.
+            if output_precedes_capture(produced_at, self.capture_at) {
+                continue;
+            }
+            let decoded = self.decoder.decode(&data);
+            let text = if self.capture.has_active() {
+                self.capture.process(&decoded)
+            } else {
+                decoded
+            };
+            self.output.push_owned(text);
+        }
+    }
+}
+
+fn output_precedes_capture(
+    produced_at: Option<std::time::Instant>,
+    capture_at: Option<std::time::Instant>,
+) -> bool {
+    matches!((produced_at, capture_at), (Some(at), Some(cap)) if at <= cap)
+}
+
+fn buffer_unknown_output(
+    pending: &mut VecDeque<(Option<std::time::Instant>, Vec<u8>)>,
+    total: &mut usize,
+    produced_at: Option<std::time::Instant>,
+    mut data: Vec<u8>,
+) {
+    if data.len() > PENDING_PANE_OUTPUT_MAX_BYTES {
+        // Allocate just the tail: draining the prefix would retain the
+        // oversized allocation even though the byte counter is bounded.
+        data = data[data.len() - PENDING_PANE_OUTPUT_MAX_BYTES..].to_vec();
+    }
+    while *total > PENDING_PANE_OUTPUT_MAX_BYTES - data.len() {
+        let Some((_, old)) = pending.pop_front() else {
+            break;
+        };
+        *total -= old.len();
+    }
+    *total += data.len();
+    pending.push_back((produced_at, data));
+}
+
+fn log_server_notice(session_id: &str, kind: &str, bytes: usize) {
+    tracing::info!(
+        session_id = %session_id,
+        kind,
+        bytes,
+        "tmux control server notice"
+    );
+}
+
 /// Why a response block was queued (FIFO correlation with `%begin`/`%end`).
 enum PendingKind {
     WindowsRefresh,
@@ -1106,11 +1163,7 @@ impl<'a> ControlSession<'a> {
             | ControlMessage::ClientSessionChanged
             | ControlMessage::Ignored => {}
             ControlMessage::ClientDetached { client } => {
-                tracing::info!(
-                    session_id = %self.control_session_id,
-                    client = %client,
-                    "tmux client detached notification"
-                );
+                log_server_notice(self.control_session_id, "client-detached", client.len());
             }
             ControlMessage::Pause { pane } => {
                 // Flow control kicks in only if we enabled `pause-after`;
@@ -1125,18 +1178,17 @@ impl<'a> ControlSession<'a> {
             ControlMessage::Continue { pane } => {
                 self.paused_panes.remove(&pane);
             }
-            ControlMessage::ConfigError { text } | ControlMessage::Message { text } => {
-                tracing::info!(
-                    session_id = %self.control_session_id,
-                    message = %text,
-                    "tmux control server message"
-                );
+            ControlMessage::ConfigError { text } => {
+                log_server_notice(self.control_session_id, "config-error", text.len());
+            }
+            ControlMessage::Message { text } => {
+                log_server_notice(self.control_session_id, "message", text.len());
             }
             ControlMessage::Exit { reason } => {
-                tracing::info!(
-                    session_id = %self.control_session_id,
-                    reason = ?reason,
-                    "tmux control client exited"
+                log_server_notice(
+                    self.control_session_id,
+                    "exit",
+                    reason.as_ref().map_or(0, String::len),
                 );
                 self.mark_exit();
             }
@@ -1155,10 +1207,8 @@ impl<'a> ControlSession<'a> {
                 // A notification provably produced before the last capture is
                 // already painted by the seed — tmux defers such blocks past
                 // the command's `%end`, so arrival order alone cannot tell.
-                if let (Some(at), Some(capture_at)) = (produced_at, virtual_pane.capture_at) {
-                    if at <= capture_at {
-                        return;
-                    }
+                if output_precedes_capture(produced_at, virtual_pane.capture_at) {
+                    return;
                 }
                 let decoded = virtual_pane.decoder.decode(&data);
                 let text = if virtual_pane.capture.has_active() {
@@ -1205,14 +1255,7 @@ impl<'a> ControlSession<'a> {
                 .unknown_output
                 .entry(pane.to_string())
                 .or_insert_with(|| (VecDeque::new(), 0));
-            while *total + data.len() > PENDING_PANE_OUTPUT_MAX_BYTES {
-                let Some((_, old)) = pending.pop_front() else {
-                    break;
-                };
-                *total -= old.len();
-            }
-            *total += data.len();
-            pending.push_back((produced_at, data));
+            buffer_unknown_output(pending, total, produced_at, data);
         }
     }
 
@@ -1306,31 +1349,7 @@ impl<'a> ControlSession<'a> {
                         virtual_pane.seeded = wrote_seed;
                     }
                     if !reseed {
-                        let capture_at = virtual_pane.capture_at;
-                        while let Some((produced_at, data)) =
-                            virtual_pane.pending_output.pop_front()
-                        {
-                            virtual_pane.pending_bytes -= data.len();
-                            // Entries provably produced before the snapshot —
-                            // and un-`aged` `%output`, which is always older —
-                            // are already painted; replaying them would draw
-                            // the same lines twice.
-                            let stale = match (produced_at, capture_at) {
-                                (Some(at), Some(cap)) => at <= cap,
-                                (None, Some(_)) => true,
-                                _ => false,
-                            };
-                            if stale {
-                                continue;
-                            }
-                            let decoded = virtual_pane.decoder.decode(&data);
-                            let text = if virtual_pane.capture.has_active() {
-                                virtual_pane.capture.process(&decoded)
-                            } else {
-                                decoded
-                            };
-                            virtual_pane.output.push_owned(text);
-                        }
+                        virtual_pane.replay_pending_output();
                     }
                 }
                 if reseed {
@@ -2033,6 +2052,156 @@ fn parse_window_snapshot(lines: Vec<String>) -> WindowSnapshot {
         }
     }
     snapshot
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    fn pane(output: Arc<SessionOutputCoalescer>) -> VirtualPane {
+        VirtualPane {
+            session_id: "test-pane".to_string(),
+            output,
+            decoder: TerminalOutputDecoder::new("utf-8"),
+            forwarder: tokio::spawn(async {}),
+            pending_output: VecDeque::new(),
+            pending_bytes: 0,
+            seeded: false,
+            capture_at: None,
+            last_attach: None,
+            seeding: false,
+            reseed: false,
+            pending_seed: None,
+            desired: None,
+            pending_dims: None,
+            dims: None,
+            seeded_desired: None,
+            resize_attempts: None,
+            capture: OutputCaptureProcessor::new(),
+            cwd: Arc::default(),
+            routed_bytes: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_replays_continuous_plain_output_and_new_extended_output() {
+        let received = Arc::new(Mutex::new(String::new()));
+        let sink = received.clone();
+        let output = SessionOutputCoalescer::with_sink(move |payload| {
+            sink.lock().unwrap().push_str(&payload.data);
+        });
+        let mut pane = pane(output);
+        let capture_at = Instant::now();
+        pane.capture_at = Some(capture_at);
+        pane.output.push("snapshot\r\n");
+        pane.pending_output.push_back((
+            capture_at.checked_sub(Duration::from_millis(1)),
+            b"already captured".to_vec(),
+        ));
+        pane.pending_output
+            .push_back((Some(capture_at), b"also captured".to_vec()));
+        let mut expected = String::from("snapshot\r\n");
+        // Output keeps arriving between capture-pane and its cursor reply.
+        // Split UTF-8 across notifications to also check decoder continuity.
+        for i in 0..1000 {
+            let line = format!("row-{i}: 猫\r\n");
+            expected.push_str(&line);
+            let split = line.find('猫').unwrap() + 1;
+            pane.pending_output
+                .push_back((None, line.as_bytes()[..split].to_vec()));
+            pane.pending_output
+                .push_back((None, line.as_bytes()[split..].to_vec()));
+        }
+        pane.pending_output.push_back((
+            Some(capture_at + Duration::from_millis(1)),
+            b"after capture\r\n".to_vec(),
+        ));
+        expected.push_str("after capture\r\n");
+        pane.pending_bytes = pane.pending_output.iter().map(|(_, data)| data.len()).sum();
+
+        pane.seeded = true;
+        pane.replay_pending_output();
+        pane.output.close();
+
+        assert_eq!(*received.lock().unwrap(), expected);
+        assert!(pane.seeded);
+        assert!(pane.pending_output.is_empty());
+        assert_eq!(pane.pending_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn pending_replay_preserves_failed_seed_retry() {
+        let received = Arc::new(Mutex::new(String::new()));
+        let sink = received.clone();
+        let output = SessionOutputCoalescer::with_sink(move |payload| {
+            sink.lock().unwrap().push_str(&payload.data);
+        });
+        let mut pane = pane(output);
+        pane.pending_output.push_back((None, b"live".to_vec()));
+        pane.pending_bytes = 4;
+
+        pane.replay_pending_output();
+        pane.output.close();
+
+        assert_eq!(*received.lock().unwrap(), "live");
+        assert!(
+            !pane.seeded,
+            "failed captures must remain eligible for retry"
+        );
+        assert_eq!(pane.pending_bytes, 0);
+    }
+
+    #[test]
+    fn output_without_a_timestamp_or_snapshot_is_never_discarded() {
+        let at = Instant::now();
+        assert!(!output_precedes_capture(None, Some(at)));
+        assert!(!output_precedes_capture(Some(at), None));
+        assert!(!output_precedes_capture(None, None));
+    }
+
+    #[test]
+    fn unknown_output_caps_oversized_chunks_in_empty_and_populated_queues() {
+        let cap = PENDING_PANE_OUTPUT_MAX_BYTES;
+        let at = Some(Instant::now());
+        for prefilled in [false, true] {
+            let mut pending = VecDeque::new();
+            let mut total = 0;
+            if prefilled {
+                buffer_unknown_output(&mut pending, &mut total, None, b"old".to_vec());
+            }
+            let mut data = vec![b'x'; cap + 17];
+            data[..17].fill(b'd');
+            data[cap..].fill(b'z');
+            let expected = data[17..].to_vec();
+            buffer_unknown_output(&mut pending, &mut total, at, data);
+            assert_eq!(total, cap);
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0], (at, expected));
+            assert!(pending[0].1.capacity() <= cap);
+        }
+    }
+
+    #[test]
+    fn unknown_output_evicts_oldest_chunks_and_keeps_exact_limit() {
+        let cap = PENDING_PANE_OUTPUT_MAX_BYTES;
+        let mut pending = VecDeque::new();
+        let mut total = 0;
+        buffer_unknown_output(&mut pending, &mut total, None, vec![b'a'; cap / 2]);
+        buffer_unknown_output(&mut pending, &mut total, None, vec![b'b'; cap / 2]);
+        assert_eq!(total, cap);
+        assert_eq!(pending.len(), 2);
+        buffer_unknown_output(&mut pending, &mut total, None, b"tail".to_vec());
+        assert_eq!(total, cap / 2 + 4);
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].1, vec![b'b'; cap / 2]);
+        assert_eq!(pending[1].1, b"tail");
+        assert_eq!(
+            total,
+            pending.iter().map(|(_, data)| data.len()).sum::<usize>()
+        );
+    }
 }
 
 #[cfg(test)]
