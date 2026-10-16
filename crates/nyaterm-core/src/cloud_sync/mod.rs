@@ -963,9 +963,9 @@ fn write_sync_pointer(
 ) -> Result<(), CloudSyncError> {
     let bytes = local_store.encode_sync_pointer(pointer)?;
     let path = remote_path(remote_root, SYNC_LATEST_FILE);
-    // Same read-back verification as the snapshot upload: a remote that accepts
-    // the write but still serves the previous content must be retried, not
-    // failed. File-slot stores instead need their capacity verdict reported.
+    // As with snapshot uploads, retry reads after an accepted PUT so repeated
+    // writes do not restart eventual-consistency delays. File-slot stores keep
+    // their write retry and capacity verdict.
     let capacity_limited = remote.file_capacity()?.is_some();
     let attempts = if capacity_limited {
         2
@@ -973,7 +973,9 @@ fn write_sync_pointer(
         protocol::READBACK_VERIFY_ATTEMPTS
     };
     for attempt in 0..attempts {
-        remote.write(&path, &bytes)?;
+        if capacity_limited || attempt == 0 {
+            remote.write(&path, &bytes)?;
+        }
         if load_sync_pointer_from_remote(local_store, remote, remote_root)?.as_ref()
             == Some(pointer)
         {

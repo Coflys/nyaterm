@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 mod cancellation;
 
@@ -519,6 +519,60 @@ impl CloudSyncRemote for EventuallyConsistentRemote {
             .filter(|key| key.starts_with(path))
             .cloned()
             .collect())
+    }
+}
+
+/// Pending writes become visible after a delay. Every PUT, including an
+/// identical one, restarts that delay without publishing the pending content.
+struct DelayedVisibilityRemote {
+    inner: MemoryRemote,
+    pending: Mutex<HashMap<String, (Vec<u8>, Instant)>>,
+    writes: Mutex<HashMap<String, usize>>,
+    delay: Duration,
+}
+
+impl CloudSyncRemote for DelayedVisibilityRemote {
+    fn provider(&self) -> &'static str {
+        "delayed-visibility"
+    }
+
+    fn create_dir(&self, path: &str) -> Result<(), CloudSyncError> {
+        self.inner.create_dir(path)
+    }
+
+    fn read_if_exists(&self, path: &str) -> Result<Option<Vec<u8>>, CloudSyncError> {
+        let mut pending = self.pending.lock().expect("pending lock");
+        if pending
+            .get(path)
+            .is_some_and(|(_, written_at)| written_at.elapsed() >= self.delay)
+        {
+            let (bytes, _) = pending.remove(path).expect("pending write");
+            self.inner.write(path, &bytes)?;
+        }
+        self.inner.read_if_exists(path)
+    }
+
+    fn write(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
+        *self
+            .writes
+            .lock()
+            .expect("writes lock")
+            .entry(path.to_string())
+            .or_default() += 1;
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .insert(path.to_string(), (bytes.to_vec(), Instant::now()));
+        Ok(())
+    }
+
+    fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
+        self.pending.lock().expect("pending lock").remove(path);
+        self.inner.delete(path)
+    }
+
+    fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        self.inner.list_files(path)
     }
 }
 
@@ -2020,6 +2074,79 @@ fn wrong_master_password_blocks_overwriting_the_cloud_copy() {
 }
 
 #[test]
+fn wrong_master_password_blocks_overwrite_when_only_current_can_authenticate() {
+    for head_damage in ["missing", "truncated", "unauthentic"] {
+        let source_dir = unique_temp_dir("cloud-current-guard-source");
+        let target_dir = unique_temp_dir("cloud-current-guard-target");
+        let unused_remote = unique_temp_dir("cloud-current-guard-unused");
+        let source_options = options(&source_dir, &unused_remote, "source-device");
+        let mut wrong_options = options(&target_dir, &unused_remote, "target-device");
+        wrong_options.master_password = "wrong".to_string().into();
+        let remote = MemoryRemote::default();
+        let pushed =
+            push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), false)
+                .expect("seed remote");
+        let pointer = pushed.pointer.expect("pointer");
+        let snapshot_path = remote_path(
+            &source_options.remote_root,
+            &super::legacy_sync_snapshot_file(&pointer.revision_id),
+        );
+        match head_damage {
+            "missing" => remote.delete(&snapshot_path).expect("remove head snapshot"),
+            "truncated" => remote
+                .write(&snapshot_path, &[0; 12])
+                .expect("truncate head"),
+            "unauthentic" => remote.write(&snapshot_path, &[7; 64]).expect("alter head"),
+            _ => unreachable!(),
+        }
+        let before = remote.files.lock().expect("memory lock").clone();
+        let store = VerifyingTestLocalStore {
+            options: &wrong_options,
+            valid_master_password: "secret",
+        };
+        for force in [false, true] {
+            let error = super::push_snapshot_with_remote(
+                &store,
+                &wrong_options,
+                &remote,
+                &CloudSyncState::default(),
+                force,
+            )
+            .expect_err("current must remain protected even when the head is unusable");
+            let CloudSyncError::Conflict(preview) = error else {
+                panic!("expected a recoverable conflict, got {error}");
+            };
+            assert_eq!(preview.kind, CloudConflictKind::RemoteInconsistent);
+            assert!(
+                preview.overwrite_blocked,
+                "{head_damage}: {}",
+                preview.message
+            );
+            assert!(preview.recovery_revision.is_none());
+            assert!(
+                preview.message.contains(&pointer.revision_id),
+                "{}",
+                preview.message
+            );
+            assert!(
+                preview.message.contains(super::SYNC_CURRENT_FILE),
+                "{}",
+                preview.message
+            );
+            assert!(
+                preview.message.contains("does not match"),
+                "{}",
+                preview.message
+            );
+            assert_eq!(*remote.files.lock().expect("memory lock"), before);
+        }
+        std::fs::remove_dir_all(source_dir).ok();
+        std::fs::remove_dir_all(target_dir).ok();
+        std::fs::remove_dir_all(unused_remote).ok();
+    }
+}
+
+#[test]
 fn forced_push_overwrites_an_unreadable_remote_head() {
     let source_dir = unique_temp_dir("cloud-force-source");
     let target_dir = unique_temp_dir("cloud-force-target");
@@ -2057,20 +2184,39 @@ fn forced_push_overwrites_an_unreadable_remote_head() {
         .expect("corrupt current");
 
     // An unforced push reports a recoverable conflict instead of a dead end.
-    let error =
-        push_snapshot_with_remote(&target_options, &remote, &CloudSyncState::default(), false)
-            .expect_err("unforced push must not clobber the remote");
+    let store = VerifyingTestLocalStore {
+        options: &target_options,
+        valid_master_password: "secret",
+    };
+    let error = super::push_snapshot_with_remote(
+        &store,
+        &target_options,
+        &remote,
+        &CloudSyncState::default(),
+        false,
+    )
+    .expect_err("unforced push must not clobber the remote");
     let preview = match error {
         CloudSyncError::Conflict(preview) => *preview,
         other => panic!("expected a recoverable conflict, got {other}"),
     };
     assert_eq!(preview.kind, CloudConflictKind::RemoteInconsistent);
     assert!(!preview.overwrite_blocked);
+    assert!(
+        preview.message.contains("password is correct"),
+        "{}",
+        preview.message
+    );
 
     // ...and a forced push is the documented way out.
-    let forced =
-        push_snapshot_with_remote(&target_options, &remote, &CloudSyncState::default(), true)
-            .expect("forced push");
+    let forced = super::push_snapshot_with_remote(
+        &store,
+        &target_options,
+        &remote,
+        &CloudSyncState::default(),
+        true,
+    )
+    .expect("forced push");
     assert_eq!(forced.outcome, CloudSyncOutcome::Uploaded);
     let head = super::load_sync_pointer_from_remote(
         &OptionsTestLocalStore(&target_options),
@@ -2125,6 +2271,44 @@ fn push_survives_a_remote_whose_reads_lag_behind_its_writes() {
     )
     .expect("the uploaded snapshot is readable");
 
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(unused_remote).ok();
+}
+
+#[test]
+fn push_waits_for_visibility_without_restarting_remote_propagation() {
+    let source_dir = unique_temp_dir("cloud-delayed-source");
+    let unused_remote = unique_temp_dir("cloud-delayed-unused");
+    let source_options = options(&source_dir, &unused_remote, "source-device");
+    let remote = DelayedVisibilityRemote {
+        inner: MemoryRemote::default(),
+        pending: Mutex::new(HashMap::new()),
+        writes: Mutex::new(HashMap::new()),
+        // Longer than the first backoff, shorter than the full retry window.
+        delay: super::protocol::READBACK_VERIFY_BACKOFF * 2,
+    };
+    let pushed =
+        push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), false)
+            .expect("wait for snapshot and pointer propagation without repeating PUT");
+    assert_eq!(pushed.outcome, CloudSyncOutcome::Uploaded);
+    let pointer = pushed.pointer.expect("pointer");
+    let snapshot_path = remote_path(
+        &source_options.remote_root,
+        &super::legacy_sync_snapshot_file(&pointer.revision_id),
+    );
+    let latest_path = remote_path(&source_options.remote_root, super::SYNC_LATEST_FILE);
+    let writes = remote.writes.lock().expect("writes lock");
+    assert_eq!(writes.get(&snapshot_path), Some(&1));
+    assert_eq!(writes.get(&latest_path), Some(&1));
+    assert_eq!(
+        super::load_sync_pointer_from_remote(
+            &OptionsTestLocalStore(&source_options),
+            &remote,
+            &source_options.remote_root,
+        )
+        .expect("load head"),
+        Some(pointer),
+    );
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(unused_remote).ok();
 }

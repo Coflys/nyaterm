@@ -88,8 +88,8 @@ fn upload_verified_snapshot(
     );
     // File-slot stores (GitHub Gist, Gitee Snippet) only ever need a second
     // attempt, and only for capacity reasons. Object stores with eventual
-    // consistency need a few read-back retries so a slow write-back does not
-    // fail the sync on the first read.
+    // consistency need read-back retries after a single write: repeating PUT
+    // can restart propagation and keep the new content invisible indefinitely.
     let capacity_limited = remote.file_capacity()?.is_some();
     let attempts = if capacity_limited {
         2
@@ -107,12 +107,11 @@ fn upload_verified_snapshot(
             )?;
         }
         let last_attempt = attempt + 1 == attempts;
-        // A write the remote rejected is reported as-is. Only an accepted write
-        // whose read-back cannot be verified is retried: the bytes we just sent
-        // were encrypted with the configured master password, so a payload that
-        // does not authenticate means the remote served something else — a stale
-        // copy behind an eventually-consistent gateway, for example.
-        if let Err(error) = remote.write(&path, bytes) {
+        // Capacity-limited stores may retry the write after reserving slots.
+        // Other stores only retry GET once PUT has been accepted.
+        if (capacity_limited || attempt == 0)
+            && let Err(error) = remote.write(&path, bytes)
+        {
             if capacity_limited && !last_attempt {
                 continue;
             }
@@ -146,7 +145,7 @@ fn upload_verified_snapshot(
     )))
 }
 
-/// Whether re-writing and re-reading a snapshot could plausibly succeed.
+/// Whether another read-back attempt could plausibly succeed.
 fn readback_retry_is_useful(error: &CloudSyncError) -> bool {
     !matches!(
         error,
@@ -327,7 +326,7 @@ pub(super) fn resolve_remote_snapshot(
             | CloudSyncError::RevisionMismatch { .. }
             | CloudSyncError::HashMismatch { .. }
             | CloudSyncError::RemoteSnapshotUnreadable { .. }),
-        ) => Some(unreadable_head(&error)),
+        ) => unreadable_head(&error),
         Err(error) => return Err(error),
     };
 
@@ -337,17 +336,20 @@ pub(super) fn resolve_remote_snapshot(
             return Ok(RemoteSnapshotResolution::Inconsistent {
                 pointer: pointer.clone(),
                 recovery_candidate: None,
-                unreadable,
+                unreadable: Some(unreadable),
             });
         }
         Err(error @ CloudSyncError::RemoteSnapshotUnreadable { .. }) => {
-            // Both the head and the compatible copy are unreadable. Report the
-            // head, which is the revision the remote metadata actually points at.
-            unreadable.get_or_insert_with(|| unreadable_head(&error));
+            // Preserve both diagnoses. A missing or corrupted head must never
+            // hide evidence that the configured password cannot read current.
+            let current_unreadable = unreadable_head(&error);
+            unreadable.reason.push(' ');
+            unreadable.reason.push_str(&current_unreadable.reason);
+            unreadable.overwrite_blocked |= current_unreadable.overwrite_blocked;
             return Ok(RemoteSnapshotResolution::Inconsistent {
                 pointer: pointer.clone(),
                 recovery_candidate: None,
-                unreadable,
+                unreadable: Some(unreadable),
             });
         }
         Err(error) => return Err(error),
@@ -373,7 +375,7 @@ pub(super) fn resolve_remote_snapshot(
     Ok(RemoteSnapshotResolution::Inconsistent {
         pointer: pointer.clone(),
         recovery_candidate: Some(current),
-        unreadable,
+        unreadable: Some(unreadable),
     })
 }
 
