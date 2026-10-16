@@ -141,6 +141,12 @@ struct VirtualPane {
     /// Cell dimensions the current screen was seeded at; a layout change
     /// that alters them triggers a fresh capture so rows realign.
     dims: Option<(u32, u32)>,
+    /// Renderer dimensions (`desired`) at the time the current seed was
+    /// taken. A pane first seeded while hidden in a background tab (`desired`
+    /// is `None`, xterm still at default 80x24) must be reseeded once its
+    /// renderer becomes visible and reports its real dimensions, even when
+    /// those dimensions already match the remote tmux layout (`dims`).
+    seeded_desired: Option<(u32, u32)>,
     /// Last `resize-pane` target and attempts for the current `desired`
     /// size — bounds the layout-echo feedback when a target is unreachable
     /// (e.g. a remote `window-size=manual` that ignores the client size).
@@ -489,6 +495,7 @@ impl<'a> ControlSession<'a> {
                 desired: None,
                 pending_dims: None,
                 dims: None,
+                seeded_desired: None,
                 resize_attempts: None,
                 capture: OutputCaptureProcessor::new(),
                 cwd,
@@ -516,6 +523,7 @@ impl<'a> ControlSession<'a> {
             }
             pane.seeding = true;
             pane.dims = dims;
+            pane.seeded_desired = pane.desired;
         }
         // `-e` keeps escape sequences, `-p` prints to stdout, `-S -` starts at
         // the beginning of the pane's scrollback.
@@ -723,9 +731,13 @@ impl<'a> ControlSession<'a> {
         // marks clipped edges with `#`, and it never re-pushes `%output`
         // after a resize — a capture taken pre-grow would seed those marks
         // forever. Skipped while zoomed since any client resize drops the
-        // zoom. Background windows are not clipped by the client size.
+        // zoom, and skipped once any local renderer has reported its real
+        // size (`sync_pane_sizes` then owns `client_size`, so switching to a
+        // background window with a larger stale layout must not bounce the
+        // client back up before `sync_pane_sizes` shrinks it).
+        let has_renderer_size = self.panes.values().any(|pane| pane.desired.is_some());
         let mut grew = false;
-        if !zoomed {
+        if !zoomed && !has_renderer_size {
             if let Some(layout) = active_layout.as_ref() {
                 grew = self.grow_client(channel, layout.width, layout.height).await;
             }
@@ -1261,43 +1273,32 @@ impl<'a> ControlSession<'a> {
                                 .unwrap_or(0);
                             Some((x, y, history))
                         });
-                        if let Some(seed_lines) = virtual_pane.pending_seed.take() {
+                        let wrote_seed = if let Some(seed_lines) = virtual_pane.pending_seed.take()
+                        {
                             let (x, y, history) = cursor.unwrap_or_default();
-                            let hist = history.min(seed_lines.len());
+                            let screen_rows = virtual_pane
+                                .desired
+                                .or(virtual_pane.dims)
+                                .map(|(_, rows)| rows as usize);
                             let mut decoder = TerminalOutputDecoder::new(&self.encoding);
-                            // Reset + clear first: this makes the seed
-                            // idempotent for remounted terminals and for
-                            // re-captures after a client grow (which must
-                            // overwrite '#' clipping marks already on
-                            // screen).
-                            let mut text = String::from("\x1b[H\x1b[2J\x1b[3J");
-                            if hist > 0 {
-                                // `capture-pane -S -` leads with
-                                // `history_size` scrollback rows. Writing
-                                // them plainly would leave stale rows (e.g.
-                                // leftover '#'/'%' marks) parked above the
-                                // prompt, so scroll them into the renderer's
-                                // own scrollback first, then paint only the
-                                // screen part.
-                                text.push_str(
-                                    &decoder.decode(seed_lines[..hist].join("\r\n").as_bytes()),
-                                );
-                                text.push_str("\r\n");
-                                text.push_str("\x1b[r\x1b[9999B");
-                                text.push_str(&"\n".repeat(hist));
-                                text.push_str("\x1b[H");
-                            }
-                            text.push_str(
-                                &decoder.decode(seed_lines[hist..].join("\r\n").as_bytes()),
+                            let text = compose_seed_payload(
+                                &seed_lines,
+                                x,
+                                y,
+                                history,
+                                screen_rows,
+                                &mut decoder,
                             );
-                            // `cursor_y` is screen-relative; with scrollback
-                            // scrolled away it lands directly on that row.
-                            text.push_str(&format!("\x1b[{};{}H", y + 1, x + 1));
                             virtual_pane.output.push_owned(text);
-                        }
+                            true
+                        } else {
+                            false
+                        };
+                        // A failed capture wrote nothing; leaving the pane
+                        // unseeded lets the next attach or layout pass retry.
+                        virtual_pane.seeded = wrote_seed;
                     }
                     if !reseed {
-                        virtual_pane.seeded = true;
                         let capture_at = virtual_pane.capture_at;
                         while let Some((produced_at, data)) =
                             virtual_pane.pending_output.pop_front()
@@ -1461,13 +1462,40 @@ impl<'a> ControlSession<'a> {
                 }
             }
             SessionCommand::Resize { cols, rows } => {
+                let layout_dims = self.pane_dims(&pane_id);
+                let mut immediate_reseed = false;
                 if let Some(pane) = self.panes.get_mut(&pane_id) {
-                    if pane.pending_dims != Some((cols, rows)) {
+                    if layout_dims == Some((cols, rows)) {
+                        // The renderer just fitted to the exact dimensions
+                        // the remote tmux layout already has (e.g. a hidden
+                        // background window tab becoming visible for the
+                        // first time). Promote immediately without the 250 ms
+                        // debounce; if the previous seed ran while the
+                        // renderer was still at its hidden default 80x24
+                        // (`seeded_desired != Some((cols, rows))`), reseed
+                        // now so rows and cursor align with the fitted xterm.
+                        pane.pending_dims = None;
+                        if pane.desired != Some((cols, rows)) {
+                            pane.desired = Some((cols, rows));
+                            pane.resize_attempts = None;
+                        }
+                        if pane.seeded_desired != Some((cols, rows)) {
+                            if pane.seeding {
+                                pane.reseed = true;
+                            } else {
+                                pane.seeded = false;
+                                immediate_reseed = true;
+                            }
+                        }
+                    } else if pane.pending_dims != Some((cols, rows)) {
                         pane.pending_dims = Some((cols, rows));
                         self.resize_deadline = Some(Box::pin(tokio::time::sleep(
                             Duration::from_millis(RESIZE_SYNC_DEBOUNCE_MS),
                         )));
                     }
+                }
+                if immediate_reseed {
+                    self.seed_pane(channel, &pane_id).await;
                 }
             }
             SessionCommand::SerialModemUpload { .. } => {
@@ -1483,18 +1511,24 @@ impl<'a> ControlSession<'a> {
                 let mut reseed = false;
                 if let Some(pane) = self.panes.get_mut(&pane_id) {
                     pane.output.attach_confirmed(ack);
-                    // A renderer attaching to an already-seeded pane was
-                    // remounted (fresh buffer); resend the screen. Attaches
-                    // within 250 ms are the same mount seen twice (e.g.
-                    // StrictMode), not a remount.
-                    reseed = pane.seeded
-                        && pane
-                            .last_attach
-                            .is_none_or(|t| t.elapsed() > Duration::from_millis(250));
-                    pane.last_attach = Some(std::time::Instant::now());
-                    if reseed {
+                    // A renderer re-attaching after its initial mount (e.g.
+                    // remount or wake from hibernation) has a fresh buffer and
+                    // needs the screen re-sent. The very first attach
+                    // (`last_attach.is_none()`) already receives the initial
+                    // seed drained from `pane.output` above, and attaches
+                    // within 250 ms are the same mount seen twice (StrictMode).
+                    let remount_attach = pane
+                        .last_attach
+                        .is_some_and(|t| t.elapsed() > Duration::from_millis(250));
+                    if pane.seeding {
+                        if remount_attach {
+                            pane.reseed = true;
+                        }
+                    } else if !pane.seeded || remount_attach {
                         pane.seeded = false;
+                        reseed = true;
                     }
+                    pane.last_attach = Some(std::time::Instant::now());
                 } else {
                     let _ = ack.send(());
                 }
@@ -1723,6 +1757,33 @@ pub(crate) async fn run_control_session(
                     }
                 }
                 session.sync_pane_sizes(channel).await;
+                // If a pane's settled renderer size already matches its remote
+                // layout (so `sync_pane_sizes` sent no resize and no
+                // `%layout-change` will follow), but the pane was last seeded
+                // at a different renderer size, reseed it now.
+                let to_reseed: Vec<String> = session
+                    .panes
+                    .keys()
+                    .filter(|pane_id| {
+                        let layout_dims = session.pane_dims(pane_id);
+                        session.panes.get(*pane_id).is_some_and(|pane| {
+                            pane.desired.is_some()
+                                && pane.desired == layout_dims
+                                && pane.seeded_desired != pane.desired
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                for pane_id in to_reseed {
+                    if let Some(pane) = session.panes.get_mut(&pane_id) {
+                        if pane.seeding {
+                            pane.reseed = true;
+                            continue;
+                        }
+                        pane.seeded = false;
+                    }
+                    session.seed_pane(channel, &pane_id).await;
+                }
             }
 
             () = async {
@@ -1832,6 +1893,52 @@ pub(crate) async fn run_control_session(
 
     session.teardown().await;
     exit
+}
+
+/// Compose the terminal payload that paints a `capture-pane -ep -S -` snapshot
+/// into xterm and restores the cursor.
+///
+/// Two invariants keep the prompt and cursor aligned even when the renderer's
+/// current height differs from the remote tmux pane (e.g. a background window
+/// tab still at default 80x24 while hidden, or a host container shortened by
+/// `TmuxWindowStrip`):
+///
+/// 1. Trailing blank screen rows are trimmed before joining with `\r\n`.
+///    `capture-pane` emits all `pane_height` rows of the grid, including blank
+///    rows below the cursor; writing those trailing `\r\n`s into a shorter
+///    xterm scrolls the top rows (where the prompt sits) into scrollback, after
+///    which `\x1b[{y+1};{x+1}H` lands on an empty line at the right column.
+/// 2. When scrollback rows (`history > 0`) precede the screen portion, only
+///    `hist.min(screen_rows)` newlines are emitted at the bottom row to push
+///    the visible tail into xterm's scrollback without injecting blank lines.
+fn compose_seed_payload(
+    seed_lines: &[String],
+    x: u32,
+    y: u32,
+    history: usize,
+    screen_rows: Option<usize>,
+    decoder: &mut TerminalOutputDecoder,
+) -> String {
+    let hist = history.min(seed_lines.len());
+    // Reset + clear first: this makes the seed idempotent for remounted
+    // terminals and for re-captures after a client grow (which must overwrite
+    // '#' clipping marks already on screen).
+    let mut text = String::from("\x1b[H\x1b[2J\x1b[3J");
+    if hist > 0 {
+        let rows = screen_rows
+            .unwrap_or_else(|| seed_lines.len().saturating_sub(hist))
+            .max(1);
+        text.push_str(&decoder.decode(seed_lines[..hist].join("\r\n").as_bytes()));
+        text.push_str("\x1b[r\x1b[9999B");
+        text.push_str(&"\n".repeat(hist.min(rows)));
+        text.push_str("\x1b[H");
+    }
+    let screen = &seed_lines[hist..];
+    if let Some(last) = screen.iter().rposition(|line| !line.is_empty()) {
+        text.push_str(&decoder.decode(screen[..=last].join("\r\n").as_bytes()));
+    }
+    text.push_str(&format!("\x1b[{};{}H", y + 1, x + 1));
+    text
 }
 
 /// Window dimensions under which every pane could take its renderer's size:
@@ -1948,5 +2055,28 @@ mod window_tests {
         let empty = parse_window_snapshot(Vec::new());
         assert!(empty.windows.is_empty());
         assert!(empty.active_window.is_none());
+    }
+
+    #[test]
+    fn seed_payload_trims_trailing_blank_screen_rows_so_hidden_xterm_does_not_scroll_prompt() {
+        // 29-row tmux capture: row 0 empty, row 1 has the prompt, rows 2..28 empty.
+        let mut lines = vec![String::new(), "root@dev ~ » ".to_string()];
+        lines.resize(29, String::new());
+        let mut decoder = TerminalOutputDecoder::new("utf-8");
+        let payload = compose_seed_payload(&lines, 13, 1, 0, Some(29), &mut decoder);
+        assert_eq!(payload, "\x1b[H\x1b[2J\x1b[3J\r\nroot@dev ~ » \x1b[2;14H");
+    }
+
+    #[test]
+    fn seed_payload_scrolls_history_by_at_most_screen_rows() {
+        let mut lines: Vec<String> = (0..50).map(|i| format!("hist-{i}")).collect();
+        lines.push("prompt$ ".to_string());
+        lines.resize(50 + 24, String::new());
+        let mut decoder = TerminalOutputDecoder::new("utf-8");
+        let payload = compose_seed_payload(&lines, 8, 0, 50, Some(24), &mut decoder);
+        assert!(payload.contains(&format!(
+            "\x1b[r\x1b[9999B{}\x1b[Hprompt$ \x1b[1;9H",
+            "\n".repeat(24)
+        )));
     }
 }

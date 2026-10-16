@@ -2211,7 +2211,10 @@ export default function XTerminal({
         repaintVisibleTerminal,
       });
 
-    handleVisibilityChangeRef.current = applyVisibilityPolicy;
+    handleVisibilityChangeRef.current = () => {
+      fitScheduler.notifyVisible();
+      applyVisibilityPolicy();
+    };
     applyVisibilityPolicy();
 
     const sessionEvents = createXTerminalSessionEvents({
