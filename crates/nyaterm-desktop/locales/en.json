@@ -2917,6 +2917,7 @@
     "uploadConcurrentTasks": "Parallel Uploads",
     "uploadConcurrentTasksDesc": "Uploads that can run at once (1-10).",
     "uploadLocalVersion": "Upload Local",
+    "overwriteBlockedNotice": "Uploading the local snapshot is disabled because the configured master password does not match this device. Overwriting the cloud copy could make it unreadable.",
     "uploadThreads": "Upload Threads",
     "uploadThreadsDesc": "Parallel upload threads (1-10).",
     "useOsKeyring": "Use OS Keyring",

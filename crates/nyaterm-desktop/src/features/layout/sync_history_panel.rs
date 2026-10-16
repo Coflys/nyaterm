@@ -251,7 +251,9 @@ impl NyaTermApp {
             .when_some(conflict, |this, conflict| {
                 let preview = conflict.preview;
                 let remote_inconsistent = preview.kind == CloudConflictKind::RemoteInconsistent;
+                let overwrite_blocked = preview.overwrite_blocked;
                 let recovery_revision = preview.recovery_revision.clone();
+                let has_recovery_candidate = recovery_revision.is_some();
                 this.child(
                     div()
                         .flex_none()
@@ -356,7 +358,7 @@ impl NyaTermApp {
                                 .pb_3()
                                 .flex()
                                 .gap_2()
-                                .child(if remote_inconsistent {
+                                .child(if remote_inconsistent && has_recovery_candidate {
                                     small_button(
                                         palette,
                                         "sync-panel-recover-current",
@@ -373,6 +375,12 @@ impl NyaTermApp {
                                         }),
                                     )
                                     .into_any_element()
+                                } else if remote_inconsistent {
+                                    // Nothing on the remote can be recovered:
+                                    // pulling would download the same unreadable
+                                    // payload, so only the explicit overwrite is
+                                    // offered.
+                                    div().into_any_element()
                                 } else {
                                     small_button(
                                         palette,
@@ -391,22 +399,33 @@ impl NyaTermApp {
                                     )
                                     .into_any_element()
                                 })
-                                .child(dialog_action_button(
-                                    palette,
-                                    "sync-panel-force-push",
-                                    t!("settings.uploadLocalVersion"),
-                                    false,
-                                    cx.listener({
-                                        let provider_action = conflict.provider_action;
-                                        move |this, _, window, cx| {
-                                            this.prompt_cloud_sync_force_push(
-                                                provider_action,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }),
-                                )),
+                                .when(!overwrite_blocked, |this| {
+                                    this.child(dialog_action_button(
+                                        palette,
+                                        "sync-panel-force-push",
+                                        t!("settings.uploadLocalVersion"),
+                                        false,
+                                        cx.listener({
+                                            let provider_action = conflict.provider_action;
+                                            move |this, _, window, cx| {
+                                                this.prompt_cloud_sync_force_push(
+                                                    provider_action,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        }),
+                                    ))
+                                })
+                                .when(overwrite_blocked, |this| {
+                                    this.child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .line_height(px(16.))
+                                            .text_color(rgb(palette.warning))
+                                            .child(t!("settings.overwriteBlockedNotice")),
+                                    )
+                                }),
                         ),
                 )
             })

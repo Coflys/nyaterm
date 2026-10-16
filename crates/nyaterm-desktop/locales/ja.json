@@ -2917,6 +2917,7 @@
     "uploadConcurrentTasks": "並列アップロード数",
     "uploadConcurrentTasksDesc": "同時に実行できるアップロード数 (1-10)。",
     "uploadLocalVersion": "ローカルをアップロード",
+    "overwriteBlockedNotice": "現在のマスターパスワードが本機の記録と一致しないため、ローカルのアップロードを禁止しました。上書きするとクラウドのデータを復号できなくなる可能性があります。",
     "uploadThreads": "アップロードスレッド",
     "uploadThreadsDesc": "並列アップロードスレッド数 (1-10)。",
     "useOsKeyring": "OS キーリングを使用",
