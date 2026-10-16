@@ -83,7 +83,7 @@ impl NyaTermApp {
             self.shell.set_cursor_blink_clock_armed(false);
             // Leave the caret visible; a stopped clock must not strand it hidden.
             if self.shell.set_cursor_blink_on(true) {
-                self.notify_active_terminal_surface(cx);
+                self.notify_active_terminal_cursor_blink(cx);
             }
             return false;
         }
@@ -96,7 +96,7 @@ impl NyaTermApp {
         }
         self.shell.toggle_cursor_blink_phase();
         // Blink is terminal-local; this must never rebuild the full shell.
-        self.notify_active_terminal_surface(cx);
+        self.notify_active_terminal_cursor_blink(cx);
         true
     }
 }

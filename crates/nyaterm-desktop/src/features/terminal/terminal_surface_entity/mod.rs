@@ -273,6 +273,15 @@ impl TerminalSurfaceFrameSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::features) struct TerminalCursorBlinkBasis {
+    pub is_active: bool,
+    pub is_disconnected: bool,
+    /// Cursor visibility evaluated as if the blink phase were lit.
+    pub cursor_visible_when_lit: bool,
+    pub blink_enabled: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::features) struct TerminalVisualScrollGeometry {
     pub snapshot_pending: bool,
@@ -325,6 +334,9 @@ pub(in crate::features) struct TerminalSurface {
     cell_width: f32,
     cell_height: f32,
     show_cursor: bool,
+    /// Blink-independent cursor inputs from the last full paint sync, so a blink
+    /// half-period can flip the caret without re-running paint preparation.
+    cursor_blink_basis: Option<TerminalCursorBlinkBasis>,
     cursor_style: String,
     layout_cache: Arc<Mutex<NyaTerminalLayoutCache>>,
     show_line_numbers: bool,
@@ -396,6 +408,7 @@ impl TerminalSurface {
             cell_width: 8.0,
             cell_height: 16.0,
             show_cursor: false,
+            cursor_blink_basis: None,
             cursor_style: "block".to_string(),
             layout_cache: Arc::new(Mutex::new(NyaTerminalLayoutCache::default())),
             show_line_numbers: false,
@@ -450,6 +463,35 @@ impl TerminalSurface {
     #[cfg(test)]
     pub(in crate::features) fn cursor_is_shown(&self) -> bool {
         self.show_cursor
+    }
+
+    pub(in crate::features) fn set_cursor_blink_basis(&mut self, basis: TerminalCursorBlinkBasis) {
+        self.cursor_blink_basis = Some(basis);
+    }
+
+    /// Apply only a blink phase change. `None` means the recorded basis no longer
+    /// describes the surface and the caller must run a full paint sync instead.
+    pub(in crate::features) fn apply_cursor_blink_phase(
+        &mut self,
+        is_active: bool,
+        is_disconnected: bool,
+        cursor_blink_on: bool,
+    ) -> Option<bool> {
+        let basis = self.cursor_blink_basis?;
+        if basis.is_active != is_active
+            || basis.is_disconnected != is_disconnected
+            || self.visual_scroll_active()
+            || self.has_pending_local_scroll_sync()
+        {
+            return None;
+        }
+        let show_cursor =
+            basis.cursor_visible_when_lit && (!basis.blink_enabled || cursor_blink_on);
+        if self.show_cursor == show_cursor {
+            return Some(false);
+        }
+        self.show_cursor = show_cursor;
+        Some(true)
     }
 
     pub(in crate::features) fn painted_hit_test_state(
@@ -1483,7 +1525,9 @@ impl TerminalSurface {
         let show_cursor = show_cursor && !self.visual_scroll_active();
         let cursor_style = cursor_style.into();
         let rules_changed = !terminal_keyword_rule_sets_equal(&self.keyword_rules, &keyword_rules);
-        let changed = self.decorations.as_ref() != decorations.as_ref()
+        let decorations_changed = !Arc::ptr_eq(&self.decorations, &decorations)
+            && self.decorations.as_ref() != decorations.as_ref();
+        let changed = decorations_changed
             || rules_changed
             || self.show_cursor != show_cursor
             || self.cursor_style != cursor_style;

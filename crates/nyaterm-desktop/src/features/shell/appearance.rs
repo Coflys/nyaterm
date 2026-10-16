@@ -400,8 +400,14 @@ impl NyaTermApp {
 
     fn ensure_keyword_highlight_rules_cache(&mut self) {
         if self.settings.summary().terminal_low_latency_mode {
-            self.terminal
-                .cache_keyword_highlight_rules(Arc::new(Vec::new()));
+            if !self
+                .terminal
+                .cached_keyword_highlight_rules()
+                .is_some_and(|rules| rules.is_empty())
+            {
+                self.terminal
+                    .cache_keyword_highlight_rules(Arc::new(Vec::new()));
+            }
             return;
         }
         if self.terminal.cached_keyword_highlight_rules().is_some() {

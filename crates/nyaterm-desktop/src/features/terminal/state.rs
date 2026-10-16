@@ -25,6 +25,7 @@ use crate::models::{
     RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
     TerminalSelection, TerminalViewState,
 };
+use crate::terminal::terminal_keyword_rules_key;
 
 pub(in crate::features) struct TerminalFeatureState {
     pub(super) search: TerminalSearchState,
@@ -185,6 +186,8 @@ pub(super) struct TerminalMenuState {
 /// Paint-time caches invalidated whenever appearance settings change.
 pub(super) struct TerminalPaintCacheState {
     pub(super) cached_keyword_highlight_rules: Option<Arc<Vec<ResolvedKeywordHighlightRule>>>,
+    /// Hash of `cached_keyword_highlight_rules`, computed once per cached set.
+    pub(super) cached_keyword_highlight_rules_key: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -300,6 +303,7 @@ impl TerminalFeatureState {
             },
             paint: TerminalPaintCacheState {
                 cached_keyword_highlight_rules: None,
+                cached_keyword_highlight_rules_key: 0,
             },
             windows: TerminalWindowState {
                 tree: None,
@@ -542,7 +546,20 @@ impl TerminalFeatureState {
         rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
     ) {
         self.view.frame_pipeline.set_keyword_rules(rules.clone());
+        self.paint.cached_keyword_highlight_rules_key = terminal_keyword_rules_key(&rules);
         self.paint.cached_keyword_highlight_rules = Some(rules);
+    }
+
+    pub(in crate::features) fn keyword_highlight_rules_key(
+        &self,
+        rules: &Arc<Vec<ResolvedKeywordHighlightRule>>,
+    ) -> u64 {
+        match self.paint.cached_keyword_highlight_rules.as_ref() {
+            Some(cached) if Arc::ptr_eq(cached, rules) => {
+                self.paint.cached_keyword_highlight_rules_key
+            }
+            _ => terminal_keyword_rules_key(rules),
+        }
     }
 
     pub(in crate::features) fn invalidate_paint_caches(&mut self) {

@@ -14,8 +14,8 @@ use nyaterm_terminal::TerminalSnapshot;
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_surface_entity::{
-    TerminalSurface, TerminalSurfaceFrameSnapshot, TerminalSurfacePaintChrome,
-    terminal_snapshot_covers_display_offset,
+    TerminalCursorBlinkBasis, TerminalSurface, TerminalSurfaceFrameSnapshot,
+    TerminalSurfacePaintChrome, terminal_snapshot_covers_display_offset,
 };
 use crate::terminal::{NyaTerminalLayoutCache, TerminalBufferMatch, TerminalLineDecorations};
 
@@ -794,8 +794,9 @@ impl NyaTermApp {
                 &frame_action_links,
             );
         let configured_keyword_rules = self.resolved_keyword_highlight_rules();
-        let input_rules_key =
-            nyaterm_terminal_gpui::terminal_keyword_rules_key(&configured_keyword_rules);
+        let input_rules_key = self
+            .terminal
+            .keyword_highlight_rules_key(&configured_keyword_rules);
         let input_highlights = is_active
             .then(|| view.frame_input_highlights.clone())
             .flatten();
@@ -973,8 +974,9 @@ impl NyaTermApp {
             || self.settings.summary().terminal_low_latency_mode;
         let render_degraded = render_degraded_view || render_pressure;
         let configured_keyword_rules = self.resolved_keyword_highlight_rules();
-        let input_rules_key =
-            nyaterm_terminal_gpui::terminal_keyword_rules_key(&configured_keyword_rules);
+        let input_rules_key = self
+            .terminal
+            .keyword_highlight_rules_key(&configured_keyword_rules);
         let input_highlights = view
             .filter(|_| is_active)
             .and_then(|view| view.frame_input_highlights.clone());
@@ -1153,6 +1155,19 @@ impl NyaTermApp {
             blink_enabled,
             self.shell.cursor_blink_on(),
         );
+        let cursor_blink_basis = TerminalCursorBlinkBasis {
+            is_active,
+            is_disconnected,
+            cursor_visible_when_lit: terminal_cursor_visible_for_display_offset(
+                is_active,
+                is_disconnected,
+                display_offset,
+                remote_cursor_visible,
+                blink_enabled,
+                true,
+            ),
+            blink_enabled,
+        };
         let cursor_style = match snapshot.cursor.shape {
             nyaterm_terminal::CursorShape::Underline => "underline".to_string(),
             nyaterm_terminal::CursorShape::Beam => "bar".to_string(),
@@ -1377,6 +1392,7 @@ impl NyaTermApp {
         self.remember_terminal_scroll_window_snapshot(session_id, display_offset, &snapshot);
         surface.update(cx, |surface, cx| {
             let mut changed = false;
+            surface.set_cursor_blink_basis(cursor_blink_basis);
             if let Some(overview_markers) = overview_markers {
                 changed |= surface.set_overview_markers(
                     overview_markers,
@@ -1676,12 +1692,40 @@ impl NyaTermApp {
         }
     }
 
-    /// Notify surface only (no full shell). Used for cursor blink.
+    /// Notify surface only (no full shell).
     pub(in crate::features) fn notify_active_terminal_surface(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };
         self.sync_terminal_surface_paint(&session_id, cx);
+    }
+
+    /// Cursor blink half-period: flip only the caret when the surface's recorded
+    /// cursor basis still holds, otherwise fall back to a full paint sync.
+    pub(in crate::features) fn notify_active_terminal_cursor_blink(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session_id) = self.session.active_id_owned() else {
+            return;
+        };
+        let Some(surface) = self.terminal.view.surfaces.get(&session_id).cloned() else {
+            self.sync_terminal_surface_paint(&session_id, cx);
+            return;
+        };
+        let is_disconnected = self.session.is_disconnected(&session_id);
+        let cursor_blink_on = self.shell.cursor_blink_on();
+        let applied = surface.update(cx, |surface, cx| {
+            let changed =
+                surface.apply_cursor_blink_phase(true, is_disconnected, cursor_blink_on)?;
+            if changed {
+                cx.notify();
+            }
+            Some(())
+        });
+        if applied.is_none() {
+            self.sync_terminal_surface_paint(&session_id, cx);
+        }
     }
 
     /// Surface-only repaint for the given session (scroll / selection / frame).
