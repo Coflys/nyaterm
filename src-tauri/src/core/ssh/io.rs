@@ -9,6 +9,7 @@ use crate::core::terminal_session::local::split_startup_passthrough;
 use crate::core::terminal_session::{
     TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input,
 };
+use crate::core::tmux::{self, TmuxControlDetector, TmuxFeed, is_tmux_control_command};
 use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemDownloadOoDrain,
     ZmodemEvent, ZmodemTransfer, ZmodemUploadDrain, start_zmodem_transfer,
@@ -196,6 +197,16 @@ async fn exec_remote_command<H: client::Handler>(
 
 fn sh_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// `YYYY-MM-DD HH:MM:SS` local time for the tmux control-mode banner lines.
+fn tmux_local_stamp() -> String {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ))
+        .unwrap_or_default()
 }
 
 fn remote_install_command(shell: ShellKind) -> Option<String> {
@@ -1218,6 +1229,15 @@ pub(super) async fn ssh_io_loop(
     let mut initial_remote_data_logged = false;
     let mut injection_sent_at: Option<Instant> = None;
     let mut suppression_diagnostics = SuppressionDiagnostics::default();
+    // A configured startup/post-login command that launches control mode
+    // pre-arms the detector — its `%` notifications arrive before the user
+    // could type anything.
+    let tmux_pre_armed = post_login
+        .as_ref()
+        .is_some_and(|config| is_tmux_control_command(&config.command))
+        || startup_command
+            .as_ref()
+            .is_some_and(|config| is_tmux_control_command(&config.command));
     let mut pending_post_login = post_login.and_then(|config| {
         build_post_login_command_input(&config.command).map(|input| PendingStartupCommand {
             input,
@@ -1240,6 +1260,10 @@ pub(super) async fn ssh_io_loop(
     let mut output_paused = false;
 
     let mut zmodem_detector = ZmodemDetector::new();
+    let mut tmux_detector = TmuxControlDetector::new();
+    if tmux_pre_armed {
+        tmux_detector.arm();
+    }
     let mut zmodem_transfer: Option<ZmodemTransfer> = None;
     let mut zmodem_upload_drain = ZmodemUploadDrain::new();
     let mut zmodem_download_oo_drain = ZmodemDownloadOoDrain::new();
@@ -1270,6 +1294,50 @@ pub(super) async fn ssh_io_loop(
 
         tokio::select! {
             biased;
+
+            () = async {
+                if let Some(deadline) = tmux_detector.deadline() {
+                    tokio::time::sleep_until(deadline).await;
+                }
+            }, if tmux_detector.deadline().is_some() => {
+                let bytes = tmux_detector.expire_candidate();
+                if let Some(ref recorder) = recording_mgr {
+                    recorder.write_raw_output(&session_id, &bytes);
+                }
+                let text = output_decoder.decode(&bytes);
+                let mut result = stripper.push(&text);
+
+                if capture_processor.has_active() {
+                    result.visible = capture_processor.process(&result.visible);
+                    if result.ready {
+                        capture_processor.finish_abandoned_at_prompt();
+                    }
+                }
+
+                handle_osc_result(
+                    &app,
+                    &output,
+                    &cwd_event,
+                    &cwd,
+                    &recording_mgr,
+                    &session_id,
+                    &manager,
+                    &mut channel,
+                    &mut pending_script,
+                    &mut inject_deadline,
+                    &mut phase,
+                    &result,
+                    &mut suppressed_visible_fallback,
+                    shell_kind,
+                    &mut injection_sent_at,
+                    &mut suppression_diagnostics,
+                ).await;
+                arm_post_login_timer(
+                    &phase,
+                    &pending_post_login,
+                    &mut post_login_deadline,
+                );
+            }
 
             _ = &mut inject_deadline,
                 if phase == IoPhase::Suppressing && injection_sent_at.is_some() =>
@@ -1328,6 +1396,7 @@ pub(super) async fn ssh_io_loop(
                         if phase == IoPhase::Suppressing {
                             suppression_diagnostics.record_pre_ready_write(send_data.len());
                         }
+                        tmux_detector.feed_input(&send_data);
                         let _ = nyaterm_core::ssh::terminal::write(&channel, &send_data[..]).await;
                     }
                     Some(SessionCommand::Resize { cols, rows }) => {
@@ -1355,10 +1424,16 @@ pub(super) async fn ssh_io_loop(
                         .await;
                         if !capture_processor.register_execution(marker_id.clone(), result_tx, Some(execution)) { continue; }
                         let send_command = encode_terminal_input(&wrapped_command, &encoding);
+                        tmux_detector.feed_input(&send_command);
                         if channel.data(&send_command[..]).await.is_err() { capture_processor.abort(&marker_id); }
                     }
                     Some(SessionCommand::CancelCapture { marker_id }) => {
                         capture_processor.cancel(&marker_id);
+                    }
+                    Some(SessionCommand::TmuxCommand { .. })
+                    | Some(SessionCommand::TmuxDetach) => {
+                        // Only meaningful while the tmux control session owns
+                        // the channel; ignored in normal shell mode.
                     }
                     Some(SessionCommand::Close) => {
                         let _ = channel.close().await;
@@ -1483,10 +1558,161 @@ pub(super) async fn ssh_io_loop(
                             continue;
                         }
 
+                        // tmux control mode: confirm startup framing and a nonce response
+                        // before changing session ownership or workspace state.
+                        let data = match tmux_detector.feed(data) {
+                            TmuxFeed::Passthrough(data) => data,
+                            TmuxFeed::Detected { passthrough, startup, rest } => {
+                                // Flush the bytes preceding the notification through
+                                // the regular path, then hand the channel over.
+                                if !passthrough.is_empty() {
+                                    if let Some(ref recorder) = recording_mgr {
+                                        recorder.write_raw_output(&session_id, &passthrough);
+                                    }
+                                    let text = output_decoder.decode(&passthrough);
+                                    let result = stripper.push(&text);
+                                    emit_visible_text(
+                                        &output,
+                                        &recording_mgr,
+                                        &session_id,
+                                        &result.visible,
+                                    );
+                                }
+                                let rest = match tmux::verify_control_channel(&mut channel, &startup, &rest).await {
+                                    Ok(rest) => rest,
+                                    Err(leftover) => {
+                                        // No UI/session state was changed. Replay the exact bytes
+                                        // through the shell pipeline; queued user input stays intact.
+                                        tmux_detector = TmuxControlDetector::new();
+                                        if let Some(ref recorder) = recording_mgr {
+                                            recorder.write_raw_output(&session_id, &leftover);
+                                        }
+                                        let text = output_decoder.decode(&leftover);
+                                        let mut result = stripper.push(&text);
+
+                                        if capture_processor.has_active() {
+                                            result.visible = capture_processor.process(&result.visible);
+                                            if result.ready {
+                                                capture_processor.finish_abandoned_at_prompt();
+                                            }
+                                        }
+
+                                        handle_osc_result(
+                                            &app,
+                                            &output,
+                                            &cwd_event,
+                                            &cwd,
+                                            &recording_mgr,
+                                            &session_id,
+                                            &manager,
+                                            &mut channel,
+                                            &mut pending_script,
+                                            &mut inject_deadline,
+                                            &mut phase,
+                                            &result,
+                                            &mut suppressed_visible_fallback,
+                                            shell_kind,
+                                            &mut injection_sent_at,
+                                            &mut suppression_diagnostics,
+                                        ).await;
+                                        arm_post_login_timer(
+                                            &phase,
+                                            &pending_post_login,
+                                            &mut post_login_deadline,
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let stamp = tmux_local_stamp();
+                                emit_visible_text(
+                                    &output,
+                                    &recording_mgr,
+                                    &session_id,
+                                    &format!(
+                                        "\r\n\x1b[2m[{stamp}] [nyaterm] tmux control mode\x1b[0m\r\n"
+                                    ),
+                                );
+                                // Flush the entry banner before detaching so a
+                                // host terminal that deep-hibernates while
+                                // hidden (>2 min inside tmux) captures the
+                                // banner in its snapshot instead of stranding
+                                // it in `output.pending`.
+                                let host_renderer_attached = output.is_attached();
+                                output.close();
+                                output.detach();
+                                match tmux::run_control_session(
+                                    &app,
+                                    &session_id,
+                                    &manager,
+                                    &mut channel,
+                                    &mut cmd_rx,
+                                    &rest,
+                                    &encoding,
+                                    connection_id.clone(),
+                                    host_renderer_attached,
+                                )
+                                .await
+                                {
+                                    tmux::ControlExit::ReturnToShell {
+                                        leftover,
+                                        host_renderer_attached,
+                                    } => {
+                                        // Re-attach immediately only when the
+                                        // host renderer stayed mounted and
+                                        // attached throughout control mode. If
+                                        // the hidden host renderer hibernated
+                                        // while inside tmux (`DetachRenderer`),
+                                        // keep `output` detached so the exit
+                                        // banner and shell prompt buffer until
+                                        // the waking renderer restores its
+                                        // snapshot and sends `AttachConfirmed`.
+                                        if host_renderer_attached {
+                                            let (attach_tx, _attach_rx) =
+                                                tokio::sync::oneshot::channel();
+                                            output.attach_confirmed(attach_tx);
+                                        }
+                                        let stamp = tmux_local_stamp();
+                                        emit_visible_text(
+                                            &output,
+                                            &recording_mgr,
+                                            &session_id,
+                                            &format!(
+                                                "\r\n\x1b[2m[{stamp}] [nyaterm] tmux detached; back to shell\x1b[0m\r\n"
+                                            ),
+                                        );
+                                        // Re-arm detection so a later `tmux -CC`
+                                        // in this shell can enter control mode again.
+                                        tmux_detector = TmuxControlDetector::new();
+                                        if !leftover.is_empty() {
+                                            let text = output_decoder.decode(&leftover);
+                                            let result = stripper.push(&text);
+                                            emit_visible_text(
+                                                &output,
+                                                &recording_mgr,
+                                                &session_id,
+                                                &result.visible,
+                                            );
+                                        }
+                                        // No synthetic "\r" here: the shell
+                                        // repaints its own prompt when the
+                                        // control client exits, and that
+                                        // output replays once the renderer
+                                        // re-attaches — a second Enter would
+                                        // print a duplicate prompt.
+                                        continue;
+                                    }
+                                    tmux::ControlExit::Closed => break "tmux-control-exit",
+                                }
+                            }
+                        };
+                        if data.is_empty() {
+                            continue;
+                        }
+
                         // ZMODEM: detect header in raw bytes before lossy UTF-8 conversion.
                         // Detection must run in every phase so an early `rz` is not missed
                         // while shell-integration output is still being suppressed.
-                        match zmodem_detector.feed(data) {
+                        match zmodem_detector.feed(&data) {
                                 ZmodemDetectResult::Detected { direction, passthrough, initial_bytes } => {
                                     // Forward any pre-header bytes to the terminal.
                                     if !passthrough.is_empty() {
@@ -1753,7 +1979,9 @@ async fn run_sftp_only_session_commands(
                     | SessionCommand::CancelCapture { .. }
                     | SessionCommand::ZmodemAcceptDownload { .. }
                     | SessionCommand::ZmodemAcceptUpload { .. }
-                    | SessionCommand::ZmodemCancel,
+                    | SessionCommand::ZmodemCancel
+                    | SessionCommand::TmuxCommand { .. }
+                    | SessionCommand::TmuxDetach,
                 ) => {}
                 None => break "session-command-channel-closed",
             }
@@ -2330,6 +2558,7 @@ mod tests {
             owner_window_label: None,
             ai_execution_profile: AiExecutionProfile::Disabled,
             injection_active: false,
+            cwd_tracking_active: false,
             dynamic_title_capabilities: DynamicTitleCapabilities::default(),
             remote_file_browser_enabled: true,
             remote_stats_enabled: false,
@@ -2418,6 +2647,7 @@ mod tests {
             owner_window_label: None,
             ai_execution_profile: AiExecutionProfile::Disabled,
             injection_active: false,
+            cwd_tracking_active: false,
             dynamic_title_capabilities: DynamicTitleCapabilities::default(),
             remote_file_browser_enabled: true,
             remote_stats_enabled: false,

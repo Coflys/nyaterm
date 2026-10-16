@@ -17,6 +17,8 @@ export interface XTerminalProps {
   active: boolean;
   appLocked: boolean;
   visible?: boolean;
+  /** Keep the renderer mounted while hidden (e.g. an SSH host leaf covered by its active tmux overlay). */
+  suspendHibernation?: boolean;
   sessionType: SessionType;
   connectionId?: string;
   temporaryConfig?: TemporaryLinkConfig;
