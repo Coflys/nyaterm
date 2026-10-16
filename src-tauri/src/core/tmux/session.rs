@@ -70,7 +70,14 @@ const CWD_QUERY_DELAY_MS: u64 = 400;
 pub(crate) enum ControlExit {
     /// tmux detached/exited: the channel is back at a normal shell; the
     /// caller should resume regular I/O and forward `leftover` bytes first.
-    ReturnToShell { leftover: Vec<u8> },
+    /// `host_renderer_attached` is `false` when the hidden host `XTerminal`
+    /// deep-hibernated (`DetachRenderer`) while control mode was active and
+    /// has not re-attached yet — the caller must then keep `output` detached
+    /// until the waking renderer sends `AttachConfirmed`.
+    ReturnToShell {
+        leftover: Vec<u8>,
+        host_renderer_attached: bool,
+    },
     /// The channel or the whole session was closed.
     Closed,
 }
@@ -1658,6 +1665,7 @@ pub(crate) async fn run_control_session(
     initial: &[u8],
     encoding: &str,
     connection_id: Option<String>,
+    mut host_renderer_attached: bool,
 ) -> ControlExit {
     let mut session = ControlSession::new(app, session_id, manager, encoding, connection_id);
 
@@ -1695,7 +1703,10 @@ pub(crate) async fn run_control_session(
             let leftover = session.parser.take_pending();
             break match session.exit_mode {
                 Some(ExitMode::Close) => ControlExit::Closed,
-                _ => ControlExit::ReturnToShell { leftover },
+                _ => ControlExit::ReturnToShell {
+                    leftover,
+                    host_renderer_attached,
+                },
             };
         }
 
@@ -1812,7 +1823,11 @@ pub(crate) async fn run_control_session(
                     }
                     Some(SessionCommand::SerialModemUpload { .. }) => {}
                     Some(SessionCommand::AttachConfirmed { ack }) => {
+                        host_renderer_attached = true;
                         let _ = ack.send(());
+                    }
+                    Some(SessionCommand::DetachRenderer) => {
+                        host_renderer_attached = false;
                     }
                     Some(SessionCommand::GetEncoding { reply }) => {
                         let _ = reply.send(session.encoding.clone());
@@ -1837,8 +1852,7 @@ pub(crate) async fn run_control_session(
                         let _ = reply.send(result);
                     }
                     Some(
-                        SessionCommand::DetachRenderer
-                        | SessionCommand::Resize { .. }
+                        SessionCommand::Resize { .. }
                         | SessionCommand::PauseOutput
                         | SessionCommand::ResumeOutput
                         | SessionCommand::AckOutput { .. }

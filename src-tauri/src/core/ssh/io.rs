@@ -1632,13 +1632,13 @@ pub(super) async fn ssh_io_loop(
                                         "\r\n\x1b[2m[{stamp}] [nyaterm] tmux control mode\x1b[0m\r\n"
                                     ),
                                 );
-                                // Guard the edge where the leaf unmounts
-                                // mid-control (tab closed/detached
-                                // renderer): output then buffers for an
-                                // attach instead of emitting into a dead
-                                // listener. The common path — leaf stays
-                                // mounted — is re-attached explicitly on
-                                // ReturnToShell below.
+                                // Flush the entry banner before detaching so a
+                                // host terminal that deep-hibernates while
+                                // hidden (>2 min inside tmux) captures the
+                                // banner in its snapshot instead of stranding
+                                // it in `output.pending`.
+                                let host_renderer_attached = output.is_attached();
+                                output.close();
                                 output.detach();
                                 match tmux::run_control_session(
                                     &app,
@@ -1649,19 +1649,28 @@ pub(super) async fn ssh_io_loop(
                                     &rest,
                                     &encoding,
                                     connection_id.clone(),
+                                    host_renderer_attached,
                                 )
                                 .await
                                 {
-                                    tmux::ControlExit::ReturnToShell { leftover } => {
-                                        // The host leaf stays mounted under
-                                        // the window-tabs model, so no
-                                        // AttachConfirmed will ever arrive —
-                                        // re-attach here or the shell's
-                                        // output buffers forever and the pane
-                                        // looks frozen.
-                                        let (attach_tx, _attach_rx) =
-                                            tokio::sync::oneshot::channel();
-                                        output.attach_confirmed(attach_tx);
+                                    tmux::ControlExit::ReturnToShell {
+                                        leftover,
+                                        host_renderer_attached,
+                                    } => {
+                                        // Re-attach immediately only when the
+                                        // host renderer stayed mounted and
+                                        // attached throughout control mode. If
+                                        // the hidden host renderer hibernated
+                                        // while inside tmux (`DetachRenderer`),
+                                        // keep `output` detached so the exit
+                                        // banner and shell prompt buffer until
+                                        // the waking renderer restores its
+                                        // snapshot and sends `AttachConfirmed`.
+                                        if host_renderer_attached {
+                                            let (attach_tx, _attach_rx) =
+                                                tokio::sync::oneshot::channel();
+                                            output.attach_confirmed(attach_tx);
+                                        }
                                         let stamp = tmux_local_stamp();
                                         emit_visible_text(
                                             &output,
