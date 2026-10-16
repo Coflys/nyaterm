@@ -1104,11 +1104,12 @@ pub(super) fn terminal_background_ranges_for_spans(
 pub(super) fn terminal_background_ranges_for_cells(
     cells: &[nyaterm_terminal::RenderCell],
     palette: nyaterm_ui::ThemePalette,
+    bold_default_foreground: bool,
 ) -> Vec<TerminalRowBackgroundRange> {
     let mut out: Vec<TerminalRowBackgroundRange> = Vec::new();
     // Include spacer cells and trailing blanks: text length is not a paint boundary.
     for (col, cell) in cells.iter().enumerate() {
-        let Some(bg) = crate::resolve_cell_bg(palette, cell.style) else {
+        let Some(bg) = crate::resolve_cell_bg(palette, cell.style, bold_default_foreground) else {
             continue;
         };
         if let Some(last) = out
@@ -1186,7 +1187,8 @@ fn terminal_text_decorations_for_row(
     // authority for decorated blanks beyond that trimmed text boundary.
     for (col, cell) in cells.unwrap_or_default().iter().enumerate().skip(col) {
         let color = if cell.style.hidden {
-            crate::resolve_cell_bg(palette, cell.style).unwrap_or(palette.terminal_bg)
+            crate::resolve_cell_bg(palette, cell.style, bold_default_foreground)
+                .unwrap_or(palette.terminal_bg)
         } else {
             crate::resolve_cell_fg(palette, cell.style, bold_default_foreground)
         };
@@ -1798,7 +1800,13 @@ impl Element for NyaTerminalElement {
                     glyph_spans_storage.as_slice()
                 };
                 let background_ranges = snapshot_row
-                    .map(|row| terminal_background_ranges_for_cells(&row.cells, self.palette))
+                    .map(|row| {
+                        terminal_background_ranges_for_cells(
+                            &row.cells,
+                            self.palette,
+                            self.bold_default_foreground,
+                        )
+                    })
                     .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
                 let text_decorations = terminal_text_decorations_for_row(
                     glyph_spans,

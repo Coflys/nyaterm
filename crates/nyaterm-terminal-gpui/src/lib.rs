@@ -65,16 +65,19 @@ fn resolve_cell_fg(
 fn resolve_cell_bg(
     palette: nyaterm_ui::ThemePalette,
     style: nyaterm_terminal::CellStyle,
+    bold_default_foreground: bool,
 ) -> Option<u32> {
     if style.reverse {
-        if let Some(rgb) = style.fg_rgb {
-            return Some(rgb);
-        }
-        return Some(match style.fg {
-            Some(index) if style.bold && index < 8 => palette.terminal_ansi_color(index + 8),
-            Some(index) => palette.terminal_ansi_color(index),
-            None => palette.terminal_fg,
-        });
+        // Resolve bold on the source foreground, including the user's default
+        // foreground setting, before moving that color to the background.
+        return Some(resolve_cell_fg(
+            palette,
+            nyaterm_terminal::CellStyle {
+                reverse: false,
+                ..style
+            },
+            bold_default_foreground,
+        ));
     }
     style
         .bg_rgb

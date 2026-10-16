@@ -81,6 +81,8 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
 /// Cell style carried from Alacritty's terminal grid.
+/// Colors retain their source channels; renderers resolve defaults and bold
+/// before applying `reverse` exactly once. `None` denotes the channel default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CellStyle {
     /// Foreground ANSI index 0..=15 when not using truecolor.
@@ -2645,11 +2647,8 @@ fn intern_render_cell_hyperlink(intern: &mut HashMap<Arc<str>, Arc<str>>, uri: &
 
 fn cell_style(cell: &Cell) -> CellStyle {
     let flags = cell.flags;
-    let mut fg = color_to_style_fg(cell.fg);
-    let mut bg = color_to_style_bg(cell.bg);
-    if flags.contains(Flags::INVERSE) {
-        std::mem::swap(&mut fg, &mut bg);
-    }
+    let fg = color_to_style_fg(cell.fg);
+    let bg = color_to_style_bg(cell.bg);
     CellStyle {
         fg: fg.0,
         fg_rgb: fg.1,

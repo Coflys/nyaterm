@@ -18,6 +18,23 @@ fn snapshot_text(snapshot: &TerminalSnapshot) -> String {
 }
 
 #[test]
+fn reverse_snapshot_preserves_source_colors_and_sgr_reset_semantics() {
+    let mut screen = TerminalScreen::new(16, 2);
+    screen.advance(b"\x1b[1;4;31;44mA\x1b[7mB\x1b[27mC\x1b[7mD\x1b[0mE");
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+    for (col, reverse) in [false, true, false, true].into_iter().enumerate() {
+        let style = row.cells[col].style;
+        assert_eq!(style.fg, Some(1));
+        assert_eq!(style.bg, Some(4));
+        assert_eq!(style.reverse, reverse);
+        assert!(style.bold && style.underline);
+        assert_eq!(row.styled_spans[col].style, style);
+    }
+    assert_eq!(row.cells[4].style, super::CellStyle::default());
+}
+
+#[test]
 fn snapshot_preserves_styled_trailing_blanks_while_trimming_plain_text() {
     for alternate in [false, true] {
         let mut screen = TerminalScreen::new(24, 3);
