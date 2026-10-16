@@ -550,6 +550,7 @@ function PaneNodeView({
                 sessionName={node.name}
                 active={isActive && !isTmuxHost}
                 visible={visible && !isTmuxHost}
+                suspendHibernation={visible && isTmuxHost}
                 sessionType={node.type}
                 connectionId={node.connectionId}
                 temporaryConfig={node.temporaryConfig}
@@ -626,6 +627,7 @@ function PaneXTerminal({
   sessionName,
   active,
   visible,
+  suspendHibernation,
   sessionType,
   connectionId,
   temporaryConfig,
@@ -643,6 +645,7 @@ function PaneXTerminal({
   sessionName: string;
   active: boolean;
   visible: boolean;
+  suspendHibernation?: boolean;
   sessionType: TerminalSessionPane["type"];
   connectionId?: string;
   temporaryConfig?: TerminalSessionPane["temporaryConfig"];
@@ -745,6 +748,7 @@ function PaneXTerminal({
       active={active}
       appLocked={isLocked}
       visible={visible}
+      suspendHibernation={suspendHibernation}
       sessionType={sessionType}
       connectionId={connectionId}
       temporaryConfig={temporaryConfig}
