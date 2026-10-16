@@ -1,6 +1,7 @@
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_core::truncate_preview;
 use nyaterm_transport::DockerComposeService;
+use rust_i18n::t;
 
 use super::super::super::panels::RemoteMonitorPanel;
 use crate::features::{formatting::compact_id, shell::gpui_code_font_family};
@@ -245,6 +246,7 @@ fn docker_compose_service_row(
                         format!("{row_id}-menu"),
                         "icons/session/more.svg",
                         14.,
+                        t!("dockerManager.moreActions").to_string(),
                         palette,
                         cx.listener({
                             let menu_id = menu_id.clone();

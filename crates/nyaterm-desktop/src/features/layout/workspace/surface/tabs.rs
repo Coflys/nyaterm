@@ -171,6 +171,10 @@ impl NyaTermApp {
                     .id(SharedString::from(format!(
                         "pending-session-tab-close-{close_request_id}"
                     )))
+                    .tooltip(|window, cx| {
+                        nyaterm_ui::NyaTooltip::new(t!("common.close").to_string())
+                            .build(window, cx)
+                    })
                     .group(SharedString::from(format!(
                         "pending-session-tab-close-group-{close_request_id}"
                     )))
@@ -292,6 +296,10 @@ impl NyaTermApp {
                     .id(SharedString::from(format!(
                         "failed-session-tab-close-{close_request_id}"
                     )))
+                    .tooltip(|window, cx| {
+                        nyaterm_ui::NyaTooltip::new(t!("common.close").to_string())
+                            .build(window, cx)
+                    })
                     .group(SharedString::from(format!(
                         "failed-session-tab-close-group-{close_request_id}"
                     )))
@@ -419,6 +427,16 @@ impl NyaTermApp {
             .any(|id| self.sync_input.session_is_paused_in_active_group(id));
         let show_sync_indicator = self.sync_input.broadcast_to_all() || sync_group.is_some();
         let sync_indicator_color = sync_group.map(|group| group.color).unwrap_or(palette.link);
+        let sync_indicator_label = show_sync_indicator.then(|| {
+            let scope = sync_group
+                .map(|group| group.name.clone())
+                .unwrap_or_else(|| t!("menu.broadcastToAll").to_string());
+            if sync_paused {
+                format!("{scope} · {}", t!("syncGroup.paused"))
+            } else {
+                scope
+            }
+        });
         let accent_color = if is_active {
             custom_color.unwrap_or(palette.primary)
         } else if let Some(custom_color) = custom_color {
@@ -638,9 +656,15 @@ impl NyaTermApp {
                     .text_ellipsis()
                     .child(tab_title.clone()),
             )
-            .when(show_sync_indicator, |this| {
+            .when_some(sync_indicator_label, |this, label| {
                 this.child(
                     div()
+                        .id(SharedString::from(format!(
+                            "session-tab-sync-{close_session_id}"
+                        )))
+                        .tooltip(move |window, cx| {
+                            nyaterm_ui::NyaTooltip::new(label.clone()).build(window, cx)
+                        })
                         .size(px(12.))
                         .flex()
                         .items_center()
@@ -662,6 +686,14 @@ impl NyaTermApp {
                     .id(SharedString::from(format!(
                         "session-tab-close-{close_session_id}"
                     )))
+                    .tooltip(move |window, cx| {
+                        let label = if is_locked {
+                            t!("tabCtx.lockedCloseBlocked")
+                        } else {
+                            t!("common.close")
+                        };
+                        nyaterm_ui::NyaTooltip::new(label.to_string()).build(window, cx)
+                    })
                     .size(px(18.))
                     .flex()
                     .items_center()
