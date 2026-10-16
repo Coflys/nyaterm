@@ -313,6 +313,65 @@ impl CloudLocalStore for OptionsTestLocalStore<'_> {
     }
 }
 
+/// A store that can check the master password, like the real application store,
+/// so the "wrong password" and "foreign payload" causes can be told apart.
+struct VerifyingTestLocalStore<'a> {
+    options: &'a LocalCloudSyncOptions,
+    valid_master_password: &'a str,
+}
+
+impl CloudLocalStore for VerifyingTestLocalStore<'_> {
+    fn encode_sync_snapshot(
+        &self,
+        snapshot: &RawPortableSnapshot,
+        master_password: &str,
+    ) -> Result<Vec<u8>, CloudSyncError> {
+        OptionsTestLocalStore(self.options).encode_sync_snapshot(snapshot, master_password)
+    }
+
+    fn decode_sync_snapshot(
+        &self,
+        bytes: &[u8],
+        master_password: &str,
+    ) -> Result<RawPortableSnapshot, CloudSyncError> {
+        OptionsTestLocalStore(self.options).decode_sync_snapshot(bytes, master_password)
+    }
+
+    fn encode_sync_pointer(&self, pointer: &RemoteSyncPointer) -> Result<Vec<u8>, CloudSyncError> {
+        OptionsTestLocalStore(self.options).encode_sync_pointer(pointer)
+    }
+
+    fn decode_sync_pointer(&self, bytes: &[u8]) -> Result<RemoteSyncPointer, CloudSyncError> {
+        OptionsTestLocalStore(self.options).decode_sync_pointer(bytes)
+    }
+
+    fn build_sync_snapshot(
+        &self,
+        options: &LocalCloudSyncOptions,
+    ) -> Result<RawPortableSnapshot, CloudSyncError> {
+        OptionsTestLocalStore(self.options).build_sync_snapshot(options)
+    }
+
+    fn apply_sync_snapshot(
+        &self,
+        options: &LocalCloudSyncOptions,
+        snapshot: &RawPortableSnapshot,
+    ) -> Result<CloudSyncBackupInfo, CloudSyncError> {
+        OptionsTestLocalStore(self.options).apply_sync_snapshot(options, snapshot)
+    }
+
+    fn persist_cloud_sync_state(&self, state: &CloudSyncState) -> Result<(), CloudSyncError> {
+        OptionsTestLocalStore(self.options).persist_cloud_sync_state(state)
+    }
+
+    fn verify_master_password(
+        &self,
+        master_password: &str,
+    ) -> Result<Option<bool>, CloudSyncError> {
+        Ok(Some(master_password == self.valid_master_password))
+    }
+}
+
 fn push_local_snapshot(
     options: &LocalCloudSyncOptions,
     state: &CloudSyncState,
@@ -372,14 +431,94 @@ struct MemoryRemote {
     fail_writes_containing: Mutex<VecDeque<String>>,
     capacity_limit: Option<usize>,
     fail_delete: bool,
+    /// Keep only this many leading bytes of every write, like a proxy or gateway
+    /// that truncates the upload body.
+    write_prefix_limit: Option<usize>,
 }
-
 impl MemoryRemote {
     fn fail_next_write_containing(&self, path_fragment: &str) {
         self.fail_writes_containing
             .lock()
             .expect("failure queue lock")
             .push_back(path_fragment.to_string());
+    }
+}
+
+/// The content a path still serves from before its last write, and how many
+/// more reads keep serving it.
+type StaleReads = HashMap<String, (Option<Vec<u8>>, usize)>;
+
+/// A remote whose reads lag behind an accepted write, like a WebDAV gateway
+/// with a slow write-back cache.
+struct EventuallyConsistentRemote {
+    files: Mutex<HashMap<String, Vec<u8>>>,
+    /// How many reads of a path keep returning the content from before its last
+    /// write.
+    stale_reads_after_write: usize,
+    stale: Mutex<StaleReads>,
+}
+
+impl EventuallyConsistentRemote {
+    fn new(stale_reads_after_write: usize) -> Self {
+        Self {
+            files: Mutex::new(HashMap::new()),
+            stale_reads_after_write,
+            stale: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl CloudSyncRemote for EventuallyConsistentRemote {
+    fn provider(&self) -> &'static str {
+        "eventually-consistent"
+    }
+
+    fn create_dir(&self, _path: &str) -> Result<(), CloudSyncError> {
+        Ok(())
+    }
+
+    fn read_if_exists(&self, path: &str) -> Result<Option<Vec<u8>>, CloudSyncError> {
+        let mut stale = self.stale.lock().expect("stale lock");
+        if let Some((previous, remaining)) = stale.get_mut(path) {
+            if *remaining > 0 {
+                *remaining -= 1;
+                let previous = previous.clone();
+                drop(stale);
+                return Ok(previous);
+            }
+            stale.remove(path);
+        }
+        drop(stale);
+        Ok(self.files.lock().expect("memory lock").get(path).cloned())
+    }
+
+    fn write(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
+        let previous = self
+            .files
+            .lock()
+            .expect("memory lock")
+            .insert(path.to_string(), bytes.to_vec());
+        self.stale
+            .lock()
+            .expect("stale lock")
+            .insert(path.to_string(), (previous, self.stale_reads_after_write));
+        Ok(())
+    }
+
+    fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
+        self.files.lock().expect("memory lock").remove(path);
+        Ok(())
+    }
+
+    fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
+        Ok(self
+            .files
+            .lock()
+            .expect("memory lock")
+            .keys()
+            .filter(|key| key.starts_with(path))
+            .cloned()
+            .collect())
     }
 }
 
@@ -507,10 +646,14 @@ impl CloudSyncRemote for MemoryRemote {
             )));
         }
         drop(failures);
+        let mut stored = bytes.to_vec();
+        if let Some(limit) = self.write_prefix_limit {
+            stored.truncate(limit);
+        }
         self.files
             .lock()
             .expect("memory lock")
-            .insert(path.to_string(), bytes.to_vec());
+            .insert(path.to_string(), stored);
         Ok(())
     }
 
@@ -1787,11 +1930,27 @@ fn local_cloud_sync_wrong_password_does_not_replace_target() {
 
     let error = pull_local_snapshot(&wrong_options, &CloudSyncState::default(), true)
         .expect_err("wrong password");
+    // A payload that cannot be decrypted is reported as a recoverable conflict,
+    // and the message carries the remote path, byte count and digest so the
+    // cause can be told apart from "the cloud copy is gone".
+    let preview = match error {
+        CloudSyncError::Conflict(preview) => *preview,
+        other => panic!("expected a recoverable remote-inconsistent conflict, got {other}"),
+    };
+    assert_eq!(preview.kind, CloudConflictKind::RemoteInconsistent);
+    assert!(preview.recovery_revision.is_none());
     assert!(
-        error
-            .to_string()
-            .contains("cloud snapshot decryption failed")
+        preview.message.contains("could not be decrypted"),
+        "{}",
+        preview.message
     );
+    assert!(
+        preview.message.contains("sync/snapshots/"),
+        "{}",
+        preview.message
+    );
+    assert!(preview.message.contains("sha256"), "{}", preview.message);
+    assert!(preview.message.contains(" bytes"), "{}", preview.message);
     let loaded = ConnectionStore::open(&target_dir)
         .expect("target reopen")
         .load_sessions()
@@ -1801,6 +1960,218 @@ fn local_cloud_sync_wrong_password_does_not_replace_target() {
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(target_dir).ok();
     std::fs::remove_dir_all(remote_dir).ok();
+}
+
+#[test]
+fn wrong_master_password_blocks_overwriting_the_cloud_copy() {
+    let source_dir = unique_temp_dir("cloud-guard-source");
+    let target_dir = unique_temp_dir("cloud-guard-target");
+    let remote_dir = unique_temp_dir("cloud-guard-remote");
+    let source_options = options(&source_dir, &remote_dir, "source-device");
+    let mut wrong_options = options(&target_dir, &remote_dir, "target-device");
+    wrong_options.master_password = "wrong".to_string().into();
+
+    ConnectionStore::open(&source_dir)
+        .expect("source")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("conn-1", "Remote State", "bash")],
+        })
+        .expect("seed source");
+    push_local_snapshot(&source_options, &CloudSyncState::default(), false).expect("push");
+    ConnectionStore::open(&target_dir)
+        .expect("target")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("keep", "Keep Local", "zsh")],
+        })
+        .expect("seed target");
+
+    let store = VerifyingTestLocalStore {
+        options: &wrong_options,
+        valid_master_password: "secret",
+    };
+    let error =
+        super::push_local_snapshot(&store, &wrong_options, &CloudSyncState::default(), true)
+            .expect_err("a forced push must refuse to clobber a readable cloud copy");
+    let preview = match error {
+        CloudSyncError::Conflict(preview) => *preview,
+        other => panic!("expected a recoverable conflict, got {other}"),
+    };
+    assert_eq!(preview.kind, CloudConflictKind::RemoteInconsistent);
+    assert!(preview.overwrite_blocked);
+    assert!(
+        preview.message.contains("master password"),
+        "{}",
+        preview.message
+    );
+
+    // The remote head still points at the source revision, untouched.
+    let head = super::load_sync_pointer(&OptionsTestLocalStore(&source_options), &source_options)
+        .expect("load head")
+        .expect("head");
+    assert_eq!(head.payload_hash, preview.remote_payload_hash);
+
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(target_dir).ok();
+    std::fs::remove_dir_all(remote_dir).ok();
+}
+
+#[test]
+fn forced_push_overwrites_an_unreadable_remote_head() {
+    let source_dir = unique_temp_dir("cloud-force-source");
+    let target_dir = unique_temp_dir("cloud-force-target");
+    let unused_remote = unique_temp_dir("cloud-force-unused");
+    let source_options = options(&source_dir, &unused_remote, "source-device");
+    let target_options = options(&target_dir, &unused_remote, "target-device");
+    let remote = MemoryRemote::default();
+
+    ConnectionStore::open(&source_dir)
+        .expect("source")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("conn-1", "Foreign State", "bash")],
+        })
+        .expect("seed source");
+    let pushed =
+        push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), false)
+            .expect("push");
+    let pointer = pushed.pointer.expect("pointer");
+    let snapshot_path = remote_path(
+        &source_options.remote_root,
+        &super::legacy_sync_snapshot_file(&pointer.revision_id),
+    );
+    // Replace both the immutable snapshot and the compatible current copy with
+    // bytes that cannot be decrypted, so nothing can repair the head.
+    remote
+        .write(&snapshot_path, &[7u8; 64])
+        .expect("corrupt snapshot");
+    remote
+        .write(
+            &remote_path(&source_options.remote_root, super::SYNC_CURRENT_FILE),
+            &[9u8; 64],
+        )
+        .expect("corrupt current");
+
+    // An unforced push reports a recoverable conflict instead of a dead end.
+    let error =
+        push_snapshot_with_remote(&target_options, &remote, &CloudSyncState::default(), false)
+            .expect_err("unforced push must not clobber the remote");
+    let preview = match error {
+        CloudSyncError::Conflict(preview) => *preview,
+        other => panic!("expected a recoverable conflict, got {other}"),
+    };
+    assert_eq!(preview.kind, CloudConflictKind::RemoteInconsistent);
+    assert!(!preview.overwrite_blocked);
+
+    // ...and a forced push is the documented way out.
+    let forced =
+        push_snapshot_with_remote(&target_options, &remote, &CloudSyncState::default(), true)
+            .expect("forced push");
+    assert_eq!(forced.outcome, CloudSyncOutcome::Uploaded);
+    let head = super::load_sync_pointer_from_remote(
+        &OptionsTestLocalStore(&target_options),
+        &remote,
+        &target_options.remote_root,
+    )
+    .expect("load head")
+    .expect("head");
+    assert_ne!(head.revision_id, pointer.revision_id);
+
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(target_dir).ok();
+    std::fs::remove_dir_all(unused_remote).ok();
+}
+
+#[test]
+fn push_survives_a_remote_whose_reads_lag_behind_its_writes() {
+    let source_dir = unique_temp_dir("cloud-stale-source");
+    let unused_remote = unique_temp_dir("cloud-stale-unused");
+    let source_options = options(&source_dir, &unused_remote, "source-device");
+    ConnectionStore::open(&source_dir)
+        .expect("source")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("conn-1", "Lagging Gateway", "bash")],
+        })
+        .expect("seed source");
+    // Every read of a freshly written path still returns the previous content
+    // once, which is how a WebDAV gateway with a slow write-back cache behaves.
+    let remote = EventuallyConsistentRemote::new(1);
+
+    let pushed =
+        push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), false)
+            .expect("push through a lagging gateway");
+    assert_eq!(pushed.outcome, CloudSyncOutcome::Uploaded);
+
+    let pointer = pushed.pointer.expect("pointer");
+    let stored = super::load_sync_pointer_from_remote(
+        &OptionsTestLocalStore(&source_options),
+        &remote,
+        &source_options.remote_root,
+    )
+    .expect("load head")
+    .expect("head");
+    assert_eq!(stored, pointer);
+    super::protocol::read_snapshot_for_pointer(
+        &OptionsTestLocalStore(&source_options),
+        &remote,
+        &source_options,
+        &pointer,
+    )
+    .expect("the uploaded snapshot is readable");
+
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(unused_remote).ok();
+}
+
+#[test]
+fn a_remote_that_does_not_keep_the_uploaded_bytes_reports_a_divergent_write() {
+    let source_dir = unique_temp_dir("cloud-divergent-source");
+    let unused_remote = unique_temp_dir("cloud-divergent-unused");
+    let source_options = options(&source_dir, &unused_remote, "source-device");
+    ConnectionStore::open(&source_dir)
+        .expect("source")
+        .replace_sessions(&SessionsConfig {
+            custom_icons: Vec::new(),
+            groups: Vec::new(),
+            connections: vec![local_connection("conn-1", "Truncating Gateway", "bash")],
+        })
+        .expect("seed source");
+    // The remote accepts every upload and keeps only part of it, so no read-back
+    // ever returns the bytes that were sent.
+    let remote = MemoryRemote {
+        write_prefix_limit: Some(64),
+        ..MemoryRemote::default()
+    };
+
+    let error =
+        push_snapshot_with_remote(&source_options, &remote, &CloudSyncState::default(), false)
+            .expect_err("a remote that drops part of the upload cannot be verified");
+    let message = error.to_string();
+    // The bytes never matched what was sent, so the failure is reported as a
+    // write that did not stick — not as a payload that cannot be decrypted,
+    // which is what the same symptom looks like after the fact.
+    assert!(
+        message.contains("did not keep the snapshot just written"),
+        "unexpected message: {message}"
+    );
+    assert!(
+        message.contains("the remote accepted the upload but serves different data"),
+        "unexpected message: {message}"
+    );
+    assert_eq!(
+        message.matches("sha256").count(),
+        2,
+        "both digests are reported: {message}"
+    );
+
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(unused_remote).ok();
 }
 
 #[test]

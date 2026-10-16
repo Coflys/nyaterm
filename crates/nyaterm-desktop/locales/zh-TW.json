@@ -2917,6 +2917,7 @@
     "uploadConcurrentTasks": "上傳併發任務數",
     "uploadConcurrentTasksDesc": "同時進行的上傳任務數 (1-10)。",
     "uploadLocalVersion": "上傳本機版本",
+    "overwriteBlockedNotice": "已禁止上傳本機版本：目前主密碼與本機記錄不一致，覆蓋雲端可能讓雲端資料無法解密。",
     "uploadThreads": "上傳執行緒數",
     "uploadThreadsDesc": "檔案上傳的並行執行緒數 (1-10)。",
     "useOsKeyring": "使用系統認證管理器（OS Keyring）",

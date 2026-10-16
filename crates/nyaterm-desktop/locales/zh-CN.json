@@ -2917,6 +2917,7 @@
     "uploadConcurrentTasks": "上传并发任务数",
     "uploadConcurrentTasksDesc": "同时进行的上传任务数 (1-10)。",
     "uploadLocalVersion": "上传本地版本",
+    "overwriteBlockedNotice": "已禁止上传本地版本：当前主密码与本机记录不一致，覆盖云端可能让云端数据无法解密。",
     "uploadThreads": "上传线程数",
     "uploadThreadsDesc": "文件上传的并行线程数 (1-10)。",
     "useOsKeyring": "使用系统凭据管理器（OS Keyring）",

@@ -2917,6 +2917,7 @@
     "uploadConcurrentTasks": "동시 업로드",
     "uploadConcurrentTasksDesc": "동시에 실행할 수 있는 업로드 수(1-10).",
     "uploadLocalVersion": "로컬 버전 업로드",
+    "overwriteBlockedNotice": "현재 마스터 비밀번호가 이 기기의 기록과 일치하지 않아 로컬 버전 업로드를 차단했습니다. 덮어쓰면 클라우드 데이터를 복호화하지 못할 수 있습니다.",
     "uploadThreads": "업로드 스레드",
     "uploadThreadsDesc": "동시 업로드 스레드 수(1-10).",
     "useOsKeyring": "OS 키체인 사용",
