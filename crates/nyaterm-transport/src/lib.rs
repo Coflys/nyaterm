@@ -48,6 +48,9 @@ mod ssh_agent_broker;
 mod ssh_algorithms;
 mod ssh_auth;
 mod telnet_codec;
+mod writer_mailbox;
+use nyaterm_core::runtime::reaper::Reaper;
+use writer_mailbox::WriterMailbox;
 mod telnet_prompts;
 #[cfg(test)]
 use ssh_algorithms::defaults_from_preferred;
@@ -112,8 +115,8 @@ use session_event_queue::{
     SESSION_EVENT_QUEUE_OUTPUT_EVENT_LIMIT, SESSION_EVENT_QUEUE_OUTPUT_LIMIT,
 };
 pub use session_types::{
-    SessionDrain, SessionDrainStats, SessionError, SessionEvent, SessionEventConsumerId,
-    SessionInfo, SessionKind, TerminalTransport,
+    CleanupOperation, SessionDrain, SessionDrainStats, SessionError, SessionEvent,
+    SessionEventConsumerId, SessionInfo, SessionKind, TerminalTransport,
 };
 pub use sftp::{
     RemoteBinaryFile, RemoteFilePath, SFTP_TRANSFER_CANCELLED, SftpAttributeUpdate, SftpFileEntry,
@@ -596,6 +599,7 @@ pub struct SessionManager {
     event_queue: SessionEventQueue,
     next_event_consumer_id: AtomicU64,
     shell_environment: Arc<ShellEnvironmentCache>,
+    reaper: Mutex<Option<Reaper<ManagedSession>>>,
 }
 
 enum ManagedSession {
@@ -611,6 +615,8 @@ pub struct LocalPtyTransport {
     writer: QueuedTransportWriter,
     child: Box<dyn Child + Send + Sync>,
     reader_thread: Option<JoinHandle<()>>,
+    event_queue: SessionEventQueue,
+    cleanup_consumer: Option<SessionEventConsumerId>,
 }
 
 pub struct TelnetTransport {
@@ -643,9 +649,10 @@ pub struct SerialTransport {
 }
 
 struct QueuedTransportWriter {
-    command_tx: mpsc::Sender<TransportWriterCommand>,
+    command_tx: WriterMailbox,
     worker_thread: Option<JoinHandle<()>>,
     telnet_lifecycle: Option<Arc<TelnetWriterLifecycle>>,
+    cancellation: Option<portable_pty::WriteCancellation>,
 }
 
 // Shared only by a TCP session's reader and writer. Closing the socket also
@@ -692,7 +699,6 @@ enum TransportWriterCommand {
     Write(Vec<u8>),
     // Already encoded wire bytes: never apply application escaping or EachByte.
     TelnetControl(Vec<u8>),
-    Close,
 }
 
 impl QueuedTransportWriter {
@@ -701,7 +707,7 @@ impl QueuedTransportWriter {
         writer: W,
         flush_policy: WriterFlushPolicy,
         event_queue: SessionEventQueue,
-    ) -> Self
+    ) -> std::io::Result<Self>
     where
         W: Write + Send + 'static,
     {
@@ -714,29 +720,34 @@ impl QueuedTransportWriter {
         flush_policy: WriterFlushPolicy,
         event_queue: SessionEventQueue,
         telnet_policy: Option<TelnetWriterPolicy>,
-    ) -> Self
+    ) -> std::io::Result<Self>
     where
         W: Write + Send + 'static,
     {
-        let (command_tx, command_rx) = mpsc::channel();
+        let command_tx = WriterMailbox::default();
+        let command_rx = command_tx.clone();
         let telnet_lifecycle = telnet_policy
             .as_ref()
             .map(|policy| policy.lifecycle.clone());
-        let worker_thread = std::thread::spawn(move || {
-            run_transport_writer(
-                session_id,
-                writer,
-                flush_policy,
-                command_rx,
-                event_queue,
-                telnet_policy,
-            )
-        });
-        Self {
+        let worker_thread = nyaterm_core::runtime::worker::spawn(
+            format!("transport-writer-{session_id}"),
+            move || {
+                run_transport_writer(
+                    session_id,
+                    writer,
+                    flush_policy,
+                    command_rx,
+                    event_queue,
+                    telnet_policy,
+                )
+            },
+        )?;
+        Ok(Self {
             command_tx,
             worker_thread: Some(worker_thread),
             telnet_lifecycle,
-        }
+            cancellation: None,
+        })
     }
 
     fn write_telnet_control(&self, data: Vec<u8>) -> anyhow::Result<()> {
@@ -749,65 +760,104 @@ impl QueuedTransportWriter {
         }
         self.command_tx
             .send(TransportWriterCommand::Write(data))
-            .map_err(|_| anyhow::anyhow!("transport writer stopped"))
+            .map_err(anyhow::Error::from)
     }
 
-    fn close(&mut self) {
+    fn write_slice(&self, data: &[u8]) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        self.command_tx.check_capacity(data.len())?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(data.len())?;
+        bytes.extend_from_slice(data);
+        self.write(bytes)
+    }
+
+    fn stop(&self) {
+        self.command_tx.stop();
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
+    }
+
+    fn close(&mut self) -> bool {
+        self.stop();
         if let Some(lifecycle) = &self.telnet_lifecycle {
             lifecycle.stop();
         }
-        let _ = self.command_tx.send(TransportWriterCommand::Close);
+
         if let Some(worker_thread) = self.worker_thread.take() {
-            let _ = worker_thread.join();
+            while !worker_thread.is_finished() && self.cancellation.is_some() {
+                self.stop();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return worker_thread.join().is_ok();
         }
+        true
     }
 }
 
-fn queue_telnet_control(
-    command_tx: &mpsc::Sender<TransportWriterCommand>,
-    data: Vec<u8>,
-) -> anyhow::Result<()> {
+fn telnet_wire_size(data: &[u8], raw_tcp: bool) -> usize {
+    data.len().saturating_add(if raw_tcp {
+        0
+    } else {
+        data.iter().filter(|byte| **byte == 255).count()
+    })
+}
+
+fn queue_telnet_control(command_tx: &WriterMailbox, data: Vec<u8>) -> anyhow::Result<()> {
     if data.is_empty() {
         return Ok(());
     }
     command_tx
         .send(TransportWriterCommand::TelnetControl(data))
-        .map_err(|_| anyhow::anyhow!("transport writer stopped"))
+        .map_err(anyhow::Error::from)
 }
 
 fn run_transport_writer<W>(
     session_id: String,
     mut writer: W,
     flush_policy: WriterFlushPolicy,
-    command_rx: mpsc::Receiver<TransportWriterCommand>,
+    command_rx: WriterMailbox,
     event_queue: SessionEventQueue,
     telnet_policy: Option<TelnetWriterPolicy>,
 ) where
     W: Write,
 {
     let stopped = || {
-        telnet_policy
-            .as_ref()
-            .is_some_and(|policy| policy.lifecycle.is_stopped())
+        command_rx.is_stopped()
+            || telnet_policy
+                .as_ref()
+                .is_some_and(|policy| policy.lifecycle.is_stopped())
     };
     let idle_interval = telnet_policy
         .as_ref()
         .and_then(|policy| policy.idle_interval);
     let mut last_sent = Instant::now();
     while !stopped() {
-        let command = if let Some(interval) = idle_interval {
-            match command_rx.recv_timeout(interval.saturating_sub(last_sent.elapsed())) {
-                Ok(command) => command,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    TransportWriterCommand::TelnetControl(telnet_codec::NOP.to_vec())
+        let (command, _permit) = match command_rx
+            .receive(idle_interval.map(|interval| interval.saturating_sub(last_sent.elapsed())))
+        {
+            Ok(Some(command)) => command,
+            Ok(None) => {
+                match command_rx.send(TransportWriterCommand::TelnetControl(
+                    telnet_codec::NOP.to_vec(),
+                )) {
+                    Ok(()) => {}
+                    // Input can race the idle deadline. Consume that accepted
+                    // input before considering another keepalive.
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => {
+                        if !stopped() {
+                            send_session_error(&event_queue, &session_id, error);
+                        }
+                        break;
+                    }
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                continue;
             }
-        } else {
-            match command_rx.recv() {
-                Ok(command) => command,
-                Err(_) => break,
-            }
+            Err(_) => break,
         };
         if stopped() {
             break;
@@ -815,13 +865,18 @@ fn run_transport_writer<W>(
         let (data, policy) = match command {
             TransportWriterCommand::Write(data) => (data, flush_policy),
             TransportWriterCommand::TelnetControl(data) => (data, WriterFlushPolicy::AfterWrite),
-            TransportWriterCommand::Close => break,
         };
         if data.is_empty() {
             continue;
         }
         let write_result = if matches!(policy, WriterFlushPolicy::EachByte) {
             data.iter().try_for_each(|byte| {
+                if stopped() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "writer stopped",
+                    ));
+                }
                 writer
                     .write_all(std::slice::from_ref(byte))
                     .and_then(|_| writer.flush())
@@ -845,6 +900,7 @@ fn run_transport_writer<W>(
         // missed deadlines after a slow write.
         last_sent = Instant::now();
     }
+    command_rx.stop();
     if let Some(policy) = telnet_policy {
         policy.lifecycle.stop();
     }
@@ -919,7 +975,50 @@ impl SessionManager {
             event_queue: SessionEventQueue::new(),
             next_event_consumer_id: AtomicU64::new(1),
             shell_environment: ShellEnvironmentCache::global(),
+            reaper: Mutex::new(None),
         }
+    }
+
+    fn ensure_reaper(&self) -> Result<(), SessionError> {
+        let mut reaper = self.reaper.lock().map_err(|_| SessionError::LockPoisoned)?;
+        if reaper.is_none() {
+            *reaper = Some(
+                Reaper::new("transport-reaper", 64, |mut session: ManagedSession| {
+                    session.close()
+                })
+                .map_err(SessionError::Worker)?,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn close_detached(&self, session_id: &str) -> Result<(), SessionError> {
+        self.ensure_reaper()?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let reaper = self.reaper.lock().map_err(|_| SessionError::LockPoisoned)?;
+        reaper
+            .as_ref()
+            .ok_or_else(|| SessionError::Worker(std::io::Error::other("reaper unavailable")))?
+            .try_submit_with(|| {
+                let mut session = sessions.remove(session_id)?;
+                // Clear pending input before waiting behind other cleanup jobs.
+                // Native cancellation and joins remain on the reaper worker.
+                match &session {
+                    ManagedSession::Local(local) => local.writer.command_tx.stop(),
+                    ManagedSession::Tcp(tcp) => tcp.writer.command_tx.stop(),
+                    ManagedSession::Serial(serial) => serial.writer.command_tx.stop(),
+                    ManagedSession::Ssh(_) => {}
+                }
+                if let ManagedSession::Local(local) = &mut session {
+                    local.cleanup_consumer = self.event_queue.consumer_for(session_id);
+                }
+                self.event_queue.cancel_session(session_id);
+                Some(session)
+            })
+            .map_err(SessionError::Worker)
     }
 
     /// Allocate an independent event consumer. Sessions are invisible to the
@@ -964,6 +1063,11 @@ impl SessionManager {
         config: LocalSessionConfig,
         shell: local_shell::ResolvedLocalShell,
     ) -> Result<SessionInfo, SessionError> {
+        self.ensure_reaper()?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
         #[cfg(windows)]
         local_conpty::ensure_supported()?;
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -997,11 +1101,11 @@ impl SessionManager {
             .master
             .try_clone_reader()
             .map_err(SessionError::CloneReader)?;
-        let writer = pair
+        let (writer, cancellation) = pair
             .master
-            .take_writer()
+            .take_cancellable_writer()
             .map_err(SessionError::TakeWriter)?;
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(command)
             .map_err(SessionError::Spawn)?;
@@ -1015,26 +1119,53 @@ impl SessionManager {
             cols: config.cols,
             rows: config.rows,
         };
-        let reader_thread =
-            spawn_reader_thread(session_id.clone(), reader, self.event_queue.clone());
-        let writer = QueuedTransportWriter::spawn(
+        let mut writer = match QueuedTransportWriter::spawn(
             session_id.clone(),
             writer,
             WriterFlushPolicy::AfterWrite,
             self.event_queue.clone(),
-        );
+        ) {
+            Ok(mut writer) => {
+                writer.cancellation = Some(cancellation);
+                writer
+            }
+            Err(error) => {
+                let killed = child.kill().is_ok();
+                // No reader worker exists. Close its pipe before ConPTY teardown
+                // so flushing buffered output cannot wait for a missing drainer.
+                drop(reader);
+                drop(pair.master);
+                if killed {
+                    let _ = child.wait();
+                }
+                return Err(SessionError::Worker(error));
+            }
+        };
+        let reader_thread =
+            match spawn_reader_thread(session_id.clone(), reader, self.event_queue.clone()) {
+                Ok(reader) => reader,
+                Err(error) => {
+                    writer.stop();
+                    let killed = child.kill().is_ok();
+                    drop(pair.master);
+                    writer.close();
+                    if killed {
+                        let _ = child.wait();
+                    }
+                    return Err(SessionError::Worker(error));
+                }
+            };
         let session = LocalPtyTransport {
             info: info.clone(),
             master: Some(pair.master),
             writer,
             child,
             reader_thread: Some(reader_thread),
+            event_queue: self.event_queue.clone(),
+            cleanup_consumer: None,
         };
 
-        self.sessions
-            .lock()
-            .map_err(|_| SessionError::LockPoisoned)?
-            .insert(session_id, ManagedSession::Local(session));
+        sessions.insert(session_id, ManagedSession::Local(session));
 
         Ok(info)
     }
@@ -1051,6 +1182,7 @@ impl SessionManager {
         config: TelnetSessionConfig,
         attempt: connection_attempt::ConnectionAttempt,
     ) -> Result<SessionInfo, SessionError> {
+        self.ensure_reaper()?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let addr = format!("{}:{}", config.host, config.port);
         let connect = || -> Result<TcpStream, std::io::Error> {
@@ -1119,7 +1251,7 @@ impl SessionManager {
             .map_err(|_| SessionError::LockPoisoned)?;
         let auto_login =
             TelnetAutoLoginState::new(&config).map(|state| Arc::new(Mutex::new(state)));
-        let writer = QueuedTransportWriter::spawn_with_telnet_policy(
+        let mut writer = QueuedTransportWriter::spawn_with_telnet_policy(
             session_id.clone(),
             writer_stream,
             if config.force_character_at_a_time {
@@ -1133,7 +1265,8 @@ impl SessionManager {
                     .then(|| Duration::from_secs(u64::from(config.keep_alive_interval_secs))),
                 lifecycle: lifecycle.clone(),
             }),
-        );
+        )
+        .map_err(SessionError::Worker)?;
         if let Some(naws) = maybe_build_naws(config.cols, config.rows, &config) {
             let _ = writer.write_telnet_control(naws);
         }
@@ -1141,11 +1274,16 @@ impl SessionManager {
             session_id.clone(),
             reader_stream,
             writer.command_tx.clone(),
-            lifecycle,
+            lifecycle.clone(),
             config.clone(),
             auto_login.clone(),
             self.event_queue.clone(),
-        );
+        )
+        .map_err(|error| {
+            lifecycle.stop();
+            writer.close();
+            SessionError::Worker(error)
+        })?;
 
         let session = TelnetTransport {
             info: info.clone(),
@@ -1193,6 +1331,11 @@ impl SessionManager {
         config: SshSessionConfig,
         multiplex: Option<SshMultiplexHandle>,
     ) -> Result<SessionInfo, SessionError> {
+        self.ensure_reaper()?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let addr = format!("{}:{}", config.host, config.port);
         validate_ssh_algorithm_preferences(config.ssh_algorithms.as_ref()).map_err(|source| {
@@ -1211,17 +1354,19 @@ impl SessionManager {
         let worker_config = config.clone();
         let worker_session_id = session_id.clone();
         let shell_environment = self.shell_environment();
-        let worker_thread = std::thread::spawn(move || {
-            run_ssh_worker(
-                worker_session_id,
-                worker_config,
-                command_rx,
-                ready_tx,
-                event_queue,
-                multiplex,
-                shell_environment,
-            );
-        });
+        let worker_thread =
+            nyaterm_core::runtime::worker::spawn(format!("ssh-worker-{session_id}"), move || {
+                run_ssh_worker(
+                    worker_session_id,
+                    worker_config,
+                    command_rx,
+                    ready_tx,
+                    event_queue,
+                    multiplex,
+                    shell_environment,
+                );
+            })
+            .map_err(SessionError::Worker)?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => {}
@@ -1260,10 +1405,7 @@ impl SessionManager {
             worker_thread: Some(worker_thread),
         };
 
-        self.sessions
-            .lock()
-            .map_err(|_| SessionError::LockPoisoned)?
-            .insert(session_id, ManagedSession::Ssh(session));
+        sessions.insert(session_id, ManagedSession::Ssh(session));
 
         Ok(info)
     }
@@ -1272,6 +1414,7 @@ impl SessionManager {
         &self,
         config: SerialSessionConfig,
     ) -> Result<SessionInfo, SessionError> {
+        self.ensure_reaper()?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let port = open_serial_port(&config).map_err(|source| SessionError::OpenSerial {
             port_name: config.port_name.clone(),
@@ -1292,19 +1435,28 @@ impl SessionManager {
             cols: 80,
             rows: 24,
         };
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        let mut writer = QueuedTransportWriter::spawn(
+            session_id.clone(),
+            port,
+            WriterFlushPolicy::serial(),
+            self.event_queue.clone(),
+        )
+        .map_err(SessionError::Worker)?;
         let stop_reader = Arc::new(AtomicBool::new(false));
         let reader_thread = spawn_serial_reader_thread(
             session_id.clone(),
             reader,
             stop_reader.clone(),
             self.event_queue.clone(),
-        );
-        let writer = QueuedTransportWriter::spawn(
-            session_id.clone(),
-            port,
-            WriterFlushPolicy::serial(),
-            self.event_queue.clone(),
-        );
+        )
+        .map_err(|error| {
+            writer.close();
+            SessionError::Worker(error)
+        })?;
         let session = SerialTransport {
             flow_control: config.flow_control,
             info: info.clone(),
@@ -1317,10 +1469,7 @@ impl SessionManager {
             reader_thread: Some(reader_thread),
         };
 
-        self.sessions
-            .lock()
-            .map_err(|_| SessionError::LockPoisoned)?
-            .insert(session_id, ManagedSession::Serial(session));
+        sessions.insert(session_id, ManagedSession::Serial(session));
 
         Ok(info)
     }
@@ -1375,6 +1524,56 @@ impl SessionManager {
     }
 
     /// Send protocol bytes without transport text-input transformations.
+    /// Background transfer path: preserve each frame until accepted, with a
+    /// bounded wait between attempts and cancellation independent of the FIFO.
+    pub fn write_raw_cancellable(
+        &self,
+        session_id: &str,
+        data: &[u8],
+        cancelled: &AtomicBool,
+    ) -> Result<(), SessionError> {
+        let wire_bytes = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| SessionError::LockPoisoned)?;
+            match sessions.get(session_id) {
+                Some(ManagedSession::Tcp(session)) => {
+                    telnet_wire_size(data, session.config.raw_tcp)
+                }
+                _ => data.len(),
+            }
+        };
+        if wire_bytes > writer_mailbox::BYTE_LIMIT {
+            return Err(SessionError::Write {
+                session_id: session_id.to_owned(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "transfer frame exceeds input queue capacity",
+                )
+                .into(),
+            });
+        }
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(SessionError::Write {
+                    session_id: session_id.to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "transfer write cancelled",
+                    )
+                    .into(),
+                });
+            }
+            match self.write_raw(session_id, data) {
+                Err(error) if error.is_backpressure() => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                result => return result,
+            }
+        }
+    }
+
     pub fn write_raw(&self, session_id: &str, data: &[u8]) -> Result<(), SessionError> {
         let mut sessions = self
             .sessions
@@ -1427,6 +1626,9 @@ impl SessionManager {
             .map_err(|_| SessionError::LockPoisoned)?
             .remove(session_id)
             .ok_or_else(|| SessionError::NotFound(session_id.to_string()))?;
+        if let ManagedSession::Local(local) = &mut session {
+            local.cleanup_consumer = self.event_queue.consumer_for(session_id);
+        }
         self.event_queue.cancel_session(session_id);
         session.close();
         Ok(())
@@ -1559,9 +1761,20 @@ impl ManagedSession {
     }
 }
 
+impl LocalPtyTransport {
+    fn report_cleanup_failure(&self, operation: CleanupOperation) {
+        self.event_queue
+            .push_cleanup_failure(SessionEvent::CleanupFailed {
+                session_id: self.info.id.clone(),
+                consumer_id: self.cleanup_consumer,
+                operation,
+            });
+    }
+}
+
 impl TerminalTransport for LocalPtyTransport {
     fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        self.writer.write(data.to_vec())
+        self.writer.write_slice(data)
     }
 
     fn resize(
@@ -1581,34 +1794,39 @@ impl TerminalTransport for LocalPtyTransport {
     }
 
     fn close(&mut self) -> anyhow::Result<()> {
-        let _ = self.child.kill();
-        self.writer.close();
-        // On Windows, portable-pty's ConPTY reader is a clone of a pipe owned by
-        // the master. Killing the child does not guarantee EOF while that master
-        // still owns the pseudo console, so release it before joining the reader.
-        drop(self.master.take());
-        if let Some(reader_thread) = self.reader_thread.take() {
-            let _ = reader_thread.join();
+        self.writer.stop();
+        let kill_result = self.child.kill();
+        if kill_result.is_err() {
+            self.report_cleanup_failure(CleanupOperation::Terminate);
         }
-        Ok(())
+        if !self.writer.close() {
+            self.report_cleanup_failure(CleanupOperation::WriterJoin);
+        }
+        drop(self.master.take());
+        if kill_result.is_ok() && self.child.wait().is_err() {
+            self.report_cleanup_failure(CleanupOperation::Wait);
+        }
+        if let Some(reader) = self.reader_thread.take()
+            && reader.join().is_err()
+        {
+            self.report_cleanup_failure(CleanupOperation::ReaderJoin);
+        }
+        kill_result.map_err(anyhow::Error::from)
     }
 }
 
 impl TerminalTransport for TelnetTransport {
     fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        if !data.is_empty()
-            && let Some(auto_login) = self.auto_login.as_ref()
-            && let Ok(mut auto_login) = auto_login.lock()
-        {
-            let _ = auto_login.handle_user_input(false);
-        }
+        let user_input = !data.is_empty();
+        self.writer.command_tx.check_capacity(data.len())?;
         let data = if self.backspace_as_bs {
             remap_del_to_bs(data)
         } else {
             data.to_vec()
         };
+        let mut next_line_buffer = self.local_line_buffer.clone();
         let (data, visible_echo) = if self.config.local_line_edit {
-            edit_telnet_line_input(&data, &mut self.local_line_buffer, &self.config)
+            edit_telnet_line_input(&data, &mut next_line_buffer, &self.config)
         } else {
             let visible_echo = if self.config.local_echo {
                 data.clone()
@@ -1619,6 +1837,13 @@ impl TerminalTransport for TelnetTransport {
         };
         let data = normalize_telnet_input(&data, &self.config);
         self.writer.write(data)?;
+        self.local_line_buffer = next_line_buffer;
+        if user_input
+            && let Some(auto_login) = self.auto_login.as_ref()
+            && let Ok(mut auto_login) = auto_login.lock()
+        {
+            let _ = auto_login.handle_user_input(false);
+        }
         if !visible_echo.is_empty() {
             self.event_queue.push(SessionEvent::Output {
                 session_id: self.info.id.clone(),
@@ -1629,6 +1854,8 @@ impl TerminalTransport for TelnetTransport {
     }
 
     fn write_raw(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        let bytes = telnet_wire_size(data, self.config.raw_tcp);
+        self.writer.command_tx.check_capacity(bytes)?;
         self.writer
             .write(telnet_codec::escape_telnet_application_data(
                 data,
@@ -1713,6 +1940,7 @@ impl TerminalTransport for SshChannelTransport {
 
 impl TerminalTransport for SerialTransport {
     fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        self.writer.command_tx.check_capacity(data.len())?;
         let data = if self.backspace_as_bs {
             remap_del_to_bs(data)
         } else {
@@ -1722,7 +1950,7 @@ impl TerminalTransport for SerialTransport {
     }
 
     fn write_raw(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        self.writer.write(data.to_vec())
+        self.writer.write_slice(data)
     }
 
     fn resize(
@@ -1770,8 +1998,8 @@ fn spawn_reader_thread(
     session_id: String,
     mut reader: Box<dyn Read + Send>,
     event_queue: SessionEventQueue,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
+) -> std::io::Result<JoinHandle<()>> {
+    nyaterm_core::runtime::worker::spawn(format!("transport-reader-{session_id}"), move || {
         let mut buffer = [0_u8; 8192];
         loop {
             match reader.read(&mut buffer) {
@@ -1803,13 +2031,13 @@ fn spawn_reader_thread(
 fn spawn_tcp_reader_thread(
     session_id: String,
     mut reader: TcpStream,
-    command_tx: mpsc::Sender<TransportWriterCommand>,
+    command_tx: WriterMailbox,
     lifecycle: Arc<TelnetWriterLifecycle>,
     config: TelnetSessionConfig,
     auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
     event_queue: SessionEventQueue,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
+) -> std::io::Result<JoinHandle<()>> {
+    nyaterm_core::runtime::worker::spawn(format!("transport-reader-{session_id}"), move || {
         let mut buffer = [0_u8; 8192];
         while !lifecycle.is_stopped() {
             match reader.read(&mut buffer) {
@@ -1838,8 +2066,11 @@ fn spawn_tcp_reader_thread(
                                 config.send_naws,
                                 config.send_sga,
                             );
-                            if !response.is_empty() {
-                                let _ = queue_telnet_control(&command_tx, response);
+                            if !response.is_empty()
+                                && let Err(error) = queue_telnet_control(&command_tx, response)
+                            {
+                                send_session_error(&event_queue, &session_id, error);
+                                lifecycle.stop();
                             }
                         })
                     };
@@ -1850,7 +2081,12 @@ fn spawn_tcp_reader_thread(
                             for action in auto_login.handle_visible_output(&visible, &config) {
                                 match action {
                                     TelnetAutoLoginAction::Send(payload) => {
-                                        let _ = queue_telnet_control(&command_tx, payload);
+                                        if let Err(error) =
+                                            queue_telnet_control(&command_tx, payload)
+                                        {
+                                            send_session_error(&event_queue, &session_id, error);
+                                            lifecycle.stop();
+                                        }
                                     }
                                     TelnetAutoLoginAction::Complete
                                     | TelnetAutoLoginAction::Disable => {}
@@ -1884,7 +2120,7 @@ fn spawn_tcp_reader_thread(
             }
         }
         lifecycle.stop();
-        let _ = command_tx.send(TransportWriterCommand::Close);
+        command_tx.stop();
     })
 }
 
@@ -3680,8 +3916,8 @@ fn spawn_serial_reader_thread(
     mut reader: Box<dyn SerialPort>,
     stop_reader: Arc<AtomicBool>,
     event_queue: SessionEventQueue,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
+) -> std::io::Result<JoinHandle<()>> {
+    nyaterm_core::runtime::worker::spawn(format!("transport-reader-{session_id}"), move || {
         let mut buffer = [0_u8; 4096];
         while !stop_reader.load(Ordering::Relaxed) {
             match reader.read(&mut buffer) {

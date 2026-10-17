@@ -276,6 +276,11 @@ impl NyaTermApp {
                         root_chrome_dirty |=
                             self.handle_session_exited_event(session_id, reason, cx);
                     }
+                    SessionEvent::CleanupFailed { operation, .. } => {
+                        self.shell
+                            .set_status(format!("Local session cleanup failed: {operation:?}"));
+                        root_chrome_dirty = true;
+                    }
                     SessionEvent::Error {
                         session_id,
                         message,

@@ -1,3 +1,4 @@
+use super::transfer_wire::TransferWire;
 use gpui::{Context, PathPromptOptions, SharedString};
 use nyaterm_transport::{
     SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
@@ -23,6 +24,7 @@ pub(super) struct ZmodemSessionState {
 }
 
 struct ZmodemWorker {
+    wire: TransferWire,
     command_tx: mpsc::Sender<ZmodemWorkerCommand>,
     event_rx: Option<mpsc::Receiver<ZmodemWorkerEvent>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -42,14 +44,16 @@ struct ZmodemWorkerEvent {
 }
 
 impl ZmodemWorker {
-    fn spawn(transfer: ZmodemTransfer) -> Self {
+    fn spawn(transfer: ZmodemTransfer, wire: TransferWire) -> Self {
+        let worker_wire = wire.clone();
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::sync_channel(ZMODEM_WORKER_EVENT_CHANNEL_CAP);
         let worker = thread::Builder::new()
             .name("nyaterm-zmodem-transfer".to_string())
-            .spawn(move || run_zmodem_worker(transfer, command_rx, event_tx))
+            .spawn(move || run_zmodem_worker(transfer, command_rx, event_tx, worker_wire))
             .expect("failed to spawn zmodem worker");
         Self {
+            wire,
             command_tx,
             event_rx: Some(event_rx),
             worker: Some(worker),
@@ -75,6 +79,7 @@ impl ZmodemWorker {
     }
 
     fn cancel(&self, reason: impl Into<String>) {
+        self.wire.stop();
         let _ = self
             .command_tx
             .send(ZmodemWorkerCommand::Cancel(reason.into()));
@@ -92,6 +97,7 @@ impl ZmodemWorker {
     }
 
     fn shutdown(&mut self) {
+        self.wire.stop();
         self.event_rx.take();
         let _ = self.command_tx.send(ZmodemWorkerCommand::Stop);
         if let Some(worker) = self.worker.take()
@@ -394,6 +400,7 @@ impl NyaTermApp {
         save_dir: PathBuf,
         cx: &mut Context<Self>,
     ) {
+        let wire_manager = self.session.manager_handle();
         let Some(state) = self.session.zmodem_state_mut(&session_id) else {
             return;
         };
@@ -406,7 +413,10 @@ impl NyaTermApp {
         let Some(transfer) = state.transfer.take() else {
             return;
         };
-        let worker = ZmodemWorker::spawn(transfer);
+        let worker = ZmodemWorker::spawn(
+            transfer,
+            TransferWire::connected(wire_manager.clone(), session_id.to_string()),
+        );
         worker.accept_download(save_dir);
         state.worker = Some(worker);
         cx.notify();
@@ -418,6 +428,7 @@ impl NyaTermApp {
         files: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        let wire_manager = self.session.manager_handle();
         let Some(state) = self.session.zmodem_state_mut(&session_id) else {
             return;
         };
@@ -429,7 +440,10 @@ impl NyaTermApp {
         let Some(transfer) = state.transfer.take() else {
             return;
         };
-        let worker = ZmodemWorker::spawn(transfer);
+        let worker = ZmodemWorker::spawn(
+            transfer,
+            TransferWire::connected(wire_manager.clone(), session_id.to_string()),
+        );
         worker.accept_upload(files);
         state.worker = Some(worker);
         cx.notify();
@@ -492,6 +506,7 @@ impl NyaTermApp {
         data: &[u8],
         cx: &mut Context<Self>,
     ) -> (Vec<u8>, bool) {
+        let wire_manager = self.session.manager_handle();
         if !self.session.manager().supports_modem_transfer(session_id) {
             return (data.to_vec(), false);
         }
@@ -520,7 +535,10 @@ impl NyaTermApp {
                 .zmodem_state_mut(session_id)
                 .and_then(|state| state.transfer.take())
             {
-                let worker = ZmodemWorker::spawn(transfer);
+                let worker = ZmodemWorker::spawn(
+                    transfer,
+                    TransferWire::connected(wire_manager.clone(), session_id.to_string()),
+                );
                 worker.send_input(data.to_vec());
                 if let Some(state) = self.session.zmodem_state_mut(session_id) {
                     state.worker = Some(worker);
@@ -552,7 +570,10 @@ impl NyaTermApp {
                 {
                     let state = self.zmodem_state_mut(session_id);
                     if let Some(files) = prepared_upload {
-                        let worker = ZmodemWorker::spawn(transfer);
+                        let worker = ZmodemWorker::spawn(
+                            transfer,
+                            TransferWire::connected(wire_manager.clone(), session_id.to_string()),
+                        );
                         worker.accept_upload(files);
                         state.worker = Some(worker);
                     } else {
@@ -957,11 +978,38 @@ fn run_zmodem_worker(
     mut transfer: ZmodemTransfer,
     command_rx: mpsc::Receiver<ZmodemWorkerCommand>,
     event_tx: mpsc::SyncSender<ZmodemWorkerEvent>,
+    wire: TransferWire,
 ) {
     while let Ok(command) = command_rx.recv() {
-        let Some(event) = process_zmodem_worker_command(&mut transfer, command) else {
+        let cancelling = matches!(&command, ZmodemWorkerCommand::Cancel(_));
+        let Some(mut event) = process_zmodem_worker_command(&mut transfer, command) else {
             break;
         };
+        let mut remaining = Vec::new();
+        let mut failure = None;
+        for action in event.actions {
+            if let ZmodemAction::SendToRemote(bytes) = action {
+                match if cancelling {
+                    wire.send_abort(&bytes)
+                } else {
+                    wire.send(&bytes)
+                } {
+                    Ok(true) => {}
+                    Ok(false) => remaining.push(ZmodemAction::SendToRemote(bytes)),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            } else {
+                remaining.push(action);
+            }
+        }
+        if let Some(reason) = failure {
+            remaining = vec![ZmodemAction::EmitEvent(ZmodemEvent::Failed { reason })];
+            event.done = true;
+        }
+        event.actions = remaining;
         let done = event.done;
         let _ = event_tx.send(event);
         if done {

@@ -842,7 +842,7 @@ mod tests {
             width,
             height,
             hotspot: RemotePoint { x: 0, y: 0 },
-            pixels: vec![0; width.saturating_mul(height).saturating_mul(4) as usize],
+            pixels: vec![0; width.saturating_mul(height).saturating_mul(4) as usize].into(),
         }
     }
 

@@ -570,6 +570,34 @@ impl NyaTermApp {
         true
     }
 
+    pub(super) fn schedule_vnc_helper_reconnect(&mut self, session_id: &str) -> bool {
+        let Some((enabled, max_attempts)) =
+            self.session
+                .metadata(session_id)
+                .and_then(|metadata| match &metadata.launch_config {
+                    crate::models::SessionLaunchConfig::Vnc(config) => {
+                        Some((config.reconnect.enabled, config.reconnect.max_attempts))
+                    }
+                    _ => None,
+                })
+        else {
+            return false;
+        };
+        let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
+            return false;
+        };
+        if !enabled || session.reconnect_attempts >= max_attempts {
+            return false;
+        }
+        session.reconnect_attempts += 1;
+        session.reconnect_at = Some(
+            Instant::now()
+                + rdp_reconnect_delay(session.reconnect_attempts, rand::random_range(0..250)),
+        );
+        session.state = RemoteDesktopViewState::Reconnecting;
+        true
+    }
+
     pub(super) fn drive_rdp_reconnects(&mut self, cx: &mut Context<Self>) -> bool {
         let now = Instant::now();
         let due = self
@@ -583,7 +611,16 @@ impl NyaTermApp {
             if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                 session.reconnect_at = None;
             }
-            self.restart_rdp_runtime(session_id, false, cx);
+            if self.session.metadata(session_id).is_some_and(|metadata| {
+                matches!(
+                    metadata.launch_config,
+                    crate::models::SessionLaunchConfig::Vnc(_)
+                )
+            }) {
+                self.restart_vnc_runtime(session_id, false, cx);
+            } else {
+                self.restart_rdp_runtime(session_id, false, cx);
+            }
         }
         !due.is_empty()
     }

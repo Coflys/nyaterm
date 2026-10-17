@@ -59,6 +59,7 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) framebuffer: Option<Framebuffer>,
     pub(super) texture: Option<DynamicTexture>,
     pub(super) texture_dirty: bool,
+    pub(super) uploads_stopped: bool,
     pub(super) cursor_shape: Option<CursorShape>,
     pub(super) cursor_position: CursorPosition,
     pub(super) cursor_visible: bool,
@@ -95,6 +96,7 @@ impl Default for RemoteDesktopSessionState {
             framebuffer: None,
             texture: None,
             texture_dirty: false,
+            uploads_stopped: false,
             cursor_shape: None,
             cursor_position: CursorPosition::default(),
             cursor_visible: true,
@@ -126,6 +128,24 @@ impl Default for RemoteDesktopSessionState {
 }
 
 impl RemoteDesktopFeatureState {
+    pub(in crate::features) fn release_inactive_textures(&mut self, active: &str) {
+        for (id, session) in &mut self.sessions {
+            if id == active {
+                continue;
+            }
+            if let Some(texture) = session.texture.take() {
+                self.pending_texture_removals.push(texture);
+            }
+            if let Some(texture) = session.cursor_texture.take() {
+                self.pending_texture_removals.push(texture);
+            }
+            session.texture_dirty = session.framebuffer.is_some();
+        }
+        if !self.pending_texture_removals.is_empty() {
+            self.wake.signal(ANY_INTEREST);
+        }
+    }
+
     pub(in crate::features) fn has_active_sessions(&self) -> bool {
         !self.sessions.is_empty()
     }

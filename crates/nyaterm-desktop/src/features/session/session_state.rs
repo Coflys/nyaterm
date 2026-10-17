@@ -169,6 +169,7 @@ impl NyaTermApp {
         }
 
         self.session.select_active_session(session_id);
+        self.remote_desktop.release_inactive_textures(session_id);
         self.sync_ai_active_scope(cx);
         if switching_sessions {
             self.transfer.reset_transfer_queue_interaction();

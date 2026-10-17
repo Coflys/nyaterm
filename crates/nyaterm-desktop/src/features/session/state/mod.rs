@@ -293,6 +293,7 @@ impl SessionFeatureState {
                 | SessionEvent::CwdChanged { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
+                | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id) {
@@ -838,6 +839,7 @@ impl SessionFeatureState {
                 | SessionEvent::CwdChanged { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
+                | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id.clone(),
             })
             .collect();

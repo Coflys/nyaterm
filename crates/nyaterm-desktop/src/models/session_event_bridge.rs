@@ -447,6 +447,7 @@ fn bridge_event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::CwdChanged { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }
         | SessionEvent::Exited { session_id, .. }
+        | SessionEvent::CleanupFailed { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
     }
 }
@@ -469,6 +470,7 @@ impl SessionEventBridgeQueue {
                 | SessionEvent::CwdChanged { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
                 | SessionEvent::Exited { session_id, .. }
+                | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id.as_str()) {
@@ -573,6 +575,7 @@ impl SessionEventBridgeQueueInner {
             | SessionEvent::CwdChanged { .. }
             | SessionEvent::CommandAccepted { .. }
             | SessionEvent::Exited { .. }
+            | SessionEvent::CleanupFailed { .. }
             | SessionEvent::Error { .. } => {}
         }
         self.events.push_back(event);
@@ -628,6 +631,7 @@ impl SessionEventBridgeQueueInner {
                 SessionEvent::CwdChanged { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
+                | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -817,6 +821,9 @@ fn bridge_route_event(
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
             sideband_probe_sessions.remove(&session_id);
             state.push_ui_event(&mut control, SessionEvent::Exited { session_id, reason });
+        }
+        event @ SessionEvent::CleanupFailed { .. } => {
+            state.push_ui_event(&mut control, event);
         }
         SessionEvent::Error {
             session_id,

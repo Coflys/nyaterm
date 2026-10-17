@@ -153,7 +153,8 @@ fn queued_transport_writer_returns_before_blocking_write_completes() {
         },
         crate::WriterFlushPolicy::AfterWrite,
         SessionEventQueue::new(),
-    );
+    )
+    .unwrap();
 
     writer.write(b"input".to_vec()).expect("queue input");
     started_rx
@@ -174,9 +175,15 @@ fn queued_transport_writer_preserves_character_at_a_time_mode() {
         WriteCapture(writes.clone()),
         crate::WriterFlushPolicy::EachByte,
         SessionEventQueue::new(),
-    );
+    )
+    .unwrap();
 
     writer.write(b"abc".to_vec()).expect("queue input");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while writes.lock().unwrap().len() != 3 {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
     writer.close();
 
     assert_eq!(
@@ -2632,9 +2639,10 @@ fn ssh_keepalive_policy_reaches_the_client_configuration() {
 
 #[test]
 fn serial_writer_does_not_flush_on_windows() {
-    struct NoFlushWriter;
+    struct NoFlushWriter(mpsc::Sender<()>);
     impl std::io::Write for NoFlushWriter {
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.send(()).unwrap();
             Ok(data.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -2646,18 +2654,17 @@ fn serial_writer_does_not_flush_on_windows() {
     } else {
         crate::WriterFlushPolicy::Never
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    tx.send(crate::TransportWriterCommand::Write(b"command\r".to_vec()))
-        .unwrap();
-    tx.send(crate::TransportWriterCommand::Close).unwrap();
-    crate::run_transport_writer(
+    let (tx, rx) = mpsc::channel();
+    let mut writer = QueuedTransportWriter::spawn(
         "serial".into(),
-        NoFlushWriter,
+        NoFlushWriter(tx),
         policy,
-        rx,
         SessionEventQueue::new(),
-        None,
-    );
+    )
+    .unwrap();
+    writer.write(b"command\r".to_vec()).unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(writer.close());
 }
 
 #[test]
@@ -2837,6 +2844,7 @@ fn test_telnet_writer<W: Write + Send + 'static>(
             }),
         }),
     )
+    .unwrap()
 }
 
 #[test]
@@ -3197,4 +3205,134 @@ fn telnet_local_line_buffer_does_not_delay_idle_nop() {
     assert_eq!(nop, crate::telnet_codec::NOP);
     assert!(started.elapsed() < Duration::from_millis(1600));
     manager.close(&info.id).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn local_connection_worker_failures_roll_back_without_registered_sessions() {
+    for stage in 0..4 {
+        let manager = SessionManager::new();
+        let _failure = nyaterm_core::runtime::worker::fail_after(stage);
+        let result = manager.create_local_session(LocalSessionConfig {
+            shell_path: Some(super::default_local_shell_path()),
+            ..Default::default()
+        });
+        assert!(
+            result.is_err(),
+            "startup stage {stage} must return an error"
+        );
+        assert!(manager.sessions.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn transfer_backpressure_retries_without_reordering_and_is_cancellable() {
+    for cancel in [false, true] {
+        let manager = Arc::new(SessionManager::new());
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = QueuedTransportWriter::spawn(
+            "transfer-backpressure".into(),
+            GatedWriter {
+                started_tx,
+                release_rx,
+                output: output.clone(),
+            },
+            crate::WriterFlushPolicy::Never,
+            SessionEventQueue::new(),
+        )
+        .unwrap();
+        writer
+            .write(vec![0; crate::writer_mailbox::BYTE_LIMIT])
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Exercise the retry API with a managed local-like writer without creating
+        // a process: the Serial adapter uses the same raw write mailbox.
+        manager.sessions.lock().unwrap().insert(
+            "transfer-backpressure".into(),
+            crate::ManagedSession::Serial(crate::SerialTransport {
+                info: crate::SessionInfo {
+                    id: "transfer-backpressure".into(),
+                    name: String::new(),
+                    kind: crate::SessionKind::Serial,
+                    working_dir: None,
+                    cols: 80,
+                    rows: 24,
+                },
+                writer,
+                backspace_as_bs: false,
+                stop_reader: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                reader_thread: None,
+                flow_control: nyaterm_core::models::connection::SerialFlowControl::None,
+            }),
+        );
+        let worker_manager = manager.clone();
+        let worker_cancel = cancellation.clone();
+        let (done, result) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            done.send(
+                worker_manager
+                    .write_raw_cancellable("transfer-backpressure", b"second", &worker_cancel)
+                    .is_ok(),
+            )
+            .unwrap();
+        });
+        assert!(result.recv_timeout(Duration::from_millis(30)).is_err());
+        if cancel {
+            cancellation.store(true, std::sync::atomic::Ordering::Release);
+            assert!(!result.recv_timeout(Duration::from_secs(1)).unwrap());
+            release_tx.send(()).unwrap();
+        } else {
+            release_tx.send(()).unwrap();
+            assert!(result.recv_timeout(Duration::from_secs(1)).unwrap());
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            release_tx.send(()).unwrap();
+            // Wait for the second accepted write before closing (which discards pending data).
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while output.lock().unwrap().len() < crate::writer_mailbox::BYTE_LIMIT + 6 {
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        }
+        worker.join().unwrap();
+        manager.close("transfer-backpressure").unwrap();
+        assert_eq!(
+            output.lock().unwrap().len(),
+            crate::writer_mailbox::BYTE_LIMIT + if cancel { 0 } else { 6 }
+        );
+        if !cancel {
+            assert!(output.lock().unwrap().ends_with(b"second"));
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn detached_local_close_returns_before_a_full_pipe_write_finishes() {
+    let manager = SessionManager::new();
+    let info = manager
+        .create_local_session(LocalSessionConfig {
+            shell_path: Some("cmd.exe".into()),
+            shell_args: vec!["/d".into(), "/c".into(), "ping -n 30 127.0.0.1 >nul".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    manager
+        .write_raw(&info.id, &vec![b'x'; 4 * 1024 * 1024])
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    let started = Instant::now();
+    manager.close_detached(&info.id).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(250));
+    assert!(!manager.sessions.lock().unwrap().contains_key(&info.id));
+    // A later session must still start while the former ConPTY is reclaimed.
+    let next = manager
+        .create_local_session(LocalSessionConfig {
+            shell_path: Some("cmd.exe".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    manager.close(&next.id).unwrap();
 }

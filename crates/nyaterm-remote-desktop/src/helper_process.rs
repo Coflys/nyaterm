@@ -67,9 +67,9 @@ impl IpcWriter {
             changed: Condvar::new(),
         });
         let worker_inner = Arc::clone(&inner);
-        let worker = thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || writer_loop(stdin, worker_inner))?;
+        let worker = nyaterm_core::runtime::worker::spawn(thread_name, move || {
+            writer_loop(stdin, worker_inner)
+        })?;
         Ok(Self {
             inner,
             worker: Some(worker),

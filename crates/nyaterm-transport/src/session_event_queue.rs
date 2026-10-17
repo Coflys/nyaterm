@@ -69,6 +69,36 @@ impl SessionEventQueue {
         }
     }
 
+    pub(super) fn consumer_for(&self, session_id: &str) -> Option<SessionEventConsumerId> {
+        self.shared
+            .inner
+            .lock()
+            .ok()?
+            .consumers
+            .get(session_id)
+            .copied()
+    }
+
+    pub(super) fn push_cleanup_failure(&self, event: SessionEvent) {
+        let mut inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if inner.closed {
+            return;
+        }
+        // At most one bounded diagnostic per failed cleanup operation. No user
+        // output is retained after cancellation.
+        if inner
+            .events
+            .iter()
+            .filter(|event| matches!(event, SessionEvent::CleanupFailed { .. }))
+            .count()
+            >= 256
+        {
+            return;
+        }
+        inner.events.push_back(event);
+        self.shared.ready.notify_all();
+    }
+
     pub(super) fn push(&self, event: SessionEvent) {
         let session_id = event_session_id(&event).to_string();
         let Some(_producer_order) = self.begin_push(&session_id) else {
@@ -365,6 +395,12 @@ impl SessionEventQueueInner {
         event: &SessionEvent,
         consumer_id: SessionEventConsumerId,
     ) -> bool {
+        if let SessionEvent::CleanupFailed {
+            consumer_id: owner, ..
+        } = event
+        {
+            return *owner == Some(consumer_id);
+        }
         self.consumers.get(event_session_id(event)) == Some(&consumer_id)
     }
 
@@ -470,6 +506,7 @@ impl SessionEventQueueInner {
                 SessionEvent::CwdChanged { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
+                | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -537,6 +574,7 @@ impl SessionEventQueueInner {
                 SessionEvent::CwdChanged { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
+                | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -566,6 +604,7 @@ fn event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::CwdChanged { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }
         | SessionEvent::Exited { session_id, .. }
+        | SessionEvent::CleanupFailed { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
     }
 }

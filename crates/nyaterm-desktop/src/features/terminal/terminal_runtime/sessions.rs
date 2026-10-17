@@ -101,7 +101,7 @@ impl NyaTermApp {
             } else {
                 self.session
                     .manager()
-                    .close(close_id)
+                    .close_detached(close_id)
                     .map_err(anyhow::Error::from)
             };
             match close_result {
@@ -111,7 +111,10 @@ impl NyaTermApp {
                     close_error.get_or_insert(error);
                     continue;
                 }
-                Err(_) => {}
+                Err(error) => {
+                    close_error.get_or_insert(error);
+                    continue;
+                }
             }
             self.cleanup_recording_for_session(close_id);
             self.remove_session_state(close_id, cx);
