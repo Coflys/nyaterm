@@ -81,6 +81,7 @@ import { useApp } from "@/context/AppContext";
 import { useTransfer } from "@/context/TransferContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
+import { localizeDefaultAiAction } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
@@ -2381,11 +2382,11 @@ function FileExplorerPane({
   const fileAiActions = useMemo(
     () =>
       appSettings.ai.enabled
-        ? appSettings.ai.file_ai_actions.filter(
-            (action) => action.enabled && action.name.trim(),
-          )
+        ? appSettings.ai.file_ai_actions
+            .filter((action) => action.enabled && action.name.trim())
+            .map((action) => localizeDefaultAiAction(action, (key) => t(key)))
         : [],
-    [appSettings.ai.enabled, appSettings.ai.file_ai_actions],
+    [appSettings.ai.enabled, appSettings.ai.file_ai_actions, t],
   );
 
   const handleDeleteSelected = () => {

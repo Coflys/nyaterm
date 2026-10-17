@@ -86,6 +86,25 @@ export const DEFAULT_CLOUD_SYNC_STATUS: CloudSyncStatus = {
   conflict: null,
 };
 
+const CLOUD_SYNC_MESSAGE_KEYS: Record<string, string> = {
+  "Cloud connection verified": "settings.syncMessageConnectionVerified",
+  "Cloud sync is up to date": "settings.syncMessageUpToDate",
+  "Cloud sync is already up to date": "settings.syncMessageAlreadyUpToDate",
+  "Local changes pending sync": "settings.syncMessageLocalChangesPending",
+  "Cloud sync snapshot uploaded": "settings.syncMessageSnapshotUploaded",
+  "Cloud sync snapshot downloaded": "settings.syncMessageSnapshotDownloaded",
+  "Cloud sync metadata recovered from current snapshot":
+    "settings.syncMessageMetadataRecovered",
+};
+
+export function localizeCloudSyncMessage(
+  message: string,
+  t: (key: string) => string,
+) {
+  const key = CLOUD_SYNC_MESSAGE_KEYS[message];
+  return key ? t(key) : message;
+}
+
 export function isCloudSecretMasked(value?: string | null) {
   return value === MASKED_CLOUD_SECRET_VALUE;
 }

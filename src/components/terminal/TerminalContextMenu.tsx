@@ -27,6 +27,7 @@ import { PluginContextMenuItems } from "@/components/plugins/PluginContextMenuIt
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
+import { localizeDefaultAiAction } from "@/lib/aiSettings";
 import { downloadBlob } from "@/lib/backend/browserArtifacts";
 import { runtime, supports } from "@/lib/backend/runtime";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -152,9 +153,9 @@ export default function TerminalContextMenu({
     },
   ].filter((p) => p.free || p.configured);
   const terminalAiActions = ai.enabled
-    ? ai.terminal_ai_actions.filter(
-        (action) => action.enabled && action.name.trim(),
-      )
+    ? ai.terminal_ai_actions
+        .filter((action) => action.enabled && action.name.trim())
+        .map((action) => localizeDefaultAiAction(action, (key) => t(key)))
     : [];
 
   // Right-click context menu: capture selection state.

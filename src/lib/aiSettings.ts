@@ -597,6 +597,53 @@ export const DEFAULT_FILE_AI_ACTIONS: AICustomActionConfig[] = [
   },
 ];
 
+const BUILTIN_AI_ACTION_TRANSLATIONS = {
+  "explain-selected": {
+    name: "解释选中内容",
+    prompt: "请解释终端中选中的内容，指出含义、可能原因和下一步建议。",
+    nameKey: "ai.defaultActions.explainSelectedName",
+    promptKey: "ai.defaultActions.explainSelectedPrompt",
+  },
+  "generate-fix-command": {
+    name: "生成修复命令",
+    prompt: "请根据终端选中内容生成可执行的修复命令，并说明风险。",
+    nameKey: "ai.defaultActions.generateFixName",
+    promptKey: "ai.defaultActions.generateFixPrompt",
+  },
+  "summarize-file": {
+    name: "总结文件",
+    prompt: "请总结选中文件的主要内容、关键风险和建议操作。",
+    nameKey: "ai.defaultActions.summarizeFileName",
+    promptKey: "ai.defaultActions.summarizeFilePrompt",
+  },
+  "explain-file": {
+    name: "解释文件",
+    prompt: "请解释选中文件的用途、结构和关键字段。",
+    nameKey: "ai.defaultActions.explainFileName",
+    promptKey: "ai.defaultActions.explainFilePrompt",
+  },
+} as const;
+
+export function localizeDefaultAiAction(
+  action: AICustomActionConfig,
+  t: (key: string) => string,
+): AICustomActionConfig {
+  const translation = Object.entries(BUILTIN_AI_ACTION_TRANSLATIONS).find(
+    ([id]) => id === action.id,
+  )?.[1];
+  if (!translation) return action;
+
+  return {
+    ...action,
+    name:
+      action.name === translation.name ? t(translation.nameKey) : action.name,
+    prompt:
+      action.prompt === translation.prompt
+        ? t(translation.promptKey)
+        : action.prompt,
+  };
+}
+
 export function getModelProviderLabel(
   model: {
     provider_kind?: AIProviderKind | null;
