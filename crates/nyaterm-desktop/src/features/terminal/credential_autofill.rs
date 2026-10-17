@@ -110,7 +110,7 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };
-        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell_for_autofill();
+        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell();
         self.dismiss_command_suggestions(cx);
         let selected_index = (precise && matches.len() == 1).then_some(0);
         self.terminal.assist.credential_suggestions = Some(CredentialSuggestionState {
@@ -123,17 +123,6 @@ impl NyaTermApp {
             cursor_col,
         });
         cx.notify();
-    }
-
-    fn active_terminal_cursor_cell_for_autofill(&self) -> (usize, usize) {
-        let offset = self.active_terminal_display_offset();
-        let snapshot = self.terminal_snapshot_for_session(self.session.active_id(), offset);
-        let row = if snapshot.cursor.row == usize::MAX {
-            snapshot.row_count().saturating_sub(1)
-        } else {
-            snapshot.cursor.row
-        };
-        (row, snapshot.cursor.col)
     }
 
     pub(in crate::features) fn drain_pending_credential_autofill_detection(

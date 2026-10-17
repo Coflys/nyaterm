@@ -844,15 +844,27 @@ impl NyaTermApp {
         }
     }
 
+    /// Capture a viewport-relative anchor using one snapshot. History padding can
+    /// change between frames even when the shell cursor has not moved.
     pub(in crate::features) fn active_terminal_cursor_cell(&self) -> (usize, usize) {
+        let session_id = self.session.active_id();
         let offset = self.active_terminal_display_offset();
-        let snapshot = self.terminal_snapshot_for_session(self.session.active_id(), offset);
+        let snapshot = self.terminal_snapshot_for_session(session_id, offset);
+        let anchor = terminal_snapshot_anchor_row_for_display_offset(
+            &snapshot,
+            offset,
+            self.terminal_viewport_rows_for_session(session_id),
+            self.terminal_scrollback_len_for_session(session_id),
+        );
         let row = if snapshot.cursor.row == usize::MAX {
             snapshot.row_count().saturating_sub(1)
         } else {
             snapshot.cursor.row
         };
-        (row, snapshot.cursor.col)
+        (
+            row.saturating_sub(anchor + snapshot.leading_cleared_rows(anchor)),
+            snapshot.cursor.col,
+        )
     }
 
     /// Handle suggestion popup keys. Returns true when the key was consumed.
@@ -1279,15 +1291,6 @@ impl NyaTermApp {
     ) -> Option<SuggestionOverlayPlacement> {
         let bounds = self.terminal_surface_bounds_for_session(session_id)?;
         let insets = self.terminal_content_insets_for_bounds(session_id, bounds);
-        let offset = self.terminal_display_offset_for_session(session_id);
-        let snapshot = self.terminal_snapshot_for_session(session_id, offset);
-        let anchor = terminal_snapshot_anchor_row_for_display_offset(
-            &snapshot,
-            offset,
-            self.terminal_viewport_rows_for_session(session_id),
-            self.terminal_scrollback_len_for_session(session_id),
-        );
-        let cursor_row = cursor_row.saturating_sub(anchor + snapshot.leading_cleared_rows(anchor));
         suggestion_overlay_position(
             SuggestionOverlayGeometry {
                 bounds,
@@ -1904,6 +1907,87 @@ mod tests {
             cursor_row: 0,
             cursor_col: 0,
         }
+    }
+
+    #[test]
+    fn selecting_suggestions_keeps_position_when_snapshot_history_window_changes() {
+        let dir = TestConfigDir::new("nyaterm-suggestion-anchor");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.screen.resize(80, 24);
+            view.screen.advance_decoded_text(&"output\r\n".repeat(100));
+            view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+
+            let (cursor_row, cursor_col) = app.active_terminal_cursor_cell();
+            let mut state = open_suggestions_popup("s1");
+            state.selected_index = None;
+            state.cursor_row = cursor_row;
+            state.cursor_col = cursor_col;
+            app.terminal.assist.command_suggestions = Some(state);
+            let before = app
+                .suggestion_overlay_position_for_session(
+                    Some("s1"),
+                    cursor_row,
+                    cursor_col,
+                    380.0,
+                    272.0,
+                )
+                .unwrap();
+
+            // Worker frames may grow or shrink history padding without moving the cursor.
+            for (older_rows, key) in [(64, "down"), (0, "up"), (96, "down")] {
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.frame_snapshot = Some(std::sync::Arc::new(
+                    view.screen.viewport_snapshot_with_window(0, older_rows, 0),
+                ));
+                assert_eq!(app.active_terminal_cursor_cell(), (cursor_row, cursor_col));
+                let mut event = escape_key_event();
+                event.keystroke.key = key.to_string();
+                assert!(app.handle_command_suggestion_key(&event, cx));
+                let state = app.terminal.assist.command_suggestions.as_ref().unwrap();
+                assert_eq!(state.selected_index, (key == "down").then_some(0));
+                let after = app
+                    .suggestion_overlay_position_for_session(
+                        Some("s1"),
+                        state.cursor_row,
+                        state.cursor_col,
+                        380.0,
+                        272.0,
+                    )
+                    .unwrap();
+                assert_eq!(after, before);
+            }
+        });
+    }
+
+    #[test]
+    fn suggestion_cursor_anchor_accounts_for_leading_cleared_rows() {
+        let dir = TestConfigDir::new("nyaterm-suggestion-cleared-anchor");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, _| {
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.screen.resize(80, 24);
+            view.screen.advance(b"\x1b[24;1Hroot# draft");
+            view.screen.clear_except_input();
+            view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+
+            assert_eq!(app.active_terminal_cursor_cell(), (0, 11));
+        });
     }
 
     #[test]
