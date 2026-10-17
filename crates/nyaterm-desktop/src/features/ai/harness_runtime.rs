@@ -1,10 +1,10 @@
 use gpui::Context;
+use nyaterm_core::ai::AiCommandCard;
 use nyaterm_core::ai::harness::{
     AgentPlan, AgentTool, AgentToolCall, AgentToolResult, AgentVerification,
 };
-use nyaterm_core::ai::{AiCommandCard, CommandObservation};
 use nyaterm_core::capabilities::CapabilityScopeSnapshot;
-use nyaterm_mcp_protocol::{RpcError, TerminalExecuteArgs, TerminalExecuteResult};
+use nyaterm_mcp_protocol::{RpcError, TerminalExecuteArgs};
 use rust_i18n::t;
 use serde_json::{Value, json};
 
@@ -337,18 +337,19 @@ impl NyaTermApp {
                         },
                     )
                 };
-                let _ = tx.unbounded_send(AiChatWorkerEvent::Finished(AiChatJobResult {
+                let _ = tx.unbounded_send(AiChatWorkerEvent::Finished(Box::new(AiChatJobResult {
                     job_id,
                     session_id,
                     result,
-                }));
+                })));
             },
         ) {
-            let _ = reject_tx.unbounded_send(AiChatWorkerEvent::Finished(AiChatJobResult {
-                job_id,
-                session_id: reject_session,
-                result: Err(error.to_string()),
-            }));
+            let _ =
+                reject_tx.unbounded_send(AiChatWorkerEvent::Finished(Box::new(AiChatJobResult {
+                    job_id,
+                    session_id: reject_session,
+                    result: Err(error.to_string()),
+                })));
         }
         self.defer_ai_panel_snapshot_flush(cx);
     }
@@ -445,17 +446,8 @@ impl NyaTermApp {
         scope: &CapabilityScopeSnapshot,
         cx: &mut Context<Self>,
     ) {
-        if let Some(session_id) = request.arguments.get("sessionId").and_then(Value::as_str)
-            && self.ai.scope_for_agent_target(session_id).is_some()
-        {
-            let _ = request.reply.send(Err(RpcError {
-                code: "target_busy".into(),
-                message: "Another Agent command is observing this target.".into(),
-            }));
-            return;
-        }
-        let args: TerminalExecuteArgs =
-            serde_json::from_value(request.arguments).expect("validated terminal arguments");
+        let args: TerminalExecuteArgs = serde_json::from_value(request.arguments.clone())
+            .expect("validated terminal arguments");
         let session_id = scope
             .resolve_session(args.session_id.as_deref())
             .expect("validated scope");
@@ -483,38 +475,6 @@ impl NyaTermApp {
                 .next(),
         };
         self.ai.present_native_command(card.clone());
-        self.ai.register_native_terminal_reply(request.reply);
-        let result = if self.ai.settings_config().agent_background_execution_enabled {
-            self.begin_ai_agent_background_execution(&card, &session_id, cx)
-        } else {
-            self.begin_ai_agent_observation(&card, &session_id, cx)
-                .map(|wrapped| {
-                    let input = wrapped.unwrap_or_else(|| format!("{}\r", card.command));
-                    self.send_terminal_input_to_session(session_id, input.into_bytes(), cx);
-                })
-        };
-        if result.is_err() {
-            self.ai.complete_native_terminal(Err(RpcError {
-                code: "execution_failed".into(),
-                message: "Cannot start terminal execution.".into(),
-            }));
-        }
-    }
-
-    pub(in crate::features) fn complete_native_terminal_observation(
-        &mut self,
-        observation: &CommandObservation,
-        timed_out: bool,
-        source_truncated: bool,
-    ) -> bool {
-        let result = serde_json::to_value(TerminalExecuteResult {
-            output: observation.output.clone(),
-            exit_code: observation.exit_code,
-            duration_ms: observation.duration_ms,
-            timed_out,
-            source_truncated,
-        })
-        .expect("terminal result");
-        self.ai.complete_native_terminal(Ok(result))
+        self.dispatch_shared_terminal_execute(request, session_id, cx);
     }
 }

@@ -254,6 +254,14 @@ impl TerminalFeatureState {
             .ensure_session(session_id, encoding, scrollback_limit);
     }
 
+    #[cfg(test)]
+    pub(in crate::features) fn request_frame_text_for_test(
+        &self,
+        session_id: &str,
+    ) -> futures::channel::oneshot::Receiver<Option<String>> {
+        self.view.frame_pipeline.request_all_text(session_id.into())
+    }
+
     pub(in crate::features) fn remove_frame_session(&mut self, session_id: &str) {
         self.editing.sessions.remove(session_id);
         self.view.views.remove(session_id);
@@ -377,13 +385,6 @@ impl TerminalFeatureState {
             .views
             .get(session_id)
             .map(|view| view.output.as_str())
-    }
-
-    pub(in crate::features) fn session_output_len_or_default(&self, session_id: &str) -> usize {
-        self.view
-            .views
-            .get(session_id)
-            .map_or(self.view.output.len(), |view| view.output.len())
     }
 
     pub(in crate::features) fn session_has_unread(&self, session_id: &str) -> bool {

@@ -28,6 +28,11 @@ pub enum SessionKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
+    /// In-process ordering fence; never sent to the terminal or persisted.
+    OutputBoundary {
+        session_id: String,
+        token: String,
+    },
     CleanupFailed {
         session_id: String,
         consumer_id: Option<SessionEventConsumerId>,

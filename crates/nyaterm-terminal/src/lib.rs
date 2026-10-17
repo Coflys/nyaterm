@@ -13,6 +13,7 @@ use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
+pub mod agent_capture;
 mod cells;
 pub mod command_navigation;
 pub mod editing;

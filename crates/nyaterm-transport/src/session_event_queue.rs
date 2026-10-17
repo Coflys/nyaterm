@@ -507,6 +507,7 @@ impl SessionEventQueueInner {
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
+                | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -575,6 +576,7 @@ impl SessionEventQueueInner {
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
+                | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -600,6 +602,7 @@ impl SessionEventQueueInner {
 fn event_session_id(event: &SessionEvent) -> &str {
     match event {
         SessionEvent::Output { session_id, .. }
+        | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }

@@ -62,10 +62,7 @@ pub use activation::{
     decode_activation_ack, decode_activation_request, encode_activation_ack,
     encode_activation_request, parse_activation_request, parse_deep_link,
 };
-pub use agent_capture::{
-    AgentCaptureCancelResult, AgentCaptureProcessResult, AgentCapturedOutput,
-    AgentOutputCaptureProcessor, build_agent_capture_command,
-};
+pub use agent_capture::build_agent_capture_command;
 pub use ai::{
     AI_AUDIT_MAX_LOGS, AI_HISTORY_MAX_MESSAGES, AI_HISTORY_MAX_SESSIONS,
     AI_REQUEST_USER_AGENT_DEFAULT, AgentApprovalDecision, AgentApprovalOutcome,

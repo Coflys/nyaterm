@@ -52,7 +52,7 @@ impl NyaTermApp {
         let eligible = text == "\r"
             && !submitted_for_navigation.is_empty()
             && !interactive
-            && !self.ai.agent_capture_is_active_for(&id)
+            && !self.mcp.capabilities.terminal_executions.capturing(&id)
             && self
                 .session
                 .metadata(&id)

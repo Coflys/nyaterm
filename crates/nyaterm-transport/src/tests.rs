@@ -3336,3 +3336,36 @@ fn detached_local_close_returns_before_a_full_pipe_write_finishes() {
         .unwrap();
     manager.close(&next.id).unwrap();
 }
+
+#[test]
+fn output_boundary_preserves_source_order_across_budgeted_drains() {
+    let manager = SessionManager::new();
+    let consumer = manager.register_event_consumer();
+    manager.assign_session_event_consumer("terminal", consumer);
+    manager.event_queue.push(SessionEvent::Output {
+        session_id: "terminal".into(),
+        data: b"before".to_vec(),
+    });
+    manager.enqueue_output_boundary("terminal", "task");
+    manager.event_queue.push(SessionEvent::Output {
+        session_id: "terminal".into(),
+        data: b"after".to_vec(),
+    });
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.extend(
+            manager
+                .drain_events_blocking_for_consumer_with_output_budget(
+                    consumer,
+                    1,
+                    1024,
+                    Duration::ZERO,
+                )
+                .unwrap()
+                .events,
+        );
+    }
+    assert!(matches!(&events[0], SessionEvent::Output { data, .. } if data == b"before"));
+    assert!(matches!(&events[1], SessionEvent::OutputBoundary { token, .. } if token == "task"));
+    assert!(matches!(&events[2], SessionEvent::Output { data, .. } if data == b"after"));
+}

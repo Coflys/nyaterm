@@ -1049,77 +1049,31 @@ fn mention_selection_and_navigation_are_atomic_owner_transitions() {
 }
 
 #[test]
-fn background_completion_distinguishes_foreign_and_matched_stale_jobs() {
-    let cx = TestAppContext::single();
-    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-    let mut state = state(&cx);
-    let launch = state.begin_chat_job();
-    let now = Instant::now();
-    let loop_state = AiAgentLoopState {
-        command_card_id: None,
-        available_targets: Vec::new(),
-        default_target_session_id: None,
-        ai_session_id: "session-a".to_string(),
-        terminal_session_id: "terminal-a".to_string(),
-        command: "pwd".to_string(),
-        marker_id: None,
-        background_job_id: Some(launch.job_id),
-        step_index: 0,
-        max_steps: 3,
-        output_start_len: 0,
-        started_at: now,
-        min_wait_until: now,
-        timeout_at: now + Duration::from_secs(1),
-        last_seen_len: 0,
-        stable_since: now,
-    };
-
-    assert!(matches!(
-        state.finish_agent_background(
-            launch.job_id.wrapping_add(1),
-            loop_state.clone(),
-            Err("foreign".to_string()),
-            |_| String::new(),
-        ),
-        super::AiAgentBackgroundEffect::Ignored
-    ));
-    assert!(matches!(
-        state.finish_agent_background(launch.job_id, loop_state, Err("stale".to_string()), |_| {
-            String::new()
-        },),
-        super::AiAgentBackgroundEffect::MatchedStale
-    ));
-}
-
-#[test]
-fn agent_step_limit_and_observation_poll_stay_on_the_owner() {
+fn agent_step_limit_and_command_association_stay_on_the_owner() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
     assert!(state.begin_agent_step(1).is_err());
 
-    let now = Instant::now();
     state.set_agent_loop(AiAgentLoopState {
+        execution_id: "fixture-execution".into(),
         command_card_id: None,
         available_targets: Vec::new(),
         default_target_session_id: None,
         ai_session_id: "session-a".to_string(),
         terminal_session_id: "terminal-a".to_string(),
         command: "pwd".to_string(),
-        marker_id: None,
-        background_job_id: None,
+
         step_index: 0,
         max_steps: 3,
-        output_start_len: 4,
-        started_at: now - Duration::from_secs(2),
-        min_wait_until: now - Duration::from_secs(1),
-        timeout_at: now + Duration::from_secs(10),
-        last_seen_len: 8,
-        stable_since: now - Duration::from_secs(1),
     });
 
-    let poll = state.poll_agent_observation(now, 8, Duration::from_millis(100));
-    assert!(matches!(poll, super::AiAgentObservationPoll::Target(_)));
+    assert!(
+        state
+            .take_agent_loop_for_session("other-terminal")
+            .is_none()
+    );
+    assert!(state.take_agent_loop_for_session("terminal-a").is_some());
     assert!(state.agent_loop_snapshot().is_none());
 }
 
@@ -1632,24 +1586,17 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
                 )
                 .unwrap();
             let (_, step_index) = state.begin_agent_step(4).unwrap();
-            let now = Instant::now();
             let execution = AiAgentLoopState {
+                execution_id: "fixture-execution".into(),
                 command_card_id: Some(card_id.clone()),
                 ai_session_id: launch.session_id.clone(),
                 terminal_session_id: "terminal-a".into(),
                 available_targets: Vec::new(),
                 default_target_session_id: None,
                 command: "echo fixture".into(),
-                marker_id: None,
-                background_job_id: None,
+
                 step_index,
                 max_steps: 4,
-                output_start_len: 0,
-                started_at: now,
-                min_wait_until: now,
-                timeout_at: now,
-                last_seen_len: 0,
-                stable_since: now,
             };
             state.set_agent_loop(execution.clone());
             state.record_agent_observation(
@@ -1716,24 +1663,17 @@ fn foreign_agent_continuation_cannot_claim_the_active_response() {
     let mut state = state(&cx);
     let launch = state.begin_chat_request("inspect".into(), AiMode::Agent, None);
     let assistant_id = state.chat_streaming_assistant_id().unwrap().to_string();
-    let now = Instant::now();
     let execution = AiAgentLoopState {
+        execution_id: "fixture-execution".into(),
         command_card_id: None,
         ai_session_id: "another-session".into(),
         terminal_session_id: "terminal-a".into(),
         available_targets: Vec::new(),
         default_target_session_id: None,
         command: "echo fixture".into(),
-        marker_id: None,
-        background_job_id: None,
+
         step_index: 0,
         max_steps: 4,
-        output_start_len: 0,
-        started_at: now,
-        min_wait_until: now,
-        timeout_at: now,
-        last_seen_len: 0,
-        stable_since: now,
     };
     assert!(
         state
@@ -1896,59 +1836,6 @@ fn settled_agent_cards_cannot_be_approved_again_and_keep_their_identity() {
 }
 
 #[test]
-fn mismatched_background_card_does_not_clear_current_cancellation_or_update_output() {
-    let cx = TestAppContext::single();
-    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-    let mut state = state(&cx);
-    let launch = state.begin_chat_job();
-    let now = Instant::now();
-    let active = AiAgentLoopState {
-        command_card_id: Some("agent-current".into()),
-        ai_session_id: "session-a".into(),
-        terminal_session_id: "terminal-a".into(),
-        available_targets: Vec::new(),
-        default_target_session_id: None,
-        command: "echo fixture".into(),
-        marker_id: None,
-        background_job_id: Some(launch.job_id),
-        step_index: 0,
-        max_steps: 3,
-        output_start_len: 0,
-        started_at: now,
-        min_wait_until: now,
-        timeout_at: now,
-        last_seen_len: 0,
-        stable_since: now,
-    };
-    state.set_agent_loop(active.clone());
-    let mut foreign = active;
-    foreign.command_card_id = Some("agent-foreign".into());
-    assert!(matches!(
-        state.finish_agent_background(
-            launch.job_id,
-            foreign,
-            Ok(nyaterm_core::CommandObservation {
-                output: "foreign output".into(),
-                exit_code: Some(0),
-                duration_ms: 1,
-            }),
-            |_| String::new()
-        ),
-        super::AiAgentBackgroundEffect::MatchedStale
-    ));
-    assert!(state.chat.cancel.is_some());
-    assert_eq!(
-        state
-            .agent_loop_snapshot()
-            .unwrap()
-            .command_card_id
-            .as_deref(),
-        Some("agent-current")
-    );
-    assert!(state.agent_steps().is_empty());
-}
-
-#[test]
 fn native_run_freezes_only_its_session_history_before_the_current_task() {
     use nyaterm_core::ai::{AiChatRequest, AiMessage, AiMessageRole};
     use std::sync::Arc;
@@ -1987,4 +1874,37 @@ fn native_run_freezes_only_its_session_history_before_the_current_task() {
     assert_eq!(state.native_initial_history().unwrap(), initial);
     state.switch_scope("terminal:other");
     assert!(state.native_initial_history().is_none());
+}
+
+#[test]
+fn native_terminal_execution_policy_is_snapshotted_per_scope_and_run() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let request = || {
+        serde_json::from_value(
+            serde_json::json!({"mode":"agent","action":"generate_command","userInput":"fixture"}),
+        )
+        .unwrap()
+    };
+    let mut settings = state.settings_config_cloned();
+    settings.agent_background_execution_enabled = false;
+    settings.terminal_output_lines = 7;
+    state.replace_settings_config(settings, true);
+    state.switch_scope("terminal:first");
+    state.begin_native_run(request());
+    let first = state.native_terminal_policy().unwrap();
+    let mut settings = state.settings_config_cloned();
+    settings.agent_background_execution_enabled = true;
+    settings.terminal_output_lines = 0;
+    state.replace_settings_config(settings, true);
+    state.switch_scope("terminal:second");
+    state.begin_native_run(request());
+    let second = state.native_terminal_policy().unwrap();
+    assert!(second.background);
+    assert_eq!(second.max_lines, 0);
+    state.switch_scope("terminal:first");
+    assert_eq!(state.native_terminal_policy(), Some(first));
+    assert!(!first.background);
+    assert_eq!(first.max_lines, 7);
 }

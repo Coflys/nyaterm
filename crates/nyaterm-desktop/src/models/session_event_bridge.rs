@@ -268,6 +268,22 @@ impl SessionEventBridge {
         }
     }
 
+    pub(crate) fn begin_output_boundary(&self, session_id: &str, token: &str) {
+        // The worker holds this gate through direct-frame submission, so its
+        // previous batch cannot overtake the boundary or the synthetic header.
+        let Ok(_gate) = self.state.transfer_gate.lock() else {
+            return;
+        };
+        let Ok(mut control) = self.state.control.lock() else {
+            return;
+        };
+        control.ui_routed_sessions.insert(session_id.to_string());
+        // Use the source queue: bytes not yet dequeued by the worker must also
+        // precede the fence, including a backlog larger than one worker batch.
+        self.session_manager
+            .enqueue_output_boundary(session_id, token);
+    }
+
     pub(crate) fn resume_session_direct_output(&self, session_id: &str) {
         if let Ok(mut control) = self.state.control.lock() {
             control.ui_routed_sessions.remove(session_id);
@@ -443,6 +459,7 @@ impl SessionEventBridgeState {
 fn bridge_event_session_id(event: &SessionEvent) -> &str {
     match event {
         SessionEvent::Output { session_id, .. }
+        | SessionEvent::OutputBoundary { session_id, .. }
         | SessionEvent::OutputDropped { session_id, .. }
         | SessionEvent::CwdChanged { session_id, .. }
         | SessionEvent::CommandAccepted { session_id, .. }
@@ -466,6 +483,7 @@ impl SessionEventBridgeQueue {
         while let Some(event) = inner.events.pop_front() {
             let session_id = match &event {
                 SessionEvent::Output { session_id, .. }
+                | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
@@ -571,7 +589,8 @@ impl SessionEventBridgeQueueInner {
             SessionEvent::Output { data, .. } => {
                 self.queued_output_bytes = self.queued_output_bytes.saturating_add(data.len());
             }
-            SessionEvent::OutputDropped { .. }
+            SessionEvent::OutputBoundary { .. }
+            | SessionEvent::OutputDropped { .. }
             | SessionEvent::CwdChanged { .. }
             | SessionEvent::CommandAccepted { .. }
             | SessionEvent::Exited { .. }
@@ -628,7 +647,8 @@ impl SessionEventBridgeQueueInner {
                 SessionEvent::OutputDropped { bytes, .. } => {
                     stats.dropped_output_bytes = stats.dropped_output_bytes.saturating_add(*bytes);
                 }
-                SessionEvent::CwdChanged { .. }
+                SessionEvent::OutputBoundary { .. }
+                | SessionEvent::CwdChanged { .. }
                 | SessionEvent::CommandAccepted { .. }
                 | SessionEvent::Exited { .. }
                 | SessionEvent::CleanupFailed { .. }
@@ -799,6 +819,10 @@ fn bridge_route_event(
                 &mut control,
                 SessionEvent::OutputDropped { session_id, bytes },
             );
+        }
+        event @ SessionEvent::OutputBoundary { .. } => {
+            flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
+            state.push_ui_event(&mut control, event);
         }
         SessionEvent::CwdChanged { session_id, cwd } => {
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);

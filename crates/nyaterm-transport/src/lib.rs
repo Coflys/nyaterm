@@ -1025,6 +1025,14 @@ impl SessionManager {
     /// consumer until explicitly assigned, which lets multiple desktop
     /// workspaces share one transport manager without stealing each other's
     /// output.
+    /// Place an in-process presentation fence after all output already queued.
+    pub fn enqueue_output_boundary(&self, session_id: &str, token: &str) {
+        self.event_queue.push(SessionEvent::OutputBoundary {
+            session_id: session_id.into(),
+            token: token.into(),
+        });
+    }
+
     pub fn register_event_consumer(&self) -> SessionEventConsumerId {
         SessionEventConsumerId(self.next_event_consumer_id.fetch_add(1, Ordering::Relaxed))
     }

@@ -1634,6 +1634,14 @@ impl TerminalFramePipeline {
         });
     }
 
+    pub(crate) fn submit_synthetic_output(&self, session_id: String, text: String) {
+        if !text.is_empty() {
+            let _ = self
+                .command_tx
+                .send(TerminalFrameCommand::SyntheticOutput { session_id, text });
+        }
+    }
+
     pub(crate) fn submit_decoded_output(&self, session_id: String, text: String) {
         if !text.is_empty() {
             let _ = self
@@ -1900,6 +1908,10 @@ enum TerminalFrameCommand {
         rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
     },
     DecodedOutput {
+        session_id: String,
+        text: String,
+    },
+    SyntheticOutput {
         session_id: String,
         text: String,
     },
@@ -3534,7 +3546,8 @@ fn terminal_frame_command_priority_snapshot_insert_before(command: &TerminalFram
 fn terminal_frame_command_output_bytes(command: &TerminalFrameCommand) -> usize {
     match command {
         TerminalFrameCommand::Output { data, .. } => data.len(),
-        TerminalFrameCommand::DecodedOutput { text, .. } => text.len(),
+        TerminalFrameCommand::DecodedOutput { text, .. }
+        | TerminalFrameCommand::SyntheticOutput { text, .. } => text.len(),
         _ => 0,
     }
 }
@@ -3689,6 +3702,20 @@ fn run_terminal_frame_processor(
                     session.revision = session.revision.saturating_add(1);
                     let event = session.output_event_from_batch(session_id, batch, started_at);
                     push_event(&event_queue, TerminalFrameEvent::Output(event));
+                }
+            }
+            TerminalFrameCommand::SyntheticOutput { session_id, text } => {
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    let started_at = Instant::now();
+                    // Application presentation is never source output: no recording,
+                    // prompt observation, credentials, or transport side effects.
+                    session.screen.reset_stream_state();
+                    session.screen.advance_decoded_text(&text);
+                    session.screen.take_effects();
+                    session.revision = session.revision.saturating_add(1);
+                    session.action_link_cache = None;
+                    let event = session.resized_live_snapshot_event(session_id, started_at);
+                    push_event(&event_queue, TerminalFrameEvent::Snapshot(event));
                 }
             }
             TerminalFrameCommand::AppendLocalText { session_id, text } => {

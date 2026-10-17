@@ -476,13 +476,13 @@ fn streaming_bursts_coalesce_without_losing_text_and_background_sessions_do_not_
         .unwrap();
     launch
         .tx
-        .unbounded_send(AiChatWorkerEvent::Finished(
+        .unbounded_send(AiChatWorkerEvent::Finished(Box::new(
             crate::features::runtime_jobs::AiChatJobResult {
                 job_id: launch.job_id,
                 session_id: launch.session_id.clone(),
                 result: Err("fixture failure".into()),
             },
-        ))
+        )))
         .unwrap();
     vcx.run_until_parked();
     assert_eq!(vcx.update(|_, cx| ai_snapshot_sets(&app, cx)), before + 1);

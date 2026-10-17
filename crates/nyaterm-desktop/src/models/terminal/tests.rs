@@ -3814,3 +3814,76 @@ fn interleaved_frame_sessions_keep_their_own_output_and_recording_charsets() {
     assert_eq!(utf8_frame.visible_text, "中文😀");
     assert_eq!(utf8_frame.recording_text_bytes, "中文😀".len());
 }
+
+#[test]
+fn synthetic_command_blocks_preserve_order_without_recording_or_output_observers() {
+    use nyaterm_transport::{
+        ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
+        RecordingRotationPolicy,
+    };
+    let directory = crate::test_support::TestConfigDir::new("nyaterm-synthetic-frame-recording");
+    let path = directory.path().join("session.log");
+    let mut recording = RecordingWritePipeline::spawn(1024 * 1024);
+    let writer = recording.writer();
+    writer
+        .start(
+            "s1".into(),
+            RecordingContext {
+                session_id: "s1".into(),
+                session_name: "fixture".into(),
+                connection_id: None,
+                connection_name: None,
+                group_path: None,
+                protocol: "local".into(),
+                host: None,
+                port: None,
+                username: None,
+                started_at: time::OffsetDateTime::now_utc(),
+            },
+            RecordingProfile {
+                mode: RecordingMode::Transcript,
+                base_path: directory.path().into(),
+                path_template: "session.log".into(),
+                include_timestamps: false,
+                include_io_labels: false,
+                include_session_metadata: false,
+                rotation: RecordingRotationPolicy::Session,
+                existing_file_behavior: ExistingFileBehavior::Overwrite,
+                include_binary_transfer_payloads: false,
+                include_input: false,
+            },
+            Some(path.clone()),
+            1024 * 1024,
+        )
+        .unwrap();
+    let mut pipeline = TerminalFramePipeline::spawn(writer.clone());
+    pipeline.submit_output("s1", b"before\r\n".to_vec(), "UTF-8", 1000);
+    pipeline.submit_synthetic_output(
+        "s1".into(),
+        "\x1b[35mAI synthetic fixture\x1b[0m\r\n".into(),
+    );
+    pipeline.submit_output("s1", b"after\r\n".to_vec(), "UTF-8", 1000);
+    let text = futures::executor::block_on(pipeline.request_all_text("s1".into()))
+        .unwrap()
+        .unwrap();
+    assert!(text.find("before").unwrap() < text.find("AI synthetic fixture").unwrap());
+    assert!(text.find("AI synthetic fixture").unwrap() < text.find("after").unwrap());
+    let mut events = VecDeque::new();
+    pipeline.drain_events_into(&mut events, usize::MAX);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, TerminalFrameEvent::Snapshot(_)))
+    );
+    for event in events {
+        if let TerminalFrameEvent::Output(frame) = event {
+            assert!(!frame.visible_text.contains("AI synthetic fixture"));
+        }
+    }
+    writer.stop("s1".into()).unwrap();
+    let transcript = std::fs::read_to_string(path).unwrap();
+    assert!(transcript.contains("before") && transcript.contains("after"));
+    assert!(!transcript.contains("AI synthetic fixture"));
+    pipeline.shutdown();
+    recording.shutdown();
+}

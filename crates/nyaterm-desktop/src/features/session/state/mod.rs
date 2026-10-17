@@ -289,6 +289,7 @@ impl SessionFeatureState {
         while let Some(event) = self.events.pending.pop_front() {
             let session_id = match &event {
                 SessionEvent::Output { session_id, .. }
+                | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }
@@ -819,6 +820,14 @@ impl SessionFeatureState {
             .configure(encoding, scrollback_limit, session_encodings);
     }
 
+    pub(in crate::features) fn begin_terminal_execution_boundary(
+        &self,
+        session_id: &str,
+        token: &str,
+    ) {
+        self.event_bridge.begin_output_boundary(session_id, token);
+    }
+
     pub(in crate::features) fn route_session_events_to_ui(&self, session_id: &str) {
         self.event_bridge.route_session_to_ui(session_id);
     }
@@ -835,6 +844,7 @@ impl SessionFeatureState {
             .iter()
             .map(|event| match event {
                 SessionEvent::Output { session_id, .. }
+                | SessionEvent::OutputBoundary { session_id, .. }
                 | SessionEvent::OutputDropped { session_id, .. }
                 | SessionEvent::CwdChanged { session_id, .. }
                 | SessionEvent::CommandAccepted { session_id, .. }

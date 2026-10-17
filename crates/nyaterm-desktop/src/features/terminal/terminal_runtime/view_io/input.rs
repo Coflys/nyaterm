@@ -833,6 +833,22 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        if self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .capturing(session_id)
+        {
+            return Err("An automatic command is capturing this terminal".into());
+        }
+        self.write_automated_terminal_input(session_id, bytes)
+    }
+
+    pub(in crate::features) fn write_automated_terminal_input(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
         }
@@ -891,6 +907,14 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        if self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .capturing(session_id)
+        {
+            return Err("An automatic command is capturing this terminal".into());
+        }
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
         }
@@ -926,6 +950,14 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        if self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .capturing(session_id)
+        {
+            return Err("An automatic command is capturing this terminal".into());
+        }
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
         }

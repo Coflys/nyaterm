@@ -1,7 +1,5 @@
 //! AI chat, agent loop, background jobs and AI settings runtime.
 
-use std::time::Duration;
-
 pub(in crate::features) mod agent_management;
 mod ai_agent_runtime;
 mod ai_jobs;
@@ -22,14 +20,6 @@ pub(in crate::features) use state::{
     AiFeatureFocus, AiFeatureInit, AiFeatureState, AiFullAccessSetting, AiSettingsMutation,
     ConnectionStatus, ProviderSettingsView,
 };
-
-const AGENT_OBSERVATION_MIN_WAIT: Duration = Duration::from_millis(700);
-const AGENT_OBSERVATION_QUIET: Duration = Duration::from_millis(900);
-/// How often to look for the terminal having fallen quiet, while an agent loop is
-/// running. Comfortably finer than `AGENT_OBSERVATION_QUIET`, so the 900ms threshold
-/// is what decides when the loop advances rather than this interval.
-const AGENT_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(150);
-const AGENT_DEFAULT_STEP_TIMEOUT: Duration = Duration::from_millis(30_000);
 
 pub(in crate::features) fn reasoning_effort_label(
     effort: &nyaterm_core::AiReasoningEffort,
