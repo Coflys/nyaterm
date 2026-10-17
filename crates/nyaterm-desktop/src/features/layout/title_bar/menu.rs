@@ -657,6 +657,47 @@ mod tests {
     }
 
     #[test]
+    fn disabled_terminal_zoom_blocks_menu_commands_and_shortcut_actions() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = menu_app(&mut cx);
+        cx.update_entity(&app, |app, _| {
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_font_size = 20;
+            settings.interaction_terminal_zoom_enabled = false;
+            app.settings.replace_summary(settings);
+        });
+        let window = cx.add_window(|window, cx| {
+            let focus = cx.focus_handle();
+            window.focus(&focus, cx);
+            ShortcutCommandWindow {
+                app: app.clone(),
+                focus,
+            }
+        });
+        for command in [
+            TitleMenuCommand::ZoomIn,
+            TitleMenuCommand::ZoomOut,
+            TitleMenuCommand::ResetZoom,
+        ] {
+            window
+                .update(&mut cx, |_, window, cx| {
+                    app.update(cx, |app, cx| {
+                        app.execute_title_menu_command(&command, window, cx)
+                    });
+                })
+                .unwrap();
+        }
+        cx.dispatch_action(window.into(), crate::shortcuts::ZoomIn);
+        cx.dispatch_action(window.into(), crate::shortcuts::ZoomOut);
+        cx.dispatch_action(window.into(), crate::shortcuts::ResetZoom);
+        assert_eq!(
+            cx.read_entity(&app, |app, _| app.settings.summary().terminal_font_size),
+            20
+        );
+    }
+
+    #[test]
     fn commands_recheck_lock_state_instead_of_executing_a_stale_enabled_menu() {
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);

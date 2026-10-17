@@ -45,6 +45,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+mod wheel_zoom;
+
+use self::wheel_zoom::TerminalWheelZoom;
+
 /// Process-wide surface paint counter (Phase 0 isolation diagnostics).
 pub(in crate::features) static TERMINAL_SURFACE_PAINT_COUNT: AtomicU64 = AtomicU64::new(0);
 pub(in crate::features) static FULL_SHELL_PAINT_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -345,6 +349,7 @@ pub(in crate::features) struct TerminalSurface {
     timestamp_format: String,
     scroll_offset: usize,
     scroll_residual_lines: f32,
+    wheel_zoom: TerminalWheelZoom,
     display_offset: usize,
     scroll_snapshot_pending: bool,
     scrollback_len: usize,
@@ -417,6 +422,7 @@ impl TerminalSurface {
             timestamp_format: nyaterm_core::DEFAULT_TERMINAL_TIMESTAMP_FORMAT.to_string(),
             scroll_offset: 0,
             scroll_residual_lines: 0.0,
+            wheel_zoom: TerminalWheelZoom::default(),
             display_offset: 0,
             scroll_snapshot_pending: false,
             scrollback_len: 0,
@@ -1921,10 +1927,34 @@ impl TerminalSurface {
 
     fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let Some(app) = self.app.as_ref().and_then(WeakEntity::upgrade) else {
+            self.wheel_zoom = TerminalWheelZoom::default();
             return;
         };
         let session_id = self.session_id.clone();
         if session_id.is_empty() {
+            self.wheel_zoom = TerminalWheelZoom::default();
+            return;
+        }
+        if let Some(delta) = self.wheel_zoom.handle_event(
+            event,
+            app.read(cx)
+                .settings
+                .summary()
+                .interaction_terminal_zoom_enabled,
+            cfg!(target_os = "macos"),
+        ) {
+            cx.stop_propagation();
+            if delta != 0 {
+                // Resizing reads and updates terminal surfaces. Release this surface's
+                // update lease before entering the parent, as for protocol scrolling.
+                cx.defer(move |cx| {
+                    app.update(cx, |app, cx| {
+                        if app.settings.summary().interaction_terminal_zoom_enabled {
+                            app.adjust_terminal_font_size(delta, cx);
+                        }
+                    });
+                });
+            }
             return;
         }
         let raw_lines = match event.delta {
@@ -2866,3 +2896,6 @@ impl Render for TerminalSurface {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod wheel_zoom_tests;

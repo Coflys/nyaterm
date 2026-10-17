@@ -136,8 +136,8 @@ impl SettingsPanel {
             ))
             .child(settings_form_section(
                 palette,
-                Some(t!("settings.terminalZoomEnabled")),
-                Some(t!("settings.terminalZoomEnabledDesc")),
+                Some(t!("settings.interactionTerminalPage")),
+                Some(t!("settings.interactionTerminalPageDesc")),
                 settings_form_row(
                     palette,
                     t!("settings.terminalZoomEnabled"),
