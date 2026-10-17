@@ -36,7 +36,6 @@ impl Render for DragFixture {
                 order_index: 0,
                 source_group_id: None,
                 display_name: "Test".into(),
-                kind_label: "Local",
                 kind_icon: "icons/terminal.svg",
                 preview_background: 0,
                 preview_border: 0,
@@ -330,6 +329,128 @@ fn tab_drag_target_drop_observes_release_candidate_then_prevents_detach() {
 
 struct WorkspaceDragFixture {
     app: Entity<NyaTermApp>,
+}
+
+struct StripDragFixture {
+    app: Entity<NyaTermApp>,
+}
+
+impl Render for StripDragFixture {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.app.update(cx, |app, cx| {
+            window.focus(app.terminal.input_focus(), cx);
+            div()
+                .size_full()
+                .track_focus(app.terminal.input_focus())
+                .on_key_down(cx.listener(|app, event, window, cx| {
+                    app.cancel_internal_drag_on_escape(event, window, cx);
+                }))
+                .child(app.session_tab_drag_listener_layer(cx))
+                .child(app.session_tab_strip(cx))
+        })
+    }
+}
+
+#[test]
+fn real_strip_previews_bidirectionally_and_commits_only_on_release_or_cancels_on_escape() {
+    for (cancel, close_target) in [(false, false), (true, false), (false, true)] {
+        let root = TestTempDir::new("nyaterm-strip-reorder");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            let metadata = app.session.metadata("a").unwrap().clone();
+            app.session.set_tab_locked("a", true);
+            for id in ["b", "c"] {
+                app.session.register_session_metadata(id, metadata.clone());
+                app.terminal
+                    .seed_session_view(id.into(), String::new(), "UTF-8");
+            }
+            app.sync_component_theme(cx);
+        });
+        let fixture_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |_, cx| {
+            cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+            StripDragFixture { app: fixture_app }
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("session-tab-a").unwrap();
+        let start = bounds.origin + point(px(30.), px(16.));
+        let right = point(
+            cx.debug_bounds("session-tab-c").unwrap().right() - px(12.),
+            start.y,
+        );
+        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(
+            start + point(px(10.), px(0.)),
+            Some(MouseButton::Left),
+            Default::default(),
+        );
+        cx.simulate_mouse_move(right, Some(MouseButton::Left), Default::default());
+        let assert_order = |expected: &[&str], cx: &mut gpui::VisualTestContext| {
+            app.update(cx, |app, _| {
+                assert_eq!(
+                    app.ordered_tab_sessions()
+                        .iter()
+                        .map(|session| session.id.as_str())
+                        .collect::<Vec<_>>(),
+                    ["a", "b", "c"]
+                );
+                assert_eq!(
+                    app.shell
+                        .tab_strip_motion(None)
+                        .borrow()
+                        .preview("a")
+                        .unwrap(),
+                    expected
+                );
+            });
+        };
+        assert_order(&["b", "c", "a"], cx);
+        cx.simulate_mouse_move(start, Some(MouseButton::Left), Default::default());
+        assert_order(&["a", "b", "c"], cx);
+        cx.simulate_mouse_move(right, Some(MouseButton::Left), Default::default());
+        assert_order(&["b", "c", "a"], cx);
+        if cancel {
+            cx.simulate_keystrokes("escape");
+        }
+        if close_target {
+            app.update(cx, |app, cx| {
+                app.session.remove_session_catalog("b");
+                cx.notify();
+            });
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        cx.simulate_mouse_up(right, MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let expected = if close_target {
+                vec!["a", "c"]
+            } else if cancel {
+                vec!["a", "b", "c"]
+            } else {
+                vec!["b", "c", "a"]
+            };
+            assert_eq!(
+                app.ordered_tab_sessions()
+                    .iter()
+                    .map(|session| session.id.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(
+                app.shell
+                    .tab_strip_motion(None)
+                    .borrow()
+                    .preview("a")
+                    .is_none()
+            );
+        });
+    }
 }
 
 impl Render for WorkspaceDragFixture {

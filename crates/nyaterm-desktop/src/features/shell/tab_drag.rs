@@ -11,6 +11,109 @@ use crate::features::NyaTermApp;
 mod tests;
 
 impl NyaTermApp {
+    pub(in crate::features) fn drop_session_tab_on_strip(
+        &mut self,
+        payload: &SessionTabDragPayload,
+        group: &Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.accept_session_tab_drop(payload, cx);
+        if self.commit_session_tab_preview(payload, group, cx) {
+            return;
+        }
+        if payload.source_workspace_id == self.workspace_id {
+            if let Some(group) = group {
+                self.dock_tab_on_terminal_window_leaf(
+                    payload.session_id.clone(),
+                    group.clone(),
+                    crate::models::TabDockZone::Center,
+                    cx,
+                );
+            } else {
+                self.reorder_session_to_end(payload.session_id.clone(), cx);
+            }
+        } else {
+            self.request_tab_tree_move(
+                payload,
+                group
+                    .clone()
+                    .map(|leaf_id| nyaterm_core::MoveTabPlacement::TerminalLeaf {
+                        leaf_id,
+                        edge: None,
+                    })
+                    .unwrap_or(nyaterm_core::MoveTabPlacement::Append),
+                cx,
+            );
+        }
+    }
+
+    pub(in crate::features) fn commit_session_tab_preview(
+        &mut self,
+        payload: &SessionTabDragPayload,
+        group: &Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if payload.source_workspace_id != self.workspace_id || &payload.source_group_id != group {
+            return false;
+        }
+        let motion = self.shell.tab_strip_motion(group.clone());
+        let preview = motion
+            .borrow()
+            .preview(&payload.session_id)
+            .map(<[String]>::to_vec);
+        let Some(preview) = preview else {
+            // Membership changed or measurement was incomplete: a stale
+            // snapshot must not be converted into a different reorder.
+            self.clear_session_tab_drag(cx);
+            return true;
+        };
+        let live = if let Some(group) = group {
+            self.terminal
+                .terminal_group_tabs(group)
+                .map(|(ids, _)| ids)
+                .unwrap_or_default()
+        } else {
+            self.ordered_tab_sessions()
+                .into_iter()
+                .map(|session| session.id)
+                .collect()
+        };
+        let preview = preview
+            .into_iter()
+            .filter(|id| live.contains(id))
+            .collect::<Vec<_>>();
+        if !motion.borrow().matches_sessions(&live) {
+            self.clear_session_tab_drag(cx);
+            return true;
+        }
+        let Some(index) = preview.iter().position(|id| id == &payload.session_id) else {
+            self.clear_session_tab_drag(cx);
+            return true;
+        };
+        if preview.len() != live.len() {
+            self.clear_session_tab_drag(cx);
+            return true;
+        }
+        if preview == live {
+            self.clear_session_tab_drag(cx);
+            return true;
+        }
+        motion.borrow_mut().finish(std::time::Instant::now());
+        if let Some(next) = preview.get(index + 1) {
+            self.reorder_session_relative(payload.session_id.clone(), next.clone(), false, cx);
+        } else if index > 0 {
+            self.reorder_session_relative(
+                payload.session_id.clone(),
+                preview[index - 1].clone(),
+                true,
+                cx,
+            );
+        } else {
+            self.clear_session_tab_drag(cx);
+        }
+        true
+    }
+
     pub(in crate::features) fn session_tab_drag_listener_layer(
         &self,
         cx: &Context<Self>,
@@ -39,6 +142,10 @@ impl NyaTermApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell
+            .tab_strip_motion(payload.source_group_id.clone())
+            .borrow_mut()
+            .begin(&payload.session_id, f32::from(grab_offset.x));
         // The new workspace has one strip tab. Include the strip's offset in
         // the window so its first tab, rather than the window corner, follows
         // the grab point (including the sidebar and title-bar space).
