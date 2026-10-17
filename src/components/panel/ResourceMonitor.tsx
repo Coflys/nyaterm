@@ -20,10 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  type NetworkHistoryStore,
-  useNetworkHistorySeries,
-} from "@/hooks/useNetworkHistory";
+import { type NetworkHistoryStore, useNetworkHistorySeries } from "@/hooks/useNetworkHistory";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import NetworkTrafficChart, { formatNetworkRate } from "./NetworkTrafficChart";
 
@@ -166,7 +163,10 @@ function SectionCard({
           >
             {icon}
           </span>
-          <span className="truncate text-xs font-semibold tracking-wide" style={{ color: "var(--df-text)" }}>
+          <span
+            className="truncate text-xs font-semibold tracking-wide"
+            style={{ color: "var(--df-text)" }}
+          >
             {title}
           </span>
         </div>
@@ -193,9 +193,9 @@ export default function ResourceMonitor({
   const { t } = useTranslation();
   const networkHistory = useNetworkHistorySeries(networkHistoryStore, activeSessionId);
   const [cpuExpanded, setCpuExpanded] = useState(false);
-  const [selectedNetworkInterfaces, setSelectedNetworkInterfaces] = useState<Record<string, string>>(
-    {},
-  );
+  const [selectedNetworkInterfaces, setSelectedNetworkInterfaces] = useState<
+    Record<string, string>
+  >({});
   const { stats, error, isManualRefreshing, refresh } = remoteStats;
 
   const selectedNetworkInterface = activeSessionId
@@ -226,9 +226,7 @@ export default function ResourceMonitor({
   }, [activeSessionId, selectedNetwork, selectedNetworkInterface, stats]);
 
   const currentTraffic =
-    effectiveNetworkInterface === ALL_NETWORK_INTERFACES
-      ? stats?.network_summary
-      : selectedNetwork;
+    effectiveNetworkInterface === ALL_NETWORK_INTERFACES ? stats?.network_summary : selectedNetwork;
   const networkHistoryPoints =
     effectiveNetworkInterface === ALL_NETWORK_INTERFACES
       ? networkHistory.summary
@@ -348,6 +346,7 @@ export default function ResourceMonitor({
                       type="button"
                       className="flex items-center gap-0.5 text-[0.6875rem] transition-colors duration-150 rounded px-1 py-0.5 -ml-1"
                       style={{ color: "var(--df-text-muted)" }}
+                      aria-expanded={cpuExpanded}
                       onClick={() => setCpuExpanded((v) => !v)}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.backgroundColor =
@@ -369,22 +368,25 @@ export default function ResourceMonitor({
                     </button>
 
                     <div
-                      className="overflow-hidden transition-all duration-300 ease-in-out"
+                      className="grid transition-[grid-template-rows,opacity] duration-300 ease-in-out"
+                      aria-hidden={!cpuExpanded}
                       style={{
-                        maxHeight: cpuExpanded ? `${stats.cpu.per_core.length * 24 + 8}px` : "0px",
+                        gridTemplateRows: cpuExpanded ? "1fr" : "0fr",
                         opacity: cpuExpanded ? 1 : 0,
                       }}
                     >
-                      <div className="pt-1.5 space-y-0.5">
-                        {stats.cpu.per_core.map((core) => {
-                          return (
-                            <CoreRow
-                              key={`cpu-core-${core.id}`}
-                              id={core.id}
-                              usage={core.usage}
-                            />
-                          );
-                        })}
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="pt-1.5 space-y-0.5">
+                          {stats.cpu.per_core.map((core) => {
+                            return (
+                              <CoreRow
+                                key={`cpu-core-${core.id}`}
+                                id={core.id}
+                                usage={core.usage}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -627,7 +629,7 @@ function LoadBadge({ label, value }: { label: string; value: number }) {
 function CoreRow({ id, usage }: { id: number; usage: number }) {
   const color = usageColor(usage);
   return (
-    <div className="flex items-center gap-1.5 h-[22px]">
+    <div className="flex items-center gap-1.5 min-h-[22px]">
       <span
         className="w-8 text-right text-[0.625rem] font-mono tabular-nums shrink-0"
         style={{ color: "var(--df-text-muted)" }}
