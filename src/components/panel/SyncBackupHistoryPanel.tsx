@@ -22,6 +22,7 @@ import {
   formatDuration,
   formatTimestamp,
   isRemoteInconsistentConflict,
+  localizeCloudSyncMessage,
   shortValue,
 } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
@@ -103,7 +104,8 @@ function buildHistorySummary(
   statusLabels: Record<string, string>,
   t: TFunction,
 ) {
-  const normalized = normalizeHistoryMessage(entry.message);
+  const localizedMessage = localizeCloudSyncMessage(entry.message, (key) => t(key));
+  const normalized = normalizeHistoryMessage(localizedMessage);
   if (!normalized) {
     return t("settings.historySummaryKindStatus", {
       kind: kindLabels[entry.kind as EntryKind] ?? entry.kind,
@@ -111,12 +113,12 @@ function buildHistorySummary(
     });
   }
 
-  const firstSentence = extractFirstSentence(entry.message);
+  const firstSentence = extractFirstSentence(localizedMessage);
   if (firstSentence && firstSentence.length <= 110) {
     return firstSentence;
   }
 
-  if (!entry.message.includes("\n") && normalized.length <= 110) {
+  if (!localizedMessage.includes("\n") && normalized.length <= 110) {
     return normalized;
   }
 
@@ -124,7 +126,7 @@ function buildHistorySummary(
     kind: kindLabels[entry.kind as EntryKind] ?? entry.kind,
     status: statusLabels[entry.status as EntryStatus] ?? entry.status,
   });
-  const httpStatus = extractHttpStatus(entry.message);
+  const httpStatus = extractHttpStatus(localizedMessage);
 
   if (!httpStatus) {
     return genericSummary;
@@ -363,7 +365,7 @@ function SyncBackupHistoryPanel() {
 
           {status.message && !status.conflict ? (
             <div className="mt-1.5 break-words pl-4 text-sm leading-5 text-muted-foreground">
-              {status.message}
+              {localizeCloudSyncMessage(status.message, (key) => t(key))}
             </div>
           ) : null}
         </div>
@@ -585,7 +587,7 @@ const HistoryEntryRow = memo(function HistoryEntryRow({
                         : "bg-muted/25 text-muted-foreground",
                     )}
                   >
-                    {entry.message}
+                    {localizeCloudSyncMessage(entry.message, (key) => t(key))}
                   </pre>
                 ) : null}
 

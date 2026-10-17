@@ -3,6 +3,7 @@ import {
   GIST_CAPACITY_ERROR_CODE,
   isGistCapacitySyncFailure,
   isGistCloudProvider,
+  localizeCloudSyncMessage,
   needsGistCapacityRecovery,
 } from "@/lib/cloudSync";
 
@@ -19,6 +20,28 @@ describe("cloud sync gist capacity helpers", () => {
     expect(isGistCloudProvider("s3")).toBe(false);
     expect(isGistCloudProvider(null)).toBe(false);
     expect(isGistCloudProvider(undefined)).toBe(false);
+  });
+
+  describe("cloud sync message localization", () => {
+    it("translates known backend status messages", () => {
+      expect(
+        localizeCloudSyncMessage(
+          "Cloud sync is up to date",
+          (key) => `[${key}]`,
+        ),
+      ).toBe("[settings.syncMessageUpToDate]");
+      expect(
+        localizeCloudSyncMessage(
+          "Cloud sync snapshot uploaded",
+          (key) => `[${key}]`,
+        ),
+      ).toBe("[settings.syncMessageSnapshotUploaded]");
+    });
+
+    it("preserves unknown backend messages", () => {
+      const message = "Remote storage returned an unexpected response.";
+      expect(localizeCloudSyncMessage(message, (key) => `[${key}]`)).toBe(message);
+    });
   });
 
   it("matches the legacy capacity failure messages", () => {
