@@ -345,6 +345,18 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings.theme_designer().submitting {
+            cx.emit(AppLifecycleEvent::ShutdownCancelled);
+            return;
+        }
+        if self.settings.theme_designer().dirty() {
+            self.activate_settings_window(cx);
+            self.theme_designer_action(
+                crate::features::settings::theme_designer::ThemeIntent::Quit(open_sessions),
+                cx,
+            );
+            return;
+        }
         if self.settings.summary().confirm_on_close && open_sessions > 0 {
             // Reuse the close-all confirmation as the quit-with-sessions gate.
             // A title-bar close control can also produce the native window-close
@@ -417,6 +429,9 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        if self.session.dialog_should_quit_after_close_all() {
+            cx.emit(AppLifecycleEvent::ShutdownCancelled);
+        }
         self.update
             .update(cx, |update, _| update.install_requested = false);
         self.session.dialog_cancel_close_all_sessions_confirm();

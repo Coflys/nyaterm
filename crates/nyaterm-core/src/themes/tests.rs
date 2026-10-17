@@ -2,6 +2,82 @@ use super::{ThemeCatalog, ThemeConfig, builtins, parse_color, resolve_theme};
 use serde_json::json;
 
 #[test]
+fn theme_application_changes_only_the_requested_scope() {
+    use crate::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let original = crate::models::settings::AppSettingsSummary::default();
+    let base = ThemeSettings::from(&original);
+    for target in [
+        ThemeApplyTarget::Ui,
+        ThemeApplyTarget::Terminal,
+        ThemeApplyTarget::BothFollowUi,
+    ] {
+        let commit = ThemeMutation::Apply {
+            id: "dracula".into(),
+            target,
+        }
+        .prepare(&base)
+        .unwrap();
+        let mut draft = original.clone();
+        draft.terminal_font_size = 31;
+        draft.background_image_path = Some("draft.png".into());
+        commit.merge_into(&mut draft);
+        assert_eq!(draft.terminal_font_size, 31);
+        assert_eq!(draft.background_image_path.as_deref(), Some("draft.png"));
+        assert_eq!(
+            draft.theme,
+            if target == ThemeApplyTarget::Terminal {
+                &original.theme
+            } else {
+                "dracula"
+            }
+        );
+        assert_eq!(
+            draft.terminal_theme.as_deref(),
+            if target == ThemeApplyTarget::Terminal {
+                Some("dracula")
+            } else {
+                None
+            }
+        );
+    }
+}
+
+#[test]
+fn saving_and_deleting_an_active_theme_repairs_references_without_losing_unknown_records() {
+    use crate::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let base = ThemeSettings::from(&crate::models::settings::AppSettingsSummary::default());
+    let theme = builtins()[0].copy_as_custom();
+    let id = theme.id.clone();
+    let mut saved = ThemeMutation::Save {
+        theme: Box::new(theme),
+        target: Some(ThemeApplyTarget::BothFollowUi),
+    }
+    .prepare(&base)
+    .unwrap();
+    saved.settings.terminal = Some(id.clone());
+    saved
+        .settings
+        .catalog
+        .0
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"future": true}));
+    let deleted = ThemeMutation::Delete { id }
+        .prepare(&saved.settings)
+        .unwrap();
+    assert_eq!(deleted.settings.ui, crate::themes::DEFAULT_THEME_ID);
+    assert_eq!(deleted.settings.terminal, None);
+    assert_eq!(deleted.settings.catalog.0, json!([{"future": true}]));
+    assert!(
+        ThemeMutation::Delete {
+            id: "github-dark".into()
+        }
+        .prepare(&base)
+        .is_err()
+    );
+}
+
+#[test]
 fn tauri_builtins_and_optional_intense_foreground_round_trip() {
     for original in builtins() {
         assert!(

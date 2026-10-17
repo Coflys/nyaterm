@@ -3485,9 +3485,9 @@
     "uninstall": "Uninstall (keep data)"
   },
   "themeDesigner": {
-    "manage": "Manage custom themes",
-    "description": "Copy an existing theme and edit UI and terminal colors. Edits only affect this preview. Save the theme, then Apply settings to persist it.",
-    "save": "Save theme",
+    "manage": "Manage themes",
+    "description": "Operations on this page are saved immediately. Canceling settings does not undo them. Browsing and editing only affect the preview.",
+    "save": "Save changes",
     "discard": "Discard edits",
     "back": "Keep editing",
     "unsaved": "This theme has unsaved edits. Save, discard, or keep editing.",
@@ -3562,6 +3562,28 @@
         "brightCyan": "ANSI bright cyan",
         "brightWhite": "ANSI bright white"
       }
-    }
+    },
+    "saved": "Theme saved.",
+    "returnAppearance": "Back",
+    "create": "Create theme",
+    "reload": "Reload saved themes",
+    "builtins": "Built-in themes",
+    "mine": "My themes",
+    "currentUi": "UI",
+    "currentTerminal": "Terminal",
+    "rename": "Rename",
+    "copy": "Duplicate",
+    "createCopy": "Create a copy",
+    "edit": "Edit",
+    "operations": "Theme actions",
+    "previewUnchanged": "Invalid values: the preview shows the last valid colors.",
+    "saveActive": "Saving a theme that is in use immediately refreshes every place using it.",
+    "applyUi": "Apply to UI",
+    "applyTerminal": "Apply to terminal",
+    "applyBoth": "Apply to both",
+    "saveBoth": "Save and apply to both",
+    "followExplanation": "Applying to both makes the terminal follow the UI. Applying to the UI also updates terminals already following it.",
+    "deleteConfirmation": "Delete “%{name}”? If used by the UI, it will switch to GitHub Dark. Terminals explicitly using this theme will follow the UI. This cannot be undone.",
+    "conflict": "Saved themes changed elsewhere. Your edits are preserved. Export them or discard them and reload before retrying."
   }
 }

@@ -3484,9 +3484,9 @@
     "uninstall": "Désinstaller（conserver les données）"
   },
   "themeDesigner": {
-    "manage": "Gérer les thèmes personnalisés",
-    "description": "Copiez un thème existant et modifiez les couleurs de l’interface et du terminal. Seul l’aperçu change pendant la modification. Enregistrez le thème, puis appliquez les paramètres pour le conserver.",
-    "save": "Enregistrer le thème",
+    "manage": "Gérer les thèmes",
+    "description": "Les opérations de cette page sont enregistrées immédiatement. Annuler les réglages ne les annule pas. La navigation et les modifications ne changent que l’aperçu.",
+    "save": "Enregistrer les modifications",
     "discard": "Abandonner les modifications",
     "back": "Continuer la modification",
     "unsaved": "Ce thème contient des modifications non enregistrées. Enregistrez, abandonnez ou continuez la modification.",
@@ -3561,6 +3561,28 @@
         "brightCyan": "ANSI cyan clair",
         "brightWhite": "ANSI blanc clair"
       }
-    }
+    },
+    "saved": "Thème enregistré.",
+    "returnAppearance": "Retour",
+    "create": "Créer un thème",
+    "reload": "Recharger les thèmes enregistrés",
+    "builtins": "Thèmes intégrés",
+    "mine": "Mes thèmes",
+    "currentUi": "Interface",
+    "currentTerminal": "Terminal",
+    "rename": "Renommer",
+    "copy": "Dupliquer",
+    "createCopy": "Créer une copie",
+    "edit": "Modifier",
+    "operations": "Actions du thème",
+    "previewUnchanged": "Valeurs incorrectes : l’aperçu conserve les dernières couleurs valides.",
+    "saveActive": "Enregistrer un thème utilisé actualise immédiatement toutes ses utilisations.",
+    "applyUi": "Appliquer à l’interface",
+    "applyTerminal": "Appliquer au terminal",
+    "applyBoth": "Appliquer aux deux",
+    "saveBoth": "Enregistrer et appliquer aux deux",
+    "followExplanation": "Appliquer aux deux fait suivre le terminal à l’interface. Appliquer à l’interface actualise aussi les terminaux qui la suivent déjà.",
+    "deleteConfirmation": "Supprimer « %{name} » ? Si l’interface l’utilise, elle passera à GitHub Dark. Les terminaux utilisant explicitement ce thème suivront l’interface. Cette opération est irréversible.",
+    "conflict": "Les thèmes enregistrés ont changé ailleurs. Vos modifications sont conservées. Exportez-les ou abandonnez-les et rechargez avant de réessayer."
   }
 }

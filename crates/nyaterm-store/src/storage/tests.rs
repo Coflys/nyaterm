@@ -10,6 +10,111 @@ use nyaterm_core::{
 };
 
 #[test]
+fn theme_commits_are_atomic_and_preserve_unrelated_settings_and_unknown_fields() {
+    use crate::storage::ThemeCommitOutcome;
+    use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let dir = unique_temp_dir("theme-only-commit");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut theme = nyaterm_core::themes::builtins()[0].copy_as_custom();
+    theme
+        .extra
+        .insert("future".into(), serde_json::json!({"version": 99}));
+    let id = theme.id.clone();
+    store
+        .save_settings_value(&serde_json::json!({
+            "appearance": {"font_size": 19, "future": 42, "custom_themes": [{"unsupported": true}]},
+            "future": {"keep": true}
+        }))
+        .unwrap();
+    let base = ThemeSettings::from(&store.load_app_settings_summary().unwrap());
+    let mutation = ThemeMutation::Save {
+        theme: Box::new(theme),
+        target: Some(ThemeApplyTarget::BothFollowUi),
+    };
+    let ThemeCommitOutcome::Committed(commit) =
+        store.commit_theme_mutation(&base, &mutation).unwrap()
+    else {
+        panic!("unexpected conflict");
+    };
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["appearance"]["font_size"], 19);
+    assert_eq!(raw["appearance"]["future"], 42);
+    assert_eq!(raw["future"], serde_json::json!({"keep": true}));
+    assert_eq!(
+        raw["appearance"]["custom_themes"][0],
+        serde_json::json!({"unsupported": true})
+    );
+    assert_eq!(
+        raw["appearance"]["custom_themes"][1]["future"],
+        serde_json::json!({"version": 99})
+    );
+    assert_eq!(raw["appearance"]["theme"], id);
+    assert!(raw["appearance"]["terminal_theme"].is_null());
+    assert!(matches!(
+        store.commit_theme_mutation(&base, &mutation).unwrap(),
+        ThemeCommitOutcome::Conflict
+    ));
+    assert_eq!(store.load_settings_value().unwrap(), raw);
+    let mut invalid = commit.settings.catalog.resolve(&id).unwrap();
+    invalid.colors.primary = "invalid".into();
+    assert!(
+        store
+            .commit_theme_mutation(
+                &commit.settings,
+                &ThemeMutation::Save {
+                    theme: Box::new(invalid),
+                    target: Some(ThemeApplyTarget::Ui)
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(store.load_settings_value().unwrap(), raw);
+    let ThemeCommitOutcome::Committed(deleted) = store
+        .commit_theme_mutation(&commit.settings, &ThemeMutation::Delete { id })
+        .unwrap()
+    else {
+        panic!("unexpected conflict");
+    };
+    assert_eq!(deleted.settings.ui, "github-dark");
+    assert!(deleted.settings.catalog.available().is_empty());
+    assert_eq!(
+        store.load_settings_value().unwrap()["appearance"]["custom_themes"],
+        serde_json::json!([{"unsupported": true}])
+    );
+}
+
+#[test]
+fn applying_themes_preserves_an_unsupported_catalog_and_concurrent_unrelated_edits() {
+    use crate::storage::ThemeCommitOutcome;
+    use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let dir = unique_temp_dir("theme-only-future");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let future = serde_json::json!({"format": 99});
+    store
+        .save_settings_value(&serde_json::json!({"appearance": {"custom_themes": future}}))
+        .unwrap();
+    let base = ThemeSettings::from(&store.load_app_settings_summary().unwrap());
+    let mut raw = store.load_settings_value().unwrap();
+    raw["appearance"]["font_size"] = serde_json::json!(25);
+    store.save_settings_value(&raw).unwrap();
+    assert!(matches!(
+        store
+            .commit_theme_mutation(
+                &base,
+                &ThemeMutation::Apply {
+                    id: "dracula".into(),
+                    target: ThemeApplyTarget::Ui
+                }
+            )
+            .unwrap(),
+        ThemeCommitOutcome::Committed(_)
+    ));
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["appearance"]["custom_themes"], future);
+    assert_eq!(raw["appearance"]["font_size"], 25);
+}
+
+#[test]
 fn custom_themes_preserve_tauri_records_and_unknown_data_when_saving_appearance() {
     let dir = unique_temp_dir("custom-themes-compatibility");
     let store = ConnectionStore::open(&dir).expect("store");

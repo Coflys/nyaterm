@@ -264,8 +264,28 @@ impl DesktopController {
         settings: AppSettingsSummary,
         cx: &mut Context<Self>,
     ) {
+        self.publish_settings_change(source, settings, false, cx);
+    }
+
+    /// The source already merged this commit into its settings draft. Echoing a
+    /// whole-settings event back would misreport its unrelated edits as a conflict.
+    pub(crate) fn publish_theme_settings(
+        &mut self,
+        source: WorkspaceId,
+        settings: AppSettingsSummary,
+        cx: &mut Context<Self>,
+    ) {
+        self.publish_settings_change(source, settings, true, cx);
+    }
+
+    fn publish_settings_change(
+        &mut self,
+        source: WorkspaceId,
+        settings: AppSettingsSummary,
+        exclude_source: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.auto_sync.settings_changed();
-        let _ = source;
         let Some(process_state) = self.process_state.clone() else {
             return;
         };
@@ -274,7 +294,7 @@ impl DesktopController {
         let event = process_state.update(cx, |state, cx| {
             state.mutate(GlobalStateMutation::UpdateSettings(Box::new(settings)), cx)
         });
-        self.broadcast_shared_state(event, cx);
+        self.broadcast_shared_state_except(event, exclude_source.then_some(source), cx);
     }
 
     pub fn activate_or_claim_settings(

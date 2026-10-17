@@ -363,20 +363,24 @@ impl DesktopController {
                 })
             })
             .collect::<Vec<_>>();
-        let workspace_id = ready
-            .iter()
-            .copied()
-            .find(|id| {
-                self.windows.get(id).is_some_and(|entry| {
-                    entry
-                        .shell
-                        .update(cx, |shell, cx| {
-                            shell
-                                .app
-                                .as_ref()
-                                .is_some_and(|app| app.read(cx).has_live_sessions())
-                        })
-                        .unwrap_or(false)
+        // Settings has one owner. Route process quit through it so its theme draft
+        // cannot be lost just because another workspace has the most recent session.
+        let workspace_id = self
+            .settings_owner_workspace_id
+            .filter(|id| ready.contains(id))
+            .or_else(|| {
+                ready.iter().copied().find(|id| {
+                    self.windows.get(id).is_some_and(|entry| {
+                        entry
+                            .shell
+                            .update(cx, |shell, cx| {
+                                shell
+                                    .app
+                                    .as_ref()
+                                    .is_some_and(|app| app.read(cx).has_live_sessions())
+                            })
+                            .unwrap_or(false)
+                    })
                 })
             })
             .or_else(|| {

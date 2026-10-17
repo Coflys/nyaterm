@@ -1730,22 +1730,11 @@ impl SettingsFeatureState {
     ) -> &mut super::theme_designer::ThemeDesignerState {
         &mut self.appearance.designer
     }
-    pub(in crate::features) fn store_custom_theme(
+    pub(in crate::features) fn merge_theme_commit(
         &mut self,
-        theme: nyaterm_core::themes::ThemeConfig,
-    ) -> Result<(), String> {
-        self.summary.custom_themes.upsert(theme)?;
-        self.refresh_theme_palettes();
-        Ok(())
-    }
-    pub(in crate::features) fn delete_custom_theme(&mut self, id: &str) {
-        self.summary.custom_themes.remove(id);
-        if self.summary.theme == id {
-            self.summary.theme = "github-dark".into();
-        }
-        if self.summary.terminal_theme.as_deref() == Some(id) {
-            self.summary.terminal_theme = None;
-        }
+        commit: &nyaterm_core::themes::management::ThemeCommit,
+    ) {
+        commit.merge_into(&mut self.summary);
         self.refresh_theme_palettes();
     }
 }

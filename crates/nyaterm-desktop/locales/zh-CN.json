@@ -3485,9 +3485,9 @@
     "uninstall": "卸载（保留数据）"
   },
   "themeDesigner": {
-    "manage": "管理自定义主题",
-    "description": "从已有主题复制，统一编辑界面与终端配色。编辑仅影响下方预览；保存主题后，请点击设置页“应用”以持久保存。",
-    "save": "保存主题",
+    "manage": "管理主题",
+    "description": "此页操作即时保存，不受设置页取消影响。浏览和编辑仅影响局部预览。",
+    "save": "保存修改",
     "discard": "放弃编辑",
     "back": "返回编辑",
     "unsaved": "当前主题有未保存的编辑。请保存、放弃或返回。",
@@ -3562,6 +3562,28 @@
         "brightCyan": "ANSI 亮青色",
         "brightWhite": "ANSI 亮白色"
       }
-    }
+    },
+    "saved": "主题已保存。",
+    "returnAppearance": "返回",
+    "create": "创建主题",
+    "reload": "重新载入已保存主题",
+    "builtins": "内置主题",
+    "mine": "我的主题",
+    "currentUi": "界面",
+    "currentTerminal": "终端",
+    "rename": "重命名",
+    "copy": "复制",
+    "createCopy": "创建副本",
+    "edit": "编辑",
+    "operations": "主题操作",
+    "previewUnchanged": "存在非法值，预览保留上次有效配色。",
+    "saveActive": "保存正在使用的主题后，所有使用处立即刷新。",
+    "applyUi": "应用到界面",
+    "applyTerminal": "应用到终端",
+    "applyBoth": "同时应用",
+    "saveBoth": "保存并同时应用",
+    "followExplanation": "同时应用会将终端设为跟随界面。应用到界面也会更新已跟随界面的终端。",
+    "deleteConfirmation": "删除“%{name}”？若界面正在使用它，将切换到 GitHub Dark；显式使用它的终端将恢复跟随界面。此操作无法撤销。",
+    "conflict": "已保存主题在其他位置发生变化，编辑内容已保留。请先导出编辑，或放弃编辑并重新载入后重试。"
   }
 }

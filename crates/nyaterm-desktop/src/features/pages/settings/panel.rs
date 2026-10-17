@@ -1077,6 +1077,10 @@ impl Render for SettingsPanel {
             return div().size_full().into_any_element();
         };
 
+        if snapshot.settings.theme_designer.open {
+            return self.theme_designer_section(cx);
+        }
+
         let palette = snapshot.chrome.palette;
         let settings_title = t!("settings.title");
         let active_group = t!(snapshot.active_tab.group_i18n_key());
@@ -2014,7 +2018,7 @@ mod tests {
 
     use gpui::{
         AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, VisualTestContext, div, px,
+        TestAppContext, VisualTestContext, div, prelude::FluentBuilder as _, px,
     };
     use nyaterm_core::{AppRuntime, RuntimeMode};
 
@@ -2057,6 +2061,7 @@ mod tests {
 
     struct MainHost {
         app: Entity<NyaTermApp>,
+        fill: bool,
     }
 
     impl Render for MainHost {
@@ -2065,15 +2070,21 @@ mod tests {
             _window: &mut gpui::Window,
             cx: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
-            div().w(px(360.)).h(px(720.)).flex().flex_col().child(
-                div().flex_1().min_h_0().overflow_hidden().child(
-                    self.app
-                        .read(cx)
-                        .settings_panel
-                        .clone()
-                        .cached(crate::features::layout::cached_panel_style()),
-                ),
-            )
+            div()
+                .w(px(360.))
+                .h(px(720.))
+                .when(self.fill, |host| host.size_full())
+                .flex()
+                .flex_col()
+                .child(
+                    div().flex_1().min_h_0().overflow_hidden().child(
+                        self.app
+                            .read(cx)
+                            .settings_panel
+                            .clone()
+                            .cached(crate::features::layout::cached_panel_style()),
+                    ),
+                )
         }
     }
 
@@ -2137,6 +2148,7 @@ mod tests {
         let host_app = app.clone();
         let (_, vcx) = cx.add_window_view(move |_, _| MainHost {
             app: host_app.clone(),
+            fill: false,
         });
         let vcx: &mut VisualTestContext = vcx;
         vcx.run_until_parked();
@@ -2164,6 +2176,66 @@ mod tests {
 
     fn rebuilds(panel: &Entity<SettingsPanel>, cx: &mut gpui::App) -> usize {
         panel.read(cx).rebuild_count
+    }
+
+    #[test]
+    fn theme_manager_can_render_browsing_editing_and_unsaved_navigation() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+        let dir = TestConfigDir::new("nyaterm-theme-manager-view");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        // Paint one surface: open_page also opens a native settings window.
+        // Painting the same input entities in both hosts makes their geometry
+        // notifications alternate forever between the two window sizes.
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.begin_settings_draft(cx);
+            app.flush_settings_panel_snapshots(cx);
+        });
+        let host_app = app.clone();
+        let (_, vcx) = cx.add_window_view(move |_, _| MainHost {
+            app: host_app,
+            fill: true,
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::Appearance, cx);
+                app.theme_designer_action(ThemeIntent::Toggle, cx);
+            })
+        });
+        draw(&app, vcx);
+        vcx.update(|window, _| window.resize(gpui::size(px(640.), px(480.))));
+        draw(&app, vcx);
+        vcx.update(|window, _| window.resize(gpui::size(px(1000.), px(720.))));
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert!(!app.settings.theme_designer().editing);
+                app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
+            })
+        });
+        draw(&app, vcx);
+        vcx.update(|window, _| window.resize(gpui::size(px(640.), px(480.))));
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.existing_text_input("theme.designer.name").is_some());
+                app.edit_theme_designer("primary", "invalid".into(), cx);
+                app.theme_designer_action(ThemeIntent::Toggle, cx);
+            })
+        });
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.settings.theme_designer().open);
+                assert!(app.settings.theme_designer().pending.is_some());
+                app.resolve_theme_designer_pending(Some(false), cx);
+            })
+        });
+        draw(&app, vcx);
+        vcx.update(|_, cx| assert!(!app.read(cx).settings.theme_designer().open));
     }
 
     #[test]

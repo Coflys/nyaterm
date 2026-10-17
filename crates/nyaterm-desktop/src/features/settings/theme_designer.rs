@@ -1,6 +1,8 @@
-//! Theme editing is separate from the settings draft until the user saves it.
+//! Theme drafts are local; confirmed theme operations persist independently of settings.
 use gpui::{Context, PathPromptOptions};
+use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
 use nyaterm_core::themes::{COLOR_FIELDS, ThemeConfig, contrast_ratio, resolve_theme};
+use nyaterm_store::{StoreDomain, ThemeCommitOutcome, store_mutation};
 use nyaterm_ui::ThemePalette;
 use rust_i18n::t;
 
@@ -14,11 +16,21 @@ pub(in crate::features) enum ThemeIntent {
     Import,
     Delete,
     Apply(bool),
+    CloseSettings,
+    Quit(usize),
+    Edit,
+    Reload,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(in crate::features) struct ThemeDesignerState {
     pub open: bool,
+    pub editing: bool,
+    pub submitting: bool,
+    pub delete_confirmation: bool,
+    pub close_confirmation: bool,
+    pub restore_focus: bool,
+    expected: Option<ThemeSettings>,
     pub draft: Option<ThemeConfig>,
     baseline: Option<ThemeConfig>,
     pub terminal_tab: bool,
@@ -37,6 +49,9 @@ impl ThemeDesignerState {
     pub fn load(&mut self, theme: ThemeConfig) {
         self.generation += 1;
         self.open = true;
+        self.restore_focus = false;
+        self.editing = false;
+        self.delete_confirmation = false;
         self.baseline = Some(theme.clone());
         self.draft = Some(theme);
         self.pending = None;
@@ -51,6 +66,16 @@ impl ThemeDesignerState {
         };
     }
     pub fn edit(&mut self, field: &str, value: String) {
+        if self.submitting || !self.editing {
+            return;
+        }
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|theme| nyaterm_core::themes::is_builtin(&theme.id))
+        {
+            return;
+        }
         let Some(theme) = self.draft.as_mut() else {
             return;
         };
@@ -94,6 +119,21 @@ impl NyaTermApp {
         intent: ThemeIntent,
         cx: &mut Context<Self>,
     ) {
+        if self.settings.theme_designer().submitting {
+            return;
+        }
+        if self.settings.theme_designer().pending.is_some() {
+            return;
+        }
+        if self.settings.theme_designer().expected.is_none() {
+            let expected = ThemeSettings::from(
+                self.shell
+                    .settings_draft_snapshot()
+                    .map(|snapshot| &snapshot.settings)
+                    .unwrap_or(self.settings.summary()),
+            );
+            self.settings.theme_designer_mut().expected = Some(expected);
+        }
         if self.settings.theme_designer().dirty() {
             self.settings.theme_designer_mut().pending = Some(intent);
             self.focus_settings_tab(crate::models::SettingsTab::Appearance, cx);
@@ -109,17 +149,19 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let pending = self.settings.theme_designer_mut().pending.take();
+        if save.is_none() && matches!(pending, Some(ThemeIntent::Quit(_))) {
+            cx.emit(crate::features::AppLifecycleEvent::ShutdownCancelled);
+        }
         if let Some(save) = save {
-            if save && !self.save_theme_designer(None, cx) {
+            if save {
                 self.settings.theme_designer_mut().pending = pending;
+                self.save_theme_designer(None, cx);
             } else if let Some(intent) = pending {
-                if !save {
-                    let baseline = self.settings.theme_designer().baseline.clone();
-                    let editor = self.settings.theme_designer_mut();
-                    editor.draft = baseline;
-                    editor.generation += 1;
-                    editor.recompute();
-                }
+                let baseline = self.settings.theme_designer().baseline.clone();
+                let editor = self.settings.theme_designer_mut();
+                editor.draft = baseline;
+                editor.generation += 1;
+                editor.recompute();
                 self.perform_theme_intent(intent, cx);
             }
         }
@@ -131,42 +173,55 @@ impl NyaTermApp {
             ThemeIntent::Toggle => {
                 if self.settings.theme_designer().open {
                     self.settings.theme_designer_mut().reset();
+                    self.settings.theme_designer_mut().restore_focus = true;
                 } else {
                     let summary = self.settings.summary();
-                    let theme = summary
-                        .custom_themes
-                        .available()
-                        .into_iter()
-                        .next()
-                        .unwrap_or_else(|| {
-                            resolve_theme(&summary.theme, &summary.custom_themes).copy_as_custom()
-                        });
+                    let theme = resolve_theme(&summary.theme, &summary.custom_themes);
                     self.settings.theme_designer_mut().load(theme);
                 }
             }
             ThemeIntent::Select(id) => {
-                if let Some(theme) = self.settings.summary().custom_themes.resolve(&id) {
-                    self.settings.theme_designer_mut().load(theme);
-                }
+                let theme = resolve_theme(&id, &self.settings.summary().custom_themes);
+                self.settings.theme_designer_mut().load(theme);
             }
             ThemeIntent::Copy(id) => {
                 let theme =
                     resolve_theme(&id, &self.settings.summary().custom_themes).copy_as_custom();
                 self.settings.theme_designer_mut().load(theme);
                 self.settings.theme_designer_mut().baseline = None;
+                self.settings.theme_designer_mut().editing = true;
             }
             ThemeIntent::Import => {
                 self.prompt_theme_import(cx);
             }
             ThemeIntent::Delete => {
-                if let Some(theme) = self.settings.theme_designer().draft.clone() {
-                    self.settings.delete_custom_theme(&theme.id);
-                    self.settings.theme_designer_mut().reset();
-                    self.custom_themes_changed(cx);
-                    self.perform_theme_intent(ThemeIntent::Toggle, cx);
-                }
+                self.settings.theme_designer_mut().delete_confirmation = true;
             }
             ThemeIntent::Apply(close) => self.apply_settings_draft(close, cx),
+            ThemeIntent::Edit => self.settings.theme_designer_mut().editing = true,
+            ThemeIntent::Reload => {
+                self.reload_theme_manager(cx);
+            }
+            ThemeIntent::CloseSettings => {
+                if self.settings_draft_dirty() {
+                    self.settings.theme_designer_mut().open = true;
+                    self.settings.theme_designer_mut().close_confirmation = true;
+                } else {
+                    self.cancel_settings(cx);
+                }
+            }
+            ThemeIntent::Quit(count) => {
+                if let Some(handle) = self.shell.settings_window().or(self.shell.main_window()) {
+                    let app = cx.entity();
+                    cx.defer(move |cx| {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            app.update(cx, |app, cx| {
+                                app.handle_window_close_request_with_count(count, window, cx)
+                            });
+                        });
+                    });
+                }
+            }
         }
         self.ensure_theme_designer_inputs(cx);
         self.request_settings_panel_refresh(cx);
@@ -184,7 +239,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn ensure_theme_designer_inputs(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.theme_designer().open {
+        if !self.settings.theme_designer().open || !self.settings.theme_designer().editing {
             return;
         }
         let Some(theme) = self.settings.theme_designer().draft.clone() else {
@@ -209,26 +264,233 @@ impl NyaTermApp {
 
     pub(in crate::features) fn save_theme_designer(
         &mut self,
-        target: Option<bool>,
+        target: Option<ThemeApplyTarget>,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(theme) = self.settings.theme_designer().draft.clone() else {
             return false;
         };
-        if let Err(error) = self.settings.store_custom_theme(theme.clone()) {
+        let mutation = if self.settings.theme_designer().dirty() {
+            ThemeMutation::Save {
+                theme: Box::new(theme),
+                target,
+            }
+        } else if let Some(target) = target {
+            ThemeMutation::Apply {
+                id: theme.id,
+                target,
+            }
+        } else {
+            return false;
+        };
+        self.submit_theme_mutation(mutation, cx)
+    }
+
+    pub(in crate::features) fn confirm_theme_delete(&mut self, cx: &mut Context<Self>) {
+        if !self.settings.theme_designer().delete_confirmation {
+            return;
+        }
+        let Some(theme) = self.settings.theme_designer().draft.as_ref() else {
+            return;
+        };
+        self.submit_theme_mutation(
+            ThemeMutation::Delete {
+                id: theme.id.clone(),
+            },
+            cx,
+        );
+    }
+
+    fn submit_theme_mutation(&mut self, mutation: ThemeMutation, cx: &mut Context<Self>) -> bool {
+        if self.settings.theme_designer().submitting {
+            return false;
+        }
+        let expected = self
+            .settings
+            .theme_designer()
+            .expected
+            .clone()
+            .unwrap_or_else(|| {
+                ThemeSettings::from(
+                    self.shell
+                        .settings_draft_snapshot()
+                        .map(|snapshot| &snapshot.settings)
+                        .unwrap_or(self.settings.summary()),
+                )
+            });
+        if let Err(error) = mutation.prepare(&expected) {
             self.settings.theme_designer_mut().message = error;
             self.request_settings_panel_refresh(cx);
             return false;
         }
-        self.settings.theme_designer_mut().saved();
-        self.settings.theme_designer_mut().message = t!("themeDesigner.staged").to_string();
-        match target {
-            Some(false) => self.settings.set_appearance_theme(theme.id),
-            Some(true) => self.settings.set_terminal_theme(Some(theme.id)),
-            None => {}
-        }
-        self.custom_themes_changed(cx);
+        let revision = self
+            .process_state
+            .read(cx)
+            .settings_draft_revisions()
+            .settings;
+        let deleting = match &mutation {
+            ThemeMutation::Delete { id } => Some(id.clone()),
+            _ => None,
+        };
+        let task = self.store_ui.try_submit(
+            0,
+            store_mutation(StoreDomain::Settings, move |store| {
+                let result = store.commit_theme_mutation(&expected, &mutation)?;
+                let saved = store.load_app_settings_summary()?;
+                Ok((result, saved))
+            }),
+        );
+        let task = match task {
+            Ok(task) => task,
+            Err(error) => {
+                self.settings.theme_designer_mut().message = error.to_string();
+                self.request_settings_panel_refresh(cx);
+                return false;
+            }
+        };
+        self.settings.theme_designer_mut().submitting = true;
+        self.settings.theme_designer_mut().generation += 1;
+        self.request_settings_panel_refresh(cx);
+        cx.spawn(async move |this, cx| {
+            let event = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match event.outcome {
+                    Ok((ThemeCommitOutcome::Committed(commit), saved)) => {
+                        this.settings.merge_theme_commit(&commit);
+                        if let Some(id) = deleting.as_deref() {
+                            if this.settings.summary().theme == id {
+                                this.settings.set_appearance_theme(
+                                    nyaterm_core::themes::DEFAULT_THEME_ID.into(),
+                                );
+                            }
+                            if this.settings.summary().terminal_theme.as_deref() == Some(id) {
+                                this.settings.set_terminal_theme(None);
+                            }
+                        }
+                        if let Some(mut snapshot) = this.shell.take_settings_draft_snapshot() {
+                            commit.merge_into(&mut snapshot.settings);
+                            this.shell.set_settings_draft_snapshot(snapshot);
+                        }
+                        this.settings.theme_designer_mut().saved();
+                        this.settings.theme_designer_mut().expected = Some(commit.settings);
+                        this.settings.theme_designer_mut().delete_confirmation = false;
+                        this.settings.theme_designer_mut().message =
+                            t!("themeDesigner.saved").to_string();
+                        if deleting.is_some() {
+                            let summary = this.settings.summary();
+                            let theme = resolve_theme(&summary.theme, &summary.custom_themes);
+                            this.settings.theme_designer_mut().load(theme);
+                        }
+                        this.custom_themes_changed(cx);
+                        // Publishing is deferred to avoid updating a shell already on the stack.
+                        // Only this publication may advance our settings draft revision.
+                        if let Some(controller) = this.desktop_controller.clone() {
+                            let source = this.workspace_id;
+                            let app = cx.entity();
+                            cx.defer(move |cx| {
+                                let before = app
+                                    .read(cx)
+                                    .process_state
+                                    .read(cx)
+                                    .settings_draft_revisions()
+                                    .settings;
+                                let _ = controller.update(cx, |controller, cx| {
+                                    controller.publish_theme_settings(source, saved, cx)
+                                });
+                                app.update(cx, |app, cx| {
+                                    let after = app
+                                        .process_state
+                                        .read(cx)
+                                        .settings_draft_revisions()
+                                        .settings;
+                                    if before == revision
+                                        && let Some(mut snapshot) =
+                                            app.shell.take_settings_draft_snapshot()
+                                    {
+                                        if snapshot.revisions.settings == revision {
+                                            snapshot.revisions.settings = after;
+                                        }
+                                        app.shell.set_settings_draft_snapshot(snapshot);
+                                    }
+                                    app.finish_theme_pending(cx);
+                                });
+                            });
+                        } else {
+                            this.finish_theme_pending(cx);
+                        }
+                    }
+                    Ok((ThemeCommitOutcome::Conflict, _)) => {
+                        this.settings.theme_designer_mut().submitting = false;
+                        this.settings.theme_designer_mut().message =
+                            t!("themeDesigner.conflict").to_string();
+                    }
+                    Err(error) => {
+                        this.settings.theme_designer_mut().submitting = false;
+                        this.settings.theme_designer_mut().message = error.to_string();
+                    }
+                }
+                this.request_settings_panel_refresh(cx);
+            });
+        })
+        .detach();
         true
+    }
+
+    fn finish_theme_pending(&mut self, cx: &mut Context<Self>) {
+        self.settings.theme_designer_mut().submitting = false;
+        if let Some(intent) = self.settings.theme_designer_mut().pending.take() {
+            self.perform_theme_intent(intent, cx);
+        }
+        self.request_settings_panel_refresh(cx);
+        cx.notify();
+    }
+
+    fn reload_theme_manager(&mut self, cx: &mut Context<Self>) {
+        let task = self.store_ui.try_submit(
+            0,
+            nyaterm_store::store_request(StoreDomain::Settings, |store| {
+                store.load_app_settings_summary()
+            }),
+        );
+        let task = match task {
+            Ok(task) => task,
+            Err(error) => {
+                self.settings.theme_designer_mut().message = error.to_string();
+                self.request_settings_panel_refresh(cx);
+                return;
+            }
+        };
+        self.settings.theme_designer_mut().submitting = true;
+        cx.spawn(async move |this, cx| {
+            let event = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.settings.theme_designer_mut().submitting = false;
+                match event.outcome {
+                    Ok(saved) => {
+                        let commit = nyaterm_core::themes::management::ThemeCommit {
+                            settings: ThemeSettings::from(&saved),
+                            fields: nyaterm_core::themes::management::ThemeChangedFields {
+                                catalog: true,
+                                ui: true,
+                                terminal: true,
+                            },
+                        };
+                        this.settings.merge_theme_commit(&commit);
+                        if let Some(mut snapshot) = this.shell.take_settings_draft_snapshot() {
+                            commit.merge_into(&mut snapshot.settings);
+                            this.shell.set_settings_draft_snapshot(snapshot);
+                        }
+                        let theme = resolve_theme(&saved.theme, &saved.custom_themes);
+                        this.settings.theme_designer_mut().expected = Some(commit.settings);
+                        this.settings.theme_designer_mut().load(theme);
+                        this.custom_themes_changed(cx);
+                    }
+                    Err(error) => this.settings.theme_designer_mut().message = error.to_string(),
+                }
+                this.request_settings_panel_refresh(cx);
+            });
+        })
+        .detach();
     }
 
     fn custom_themes_changed(&mut self, cx: &mut Context<Self>) {
@@ -239,7 +501,6 @@ impl NyaTermApp {
         self.defer_remote_panel_snapshot_flush(cx);
         self.defer_transfer_panel_snapshot_flush(cx);
         self.defer_ai_panel_snapshot_flush(cx);
-        self.save_appearance_settings(cx);
         self.request_settings_panel_refresh(cx);
         cx.notify();
     }
@@ -282,21 +543,22 @@ impl NyaTermApp {
         result: Result<Option<ThemeConfig>, String>,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.theme_designer().generation != generation {
+        if self.settings.theme_designer().generation != generation
+            || self.settings.theme_designer().submitting
+        {
             return;
         }
         match result {
             Ok(Some(mut theme)) => {
                 theme.normalize_import(&self.settings.summary().custom_themes);
-                match self.settings.store_custom_theme(theme.clone()) {
-                    Ok(()) => {
-                        self.settings.theme_designer_mut().load(theme);
-                        self.settings.theme_designer_mut().message =
-                            t!("themeDesigner.staged").to_string();
-                        self.ensure_theme_designer_inputs(cx);
-                        self.custom_themes_changed(cx);
-                    }
-                    Err(error) => self.settings.theme_designer_mut().message = error,
+                if theme.validate().is_empty() {
+                    self.settings.theme_designer_mut().load(theme);
+                    self.settings.theme_designer_mut().baseline = None;
+                    self.settings.theme_designer_mut().editing = true;
+                    self.ensure_theme_designer_inputs(cx);
+                } else {
+                    self.settings.theme_designer_mut().message =
+                        t!("themeDesigner.invalidColor").to_string();
                 }
             }
             Ok(None) => {}
@@ -384,6 +646,7 @@ mod tests {
     fn invalid_edits_keep_the_last_valid_preview_and_never_mark_saved() {
         let mut state = ThemeDesignerState::default();
         state.load(builtins()[0].copy_as_custom());
+        state.editing = true;
         let preview = state.preview;
         let generation = state.generation;
         state.edit("primary", "broken".into());

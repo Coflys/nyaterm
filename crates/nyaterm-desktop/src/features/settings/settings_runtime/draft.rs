@@ -538,6 +538,16 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn cancel_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings.theme_designer().submitting {
+            return;
+        }
+        if self.settings.theme_designer().dirty() {
+            self.theme_designer_action(
+                crate::features::settings::theme_designer::ThemeIntent::CloseSettings,
+                cx,
+            );
+            return;
+        }
         self.settings.theme_designer_mut().reset();
         self.hide_ai_provider_secret(cx);
         if let Some(snapshot) = self.shell.take_settings_draft_snapshot() {
@@ -1337,121 +1347,169 @@ mod tests {
              reason must reach the panel"
         );
     }
+    fn finish_theme_jobs(app: &gpui::Entity<NyaTermApp>, cx: &mut TestAppContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if !cx.update_entity(app, |app, _| app.settings.theme_designer().submitting) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "theme commit did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        cx.run_until_parked();
+    }
+
     #[test]
-    fn custom_theme_edits_are_local_until_saved_and_cancel_restores_the_catalog() {
+    fn theme_browsing_is_local_and_saved_themes_survive_settings_cancel() {
         use crate::features::settings::theme_designer::ThemeIntent;
+        use nyaterm_core::themes::management::ThemeApplyTarget;
         let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
-        cx.update_entity(&app, |app, cx| {
+        let original = cx.update_entity(&app, |app, cx| {
             let original = app.settings.summary().clone();
-            let original_palette = app.theme_palette();
             app.begin_settings_draft(cx);
+            app.settings.set_terminal_font_size(27);
             app.theme_designer_action(ThemeIntent::Toggle, cx);
+            assert!(!app.settings.theme_designer().dirty());
+            app.theme_designer_action(ThemeIntent::Select("dracula".into()), cx);
+            assert_eq!(app.settings.summary().theme, original.theme);
+            app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
             app.edit_theme_designer("primary", "#123456".into(), cx);
-            assert_eq!(app.theme_palette(), original_palette);
-            assert_eq!(app.settings.summary().custom_themes, original.custom_themes);
-            assert!(app.save_theme_designer(Some(false), cx));
+            assert!(app.save_theme_designer(Some(ThemeApplyTarget::BothFollowUi), cx));
+            assert_eq!(app.settings.summary().theme, original.theme);
+            original
+        });
+        finish_theme_jobs(&app, &mut cx);
+        let id = cx.update_entity(&app, |app, cx| {
             let id = app.settings.summary().theme.clone();
             assert_eq!(app.theme_palette().primary, 0x123456);
-            app.edit_theme_designer("primary", "#abcdef".into(), cx);
-            assert!(app.save_theme_designer(None, cx));
-            assert_eq!(app.settings.summary().theme, id);
-            assert_eq!(app.theme_palette().primary, 0xabcdef);
-            assert_eq!(app.terminal_theme_palette().primary, 0xabcdef);
-            app.cancel_settings(cx);
-            assert_eq!(app.settings.summary().custom_themes, original.custom_themes);
-            assert_eq!(app.theme_palette(), original_palette);
-        });
-    }
-    #[test]
-    fn deleting_an_active_custom_theme_resets_both_references() {
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = app(&mut cx);
-        cx.update_entity(&app, |app, cx| {
-            app.begin_settings_draft(cx);
-            let theme = nyaterm_core::themes::builtins()[0].copy_as_custom();
-            let id = theme.id.clone();
-            app.settings.store_custom_theme(theme).unwrap();
-            app.settings.set_appearance_theme(id.clone());
-            app.settings.set_terminal_theme(Some(id.clone()));
-            app.settings.delete_custom_theme(&id);
-            assert_eq!(app.settings.summary().theme, "github-dark");
             assert_eq!(app.settings.summary().terminal_theme, None);
-            assert!(app.settings.summary().custom_themes.available().is_empty());
-        });
-    }
-    #[test]
-    fn copying_is_unsaved_and_invalid_theme_ids_fall_back_without_rewriting_settings() {
-        use crate::features::settings::theme_designer::ThemeIntent;
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = app(&mut cx);
-        cx.update_entity(&app, |app, cx| {
-            app.begin_settings_draft(cx);
-            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
-            assert!(app.settings.theme_designer().dirty());
-            assert!(app.save_theme_designer(Some(false), cx));
-            app.settings
-                .set_terminal_theme(Some("missing-theme".into()));
-            assert_eq!(app.terminal_theme_palette(), app.theme_palette());
+            assert_eq!(app.settings.summary().terminal_font_size, 27);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert_eq!(app.settings.summary().theme, id);
             assert_eq!(
-                app.settings.summary().terminal_theme.as_deref(),
-                Some("missing-theme")
+                app.settings.summary().terminal_font_size,
+                original.terminal_font_size
             );
-            app.settings.set_appearance_theme("broken-theme".into());
-            assert_eq!(
-                app.theme_palette(),
-                nyaterm_ui::theme_palette("github-dark")
-            );
-            assert_eq!(app.settings.summary().theme, "broken-theme");
-        });
-    }
-    #[test]
-    fn applying_custom_theme_persists_the_tauri_document_and_stale_import_is_ignored() {
-        use crate::features::settings::theme_designer::ThemeIntent;
-        use nyaterm_store::StoreDomain;
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = app(&mut cx);
-        let id = cx.update_entity(&app, |app, cx| {
-            app.begin_settings_draft(cx);
-            app.theme_designer_action(ThemeIntent::Toggle, cx);
-            let old_generation = app.settings.theme_designer().generation;
-            app.edit_theme_designer("primary", "#123456".into(), cx);
-            let imported = nyaterm_core::themes::builtins()[1].copy_as_custom();
-            app.finish_theme_import(old_generation, Ok(Some(imported)), cx);
-            assert!(app.settings.summary().custom_themes.available().is_empty());
-            assert!(app.save_theme_designer(Some(false), cx));
-            let id = app.settings.summary().theme.clone();
-            app.apply_settings_draft(false, cx);
             id
         });
-        cx.run_until_parked();
         let saved = cx.update_entity(&app, |app, _| {
             app.store_blocking_client()
-                .request_fn(StoreDomain::Settings, |store| {
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
                     store.load_app_settings_summary()
                 })
                 .unwrap()
         });
         assert_eq!(saved.theme, id);
+        assert_eq!(saved.terminal_font_size, original.terminal_font_size);
         assert_eq!(
             saved.custom_themes.resolve(&id).unwrap().colors.primary,
             "#123456"
         );
     }
+
     #[test]
-    fn unsaved_theme_transition_can_return_discard_or_save() {
+    fn saving_an_active_theme_refreshes_it_without_committing_other_settings() {
         use crate::features::settings::theme_designer::ThemeIntent;
+        use nyaterm_core::themes::management::ThemeApplyTarget;
         let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             app.begin_settings_draft(cx);
-            app.theme_designer_action(ThemeIntent::Toggle, cx);
+            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
+            assert!(app.save_theme_designer(Some(ThemeApplyTarget::Ui), cx));
+        });
+        finish_theme_jobs(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.edit_theme_designer("primary", "#abcdef".into(), cx);
+            assert!(app.save_theme_designer(None, cx));
+        });
+        finish_theme_jobs(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(app.theme_palette().primary, 0xabcdef);
+            assert_eq!(app.terminal_theme_palette().primary, 0xabcdef);
+            assert!(!app.settings_draft_dirty());
+            app.settings.set_terminal_font_size(29);
+            app.save_appearance_settings(cx);
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+        let saved = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+        });
+        assert_eq!(saved.terminal_font_size, 29);
+        assert_eq!(
+            saved
+                .custom_themes
+                .resolve(&saved.theme)
+                .unwrap()
+                .colors
+                .primary,
+            "#abcdef"
+        );
+    }
+
+    #[test]
+    fn theme_conflicts_preserve_edits_and_do_not_apply_the_theme() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+        use nyaterm_core::themes::management::ThemeApplyTarget;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
             app.edit_theme_designer("primary", "#123456".into(), cx);
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    let mut settings = store.load_app_settings_summary()?;
+                    settings.theme = "dracula".into();
+                    store.save_appearance_settings(&settings)
+                })
+                .unwrap();
+            assert!(app.save_theme_designer(Some(ThemeApplyTarget::Ui), cx));
+            assert!(!app.save_theme_designer(Some(ThemeApplyTarget::Ui), cx));
+            app.theme_designer_action(ThemeIntent::Toggle, cx);
+            assert!(app.settings.theme_designer().open);
+        });
+        finish_theme_jobs(&app, &mut cx);
+        cx.update_entity(&app, |app, _| {
+            assert!(app.settings.theme_designer().dirty());
+            assert_eq!(
+                app.settings
+                    .theme_designer()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .colors
+                    .primary,
+                "#123456"
+            );
+            assert!(!app.settings.theme_designer().message.is_empty());
+            assert!(app.settings.summary().custom_themes.available().is_empty());
+        });
+    }
+
+    #[test]
+    fn unsaved_theme_transition_can_continue_discard_or_save_before_leaving() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
             app.theme_designer_action(ThemeIntent::Toggle, cx);
             assert_eq!(
                 app.settings.theme_designer().pending,
@@ -1459,15 +1517,17 @@ mod tests {
             );
             app.resolve_theme_designer_pending(None, cx);
             assert!(app.settings.theme_designer().dirty());
-            assert!(app.settings.theme_designer().pending.is_none());
             app.theme_designer_action(ThemeIntent::Toggle, cx);
             app.resolve_theme_designer_pending(Some(false), cx);
             assert!(!app.settings.theme_designer().open);
-            assert!(app.settings.summary().custom_themes.available().is_empty());
-            app.theme_designer_action(ThemeIntent::Toggle, cx);
+            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
             app.edit_theme_designer("primary", "#abcdef".into(), cx);
             app.theme_designer_action(ThemeIntent::Toggle, cx);
             app.resolve_theme_designer_pending(Some(true), cx);
+            assert!(app.settings.theme_designer().open);
+        });
+        finish_theme_jobs(&app, &mut cx);
+        cx.update_entity(&app, |app, _| {
             assert!(!app.settings.theme_designer().open);
             assert_eq!(
                 app.settings.summary().custom_themes.available()[0]
@@ -1475,6 +1535,76 @@ mod tests {
                     .primary,
                 "#abcdef"
             );
+        });
+    }
+
+    #[test]
+    fn imports_are_unsaved_and_stale_import_results_cannot_replace_edits() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
+            let generation = app.settings.theme_designer().generation;
+            app.edit_theme_designer("primary", "#123456".into(), cx);
+            let imported = nyaterm_core::themes::builtins()[1].copy_as_custom();
+            app.finish_theme_import(generation, Ok(Some(imported.clone())), cx);
+            assert_eq!(
+                app.settings
+                    .theme_designer()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .colors
+                    .primary,
+                "#123456"
+            );
+            let generation = app.settings.theme_designer().generation;
+            app.finish_theme_import(generation, Ok(Some(imported)), cx);
+            assert!(app.settings.theme_designer().dirty());
+            assert!(app.settings.summary().custom_themes.available().is_empty());
+            app.cancel_settings(cx);
+            assert_eq!(
+                app.settings.theme_designer().pending,
+                Some(ThemeIntent::CloseSettings)
+            );
+        });
+    }
+
+    #[test]
+    fn deleting_an_active_theme_requires_confirmation_and_preserves_unrelated_drafts() {
+        use crate::features::settings::theme_designer::ThemeIntent;
+        use nyaterm_core::themes::management::ThemeApplyTarget;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
+            assert!(app.save_theme_designer(Some(ThemeApplyTarget::BothFollowUi), cx));
+        });
+        finish_theme_jobs(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            let id = app.settings.summary().theme.clone();
+            app.settings.set_terminal_font_size(28);
+            app.theme_designer_action(ThemeIntent::Delete, cx);
+            assert!(app.settings.theme_designer().delete_confirmation);
+            assert!(app.settings.summary().custom_themes.resolve(&id).is_some());
+            app.settings.theme_designer_mut().delete_confirmation = false;
+            assert!(app.settings.summary().custom_themes.resolve(&id).is_some());
+            app.theme_designer_action(ThemeIntent::Delete, cx);
+            app.confirm_theme_delete(cx);
+        });
+        finish_theme_jobs(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            assert_eq!(app.settings.summary().theme, "github-dark");
+            assert_eq!(app.settings.summary().terminal_theme, None);
+            assert!(app.settings.summary().custom_themes.available().is_empty());
+            assert_eq!(app.settings.summary().terminal_font_size, 28);
+            app.cancel_settings(cx);
+            assert!(app.settings.summary().custom_themes.available().is_empty());
         });
     }
 }

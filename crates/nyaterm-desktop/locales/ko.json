@@ -3485,9 +3485,9 @@
     "uninstall": "제거（데이터 유지）"
   },
   "themeDesigner": {
-    "manage": "사용자 지정 테마 관리",
-    "description": "기존 테마를 복사하여 UI 및 터미널 색상을 편집합니다. 편집 중에는 미리 보기만 변경됩니다. 테마를 저장한 후 설정에서 적용을 눌러 확정하세요.",
-    "save": "테마 저장",
+    "manage": "테마 관리",
+    "description": "이 페이지의 작업은 즉시 저장되며 설정 취소로 되돌아가지 않습니다. 탐색과 편집은 미리 보기에만 반영됩니다.",
+    "save": "변경 저장",
     "discard": "편집 내용 버리기",
     "back": "계속 편집",
     "unsaved": "저장하지 않은 테마 변경 사항이 있습니다. 저장, 버리기 또는 계속 편집을 선택하세요.",
@@ -3562,6 +3562,28 @@
         "brightCyan": "ANSI 밝은 청록",
         "brightWhite": "ANSI 밝은 흰색"
       }
-    }
+    },
+    "saved": "테마가 저장되었습니다.",
+    "returnAppearance": "뒤로",
+    "create": "테마 만들기",
+    "reload": "저장된 테마 다시 불러오기",
+    "builtins": "기본 테마",
+    "mine": "내 테마",
+    "currentUi": "UI",
+    "currentTerminal": "터미널",
+    "rename": "이름 바꾸기",
+    "copy": "복제",
+    "createCopy": "복사본 만들기",
+    "edit": "편집",
+    "operations": "테마 작업",
+    "previewUnchanged": "잘못된 값이 있습니다. 마지막으로 유효한 색상을 표시합니다.",
+    "saveActive": "사용 중인 테마를 저장하면 사용하는 모든 곳이 즉시 갱신됩니다.",
+    "applyUi": "UI에 적용",
+    "applyTerminal": "터미널에 적용",
+    "applyBoth": "둘 다 적용",
+    "saveBoth": "저장 후 둘 다 적용",
+    "followExplanation": "둘 다 적용하면 터미널이 UI를 따릅니다. UI에 적용하면 이미 UI를 따르는 터미널도 갱신됩니다.",
+    "deleteConfirmation": "“%{name}” 테마를 삭제할까요? 사용 중인 UI는 GitHub Dark로 바뀌고 이 테마를 지정한 터미널은 UI를 따릅니다. 되돌릴 수 없습니다.",
+    "conflict": "저장된 테마가 다른 곳에서 변경되었습니다. 편집 내용은 유지됩니다. 내보내거나 편집을 버리고 다시 불러오세요."
   }
 }

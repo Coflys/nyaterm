@@ -20,13 +20,15 @@ Select them like any other UI theme from **Settings → Appearance** or the **Vi
 
 ## Custom themes
 
-Open **Settings → Appearance → Manage custom themes**, copy the current UI theme or another theme, and edit its name, swatch, UI colors, and terminal colors. Built-in themes remain read-only.
+Open **Settings → Appearance → Manage themes** to browse built-in and custom themes. Selecting a theme changes only the local preview. Built-in themes are read-only; create a copy to edit them. Custom themes support editing, renaming, duplication, export, and deletion.
 
-Use the color picker or enter a color value. The terminal tab includes ANSI colors, intense foreground, selection, line highlight, and search colors. The preview updates while editing and warns when text contrast is low.
+The editor separates UI and terminal colors, with visual pickers and color inputs. The preview includes UI controls, terminal examples, and the 16 ANSI colors. Invalid inputs keep the last valid preview; low contrast produces a warning.
 
-**Save theme** stages the edits. **Save and use for UI / terminal** also selects it; saving an active theme refreshes its colors. Click the settings page’s **Apply** to persist changes. **Cancel** restores the previous theme catalog and colors. Leaving unsaved edits offers save, discard, or keep editing.
+**Save changes** persists the theme immediately. Saving an active theme refreshes every place using it. **Apply to UI / terminal** changes that scope only; **Apply to both** makes the terminal follow the UI. Unsaved edits can be saved and applied in one operation. Canceling settings does not undo confirmed manager operations. Appearance selectors and other settings still use the settings **Apply / Cancel** workflow.
 
-**Import JSON / Export JSON** use Tauri-compatible single-theme files. Conflicting imported IDs receive new IDs. Exporting a valid draft does not save settings. Unsupported existing records are preserved but cannot be selected.
+Creation, duplication, and import produce drafts until saved. Leaving an edited draft offers Save, Discard, or Keep editing. Deletion requires confirmation: an affected UI falls back to GitHub Dark, and terminals explicitly using the deleted theme follow the UI. Deletion cannot be undone.
+
+JSON import and export remain compatible with Tauri single-theme files. Conflicting imported IDs receive a new ID. Exporting a valid draft does not save or apply it. Unknown fields and unsupported records are preserved. Concurrent edits produce a conflict while preserving the draft; export it, or discard and reload before retrying.
 
 ## Minimum contrast
 

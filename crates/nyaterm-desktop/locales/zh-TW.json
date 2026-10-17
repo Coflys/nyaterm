@@ -3485,9 +3485,9 @@
     "uninstall": "解除安裝（保留資料）"
   },
   "themeDesigner": {
-    "manage": "管理自訂主題",
-    "description": "複製現有主題，編輯介面與終端配色。編輯僅影響下方預覽；儲存主題後，請按設定頁的「套用」以永久儲存。",
-    "save": "儲存主題",
+    "manage": "管理主題",
+    "description": "此頁操作立即儲存，不受設定頁取消影響。瀏覽與編輯僅影響局部預覽。",
+    "save": "儲存修改",
     "discard": "放棄編輯",
     "back": "返回編輯",
     "unsaved": "目前主題有尚未儲存的編輯。請儲存、放棄或返回。",
@@ -3562,6 +3562,28 @@
         "brightCyan": "ANSI 亮青色",
         "brightWhite": "ANSI 亮白色"
       }
-    }
+    },
+    "saved": "主題已儲存。",
+    "returnAppearance": "返回",
+    "create": "建立主題",
+    "reload": "重新載入已儲存主題",
+    "builtins": "內建主題",
+    "mine": "我的主題",
+    "currentUi": "介面",
+    "currentTerminal": "終端",
+    "rename": "重新命名",
+    "copy": "複製",
+    "createCopy": "建立副本",
+    "edit": "編輯",
+    "operations": "主題操作",
+    "previewUnchanged": "存在無效值，預覽保留上次有效配色。",
+    "saveActive": "儲存正在使用的主題後，所有使用處立即更新。",
+    "applyUi": "套用至介面",
+    "applyTerminal": "套用至終端",
+    "applyBoth": "同時套用",
+    "saveBoth": "儲存並同時套用",
+    "followExplanation": "同時套用會將終端設為跟隨介面。套用至介面也會更新已跟隨介面的終端。",
+    "deleteConfirmation": "刪除「%{name}」？若介面正在使用它，將切換至 GitHub Dark；明確使用它的終端將恢復跟隨介面。此操作無法復原。",
+    "conflict": "已儲存主題已在其他位置變更，編輯內容已保留。請先匯出編輯，或放棄編輯並重新載入後重試。"
   }
 }
