@@ -476,10 +476,13 @@ pub(in crate::features) struct SettingsPanel {
     number_inputs: HashMap<SharedString, Entity<NyaNumberInputState>>,
     pub(in crate::features::pages::settings) image_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) content_opacity_slider: Entity<NyaSliderState>,
+    pub(in crate::features::pages::settings) window_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) image_opacity_focus: gpui::FocusHandle,
     pub(in crate::features::pages::settings) content_opacity_focus: gpui::FocusHandle,
+    pub(in crate::features::pages::settings) window_opacity_focus: gpui::FocusHandle,
     last_image_opacity: u8,
     last_content_opacity: u8,
+    last_window_opacity: u8,
     slider_subscriptions: Vec<Subscription>,
     pub(in crate::features::pages::settings) theme_picker_controls:
         super::workspace::theme_designer::ThemePickerControls,
@@ -505,6 +508,17 @@ impl SettingsPanel {
     ) -> Self {
         let image_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(100.));
         let content_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(82.));
+        let window_opacity_slider = cx.new(|_| NyaSliderState::new().default_value(20.));
+        let window_subscription = cx.observe(&window_opacity_slider, |this, slider, cx| {
+            let NyaSliderValue::Single(value) = slider.read(cx).value() else {
+                return;
+            };
+            let value = value.round().clamp(0., 100.) as u8;
+            if value != this.last_window_opacity {
+                this.last_window_opacity = value;
+                this.set_window_background_opacity(value, cx);
+            }
+        });
         let image_subscription = cx.observe(&image_opacity_slider, |this, slider, cx| {
             let NyaSliderValue::Single(value) = slider.read(cx).value() else {
                 return;
@@ -540,11 +554,18 @@ impl SettingsPanel {
             number_inputs: HashMap::new(),
             image_opacity_slider,
             content_opacity_slider,
+            window_opacity_slider,
             image_opacity_focus: cx.focus_handle(),
             content_opacity_focus: cx.focus_handle(),
+            window_opacity_focus: cx.focus_handle(),
             last_image_opacity: 100,
             last_content_opacity: 82,
-            slider_subscriptions: vec![image_subscription, content_subscription],
+            last_window_opacity: 20,
+            slider_subscriptions: vec![
+                image_subscription,
+                content_subscription,
+                window_subscription,
+            ],
             theme_picker_controls: Default::default(),
             selects: SelectRegistry::default(),
             select_subscriptions: Vec::new(),
@@ -619,6 +640,25 @@ impl SettingsPanel {
                 });
         }
         self.surface = snapshot.surface;
+        let window_opacity = snapshot.settings.summary.window_background_opacity;
+        self.last_window_opacity = window_opacity;
+        if self.window_opacity_slider.read(cx).value()
+            != NyaSliderValue::Single(f32::from(window_opacity))
+        {
+            self.window_opacity_slider =
+                cx.new(|_| NyaSliderState::new().default_value(f32::from(window_opacity)));
+            self.slider_subscriptions[2] =
+                cx.observe(&self.window_opacity_slider, |this, slider, cx| {
+                    let NyaSliderValue::Single(value) = slider.read(cx).value() else {
+                        return;
+                    };
+                    let value = value.round().clamp(0., 100.) as u8;
+                    if value != this.last_window_opacity {
+                        this.last_window_opacity = value;
+                        this.set_window_background_opacity(value, cx);
+                    }
+                });
+        }
         self.settings = snapshot.settings.clone();
         self.ai = snapshot.ai.clone();
         self.cloud_sync = snapshot.cloud_sync.clone();
@@ -1820,6 +1860,14 @@ impl SettingsPanel {
         self.with_app(cx, |app, cx| {
             app.set_background_content_opacity(percent, cx)
         });
+    }
+
+    pub(in crate::features) fn set_window_background_opacity(
+        &mut self,
+        percent: u8,
+        cx: &mut Context<Self>,
+    ) {
+        self.with_app(cx, |app, cx| app.set_window_background_opacity(percent, cx));
     }
 
     pub(in crate::features) fn set_background_image_opacity(

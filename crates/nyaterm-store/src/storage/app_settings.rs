@@ -5,6 +5,7 @@
 //! [`AppSettingsSummary`]; document keys, field names and defaults are
 //! unchanged.
 
+use nyaterm_core::models::window_material::{WindowMaterial, default_window_background_opacity};
 use std::collections::HashMap;
 
 use super::{
@@ -20,10 +21,37 @@ use nyaterm_core::{
     WorkspaceUiState, default_panel_open_mode, default_search_engines, normalize_panel_open_mode,
 };
 
+// Reject malformed known fields before an unrelated save can replace their data.
+fn read_window_appearance(value: &serde_json::Value) -> Result<(WindowMaterial, u8), StorageError> {
+    let material = match json_path(value, &["appearance", "window_material"]) {
+        None => WindowMaterial::Opaque,
+        Some(serde_json::Value::String(material)) => WindowMaterial::from(material.clone()),
+        Some(_) => {
+            return Err(StorageError::InvalidData(
+                "window material must be a string".into(),
+            ));
+        }
+    };
+    let opacity = match json_path(value, &["appearance", "window_background_opacity"]) {
+        None => default_window_background_opacity(),
+        Some(value) => value
+            .as_u64()
+            .map(|value| value.min(100) as u8)
+            .or_else(|| value.as_i64().map(|value| value.clamp(0, 100) as u8))
+            .ok_or_else(|| {
+                StorageError::InvalidData("window background opacity must be an integer".into())
+            })?,
+    };
+    Ok((material, opacity))
+}
+
 impl ConnectionStore {
     pub fn load_app_settings_summary(&self) -> Result<AppSettingsSummary, StorageError> {
         let value = self.load_settings_value()?;
+        let (window_material, window_background_opacity) = read_window_appearance(&value)?;
         Ok(AppSettingsSummary {
+            window_material,
+            window_background_opacity,
             theme: json_string(&value, &["appearance", "theme"], "github-dark"),
             custom_themes: json_path(&value, &["appearance", "custom_themes"])
                 .cloned()
@@ -1055,7 +1083,18 @@ impl ConnectionStore {
         settings: &AppSettingsSummary,
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
+        read_window_appearance(&value)?;
         set_nested_json_string(&mut value, &["appearance", "theme"], settings.theme.clone());
+        set_nested_json_string(
+            &mut value,
+            &["appearance", "window_material"],
+            settings.window_material.as_str().to_owned(),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["appearance", "window_background_opacity"],
+            serde_json::json!(settings.window_background_opacity.min(100)),
+        );
         let previous = json_path(&value, &["appearance", "custom_themes"])
             .cloned()
             .unwrap_or_else(|| serde_json::json!([]));

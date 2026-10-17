@@ -873,6 +873,99 @@ mod tests {
         });
     }
 
+    #[test]
+    fn native_window_material_preview_cancels_and_apply_persists_independent_opacity() {
+        use nyaterm_core::models::window_material::WindowMaterial;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_window_material(WindowMaterial::Blurred, cx);
+            app.set_window_background_opacity(35, cx);
+            assert_eq!(
+                app.settings.summary().window_material,
+                WindowMaterial::Blurred
+            );
+            assert_eq!(app.settings.summary().window_background_opacity, 35);
+            assert!(app.settings_draft_dirty());
+            let stored = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(stored.window_material, WindowMaterial::Opaque);
+            app.cancel_settings(cx);
+            assert_eq!(
+                app.settings.summary().window_material,
+                WindowMaterial::Opaque
+            );
+            assert_eq!(app.settings.summary().window_background_opacity, 20);
+            app.begin_settings_draft(cx);
+            app.set_window_material(WindowMaterial::Transparent, cx);
+            app.set_window_background_opacity(0, cx);
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+        cx.update_entity(&app, |app, cx| {
+            let stored = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(stored.window_material, WindowMaterial::Transparent);
+            assert_eq!(stored.window_background_opacity, 0);
+            assert_eq!(stored.background_content_opacity, 82);
+            app.cancel_settings(cx);
+        });
+    }
+
+    #[test]
+    fn shared_native_material_settings_refresh_other_workspaces_and_respect_dirty_drafts() {
+        use crate::app_shell::{SharedStateDomain, SharedStateEvent};
+        use nyaterm_core::models::window_material::WindowMaterial;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let first = app(&mut cx);
+        let second = app(&mut cx);
+        let mut snapshot = cx.update_entity(&first, |app, _| {
+            app.store_blocking_client()
+                .request(0, nyaterm_store::LoadBootstrap)
+                .unwrap()
+                .outcome
+                .unwrap()
+        });
+        snapshot.settings.window_material = WindowMaterial::Blurred;
+        snapshot.settings.window_background_opacity = 48;
+        let event = SharedStateEvent {
+            domain: SharedStateDomain::Settings,
+            revision: 1,
+            changed: true,
+        };
+        cx.update_entity(&second, |app, cx| {
+            app.apply_shared_state(snapshot.clone(), event, cx);
+            assert_eq!(
+                app.settings.summary().window_material,
+                WindowMaterial::Blurred
+            );
+            assert_eq!(app.settings.summary().window_background_opacity, 48);
+            app.begin_settings_draft(cx);
+            app.set_window_material(WindowMaterial::Transparent, cx);
+            app.apply_shared_state(snapshot.clone(), event, cx);
+            assert_eq!(
+                app.settings.summary().window_material,
+                WindowMaterial::Transparent
+            );
+            app.cancel_settings(cx);
+            assert_eq!(
+                app.settings.summary().window_material,
+                WindowMaterial::Blurred
+            );
+        });
+    }
+
     /// And must write a header status turned back on from hidden.
     ///
     /// This is the direction the bug was reported in: the header reads as "hidden"

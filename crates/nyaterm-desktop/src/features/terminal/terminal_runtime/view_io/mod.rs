@@ -719,7 +719,7 @@ impl NyaTermApp {
             return false;
         };
         let palette = self.terminal_theme_palette();
-        let transparent_background = self.wallpaper_enabled();
+        let transparent_background = self.shell_background().transparent_surfaces();
         let font = self.gpui_terminal_font();
         let font_family = font.family;
         let font_fallbacks = font.fallbacks;
@@ -1042,7 +1042,7 @@ impl NyaTermApp {
         }
         let view = self.terminal.view.views.get(session_id);
         let palette = self.terminal_theme_palette();
-        let transparent_background = self.wallpaper_enabled();
+        let transparent_background = self.shell_background().transparent_surfaces();
         let font = self.gpui_terminal_font();
         let font_family = font.family;
         let font_fallbacks = font.fallbacks;

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui::{
     App, AppContext, Context, FontFallbacks, FontWeight, PathPromptOptions, RenderImage,
-    SharedString, font, px, rgb, rgba,
+    SharedString, font, px,
 };
 use nyaterm_core::{
     AppSettingsSummary, ResolvedKeywordHighlightRule, merge_keyword_highlight_rules_for_paint,
@@ -38,6 +38,7 @@ impl NyaTermApp {
         };
         crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
         self.settings.replace_summary(settings);
+        self.sync_native_window_material(cx);
         if !self
             .settings
             .summary()
@@ -60,13 +61,10 @@ impl NyaTermApp {
             self.invalidate_terminal_cell_metrics(cx);
         }
         self.invalidate_paint_theme_caches();
-        // Flush boundary: the theme and wallpaper feed `PanelChrome` and
-        // `ConnectionChrome`.
-        self.flush_remote_panel_snapshots(cx);
-        self.flush_connection_panel_snapshot(cx);
-        self.flush_transfer_panel_snapshot(cx);
-        self.flush_ai_panel_snapshot(cx);
+        // A material or content-opacity change must refresh resolved panel
+        // colours even when the wallpaper path is unchanged.
         self.queue_wallpaper_refresh(cx);
+        self.refresh_background_surfaces(cx);
     }
 
     pub(in crate::features) fn sync_component_theme(&self, cx: &mut App) {
@@ -172,7 +170,7 @@ impl NyaTermApp {
         if !self.shell.request_wallpaper(path.clone()) {
             return;
         }
-        self.refresh_wallpaper_surfaces(cx);
+        self.refresh_background_surfaces(cx);
         let Some(path) = path else {
             return;
         };
@@ -188,7 +186,7 @@ impl NyaTermApp {
                 match result {
                     Ok((image, width, height)) => {
                         if this.shell.cache_wallpaper(path, image, width, height) {
-                            this.refresh_wallpaper_surfaces(cx);
+                            this.refresh_background_surfaces(cx);
                         }
                     }
                     Err(()) if this.shell.wallpaper_is_requested(&path) => {
@@ -203,7 +201,7 @@ impl NyaTermApp {
         .detach();
     }
 
-    fn refresh_wallpaper_surfaces(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn refresh_background_surfaces(&mut self, cx: &mut Context<Self>) {
         // Cached panel entities retain their resolved colours until their own
         // snapshots are flushed; notifying only the shell leaves them stale.
         self.flush_remote_panel_snapshots(cx);
@@ -336,32 +334,20 @@ impl NyaTermApp {
         .detach();
     }
 
-    /// Wallpaper opacity applies to surface backgrounds, not their contents.
+    /// Content opacity applies to surface backgrounds, not their contents.
     pub(in crate::features) fn shell_surface_color(&self, color: u32) -> gpui::Rgba {
-        if !self.wallpaper_enabled() {
-            return rgb(color);
-        }
-        let alpha = ((self.settings.summary().background_content_opacity.min(100) as f32 / 100.0)
-            * 255.0)
-            .round() as u32;
-        rgba((color << 8) | alpha.min(0xff))
+        self.shell_background().surface_color(color)
     }
 
-    /// Preserve the workbench's two-layer shading with one background, including
-    /// connection and reconnect placeholders, so state changes cannot alter opacity.
+    /// Use the same background for terminals and their lifecycle placeholders.
+    /// Opaque windows retain the legacy wallpaper shading.
     pub(in crate::features) fn shell_terminal_surface_color(&self, color: u32) -> gpui::Rgba {
-        let mut background = self.shell_surface_color(color);
-        background.a += (1.0 - background.a) * background.a;
-        background
+        self.shell_background().terminal_color(color)
     }
 
-    /// Explicitly transparent surfaces reveal wallpaper.
+    /// Structural containers reveal wallpaper and the native window backdrop.
     pub(in crate::features) fn shell_transparent_color(&self, color: u32) -> gpui::Rgba {
-        if self.wallpaper_enabled() {
-            rgba(color << 8)
-        } else {
-            rgb(color)
-        }
+        self.shell_background().transparent_color(color)
     }
 
     pub(in crate::features) fn terminal_theme_is_dark(&self) -> bool {
@@ -857,6 +843,7 @@ impl NyaTermApp {
         if !self.settings.set_background_content_opacity(next) {
             return;
         }
+        self.refresh_background_surfaces(cx);
         self.save_appearance_settings(cx);
     }
 

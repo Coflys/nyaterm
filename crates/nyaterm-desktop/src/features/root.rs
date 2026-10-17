@@ -179,6 +179,10 @@ impl NyaTermApp {
     }
 
     pub(crate) fn start_after_window_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = window.window_handle().downcast::<nyaterm_ui::NyaRoot>() {
+            self.shell.remember_main_window(handle);
+        }
+        self.sync_native_window_material(cx);
         self.sync_component_theme(cx);
         // The connections panel renders from a snapshot, so it needs one before its
         // first paint. Later ones come from store replies and panel interactions.
@@ -242,7 +246,7 @@ impl NyaTermApp {
             .key_context(crate::shortcuts::WORKSPACE_KEY_CONTEXT)
             .size_full()
             .relative()
-            .bg(self.shell_transparent_color(palette.bg))
+            .bg(self.shell_background().root_color(palette.bg))
             .text_color(rgb(palette.text))
             .font(self.gpui_ui_font().font())
             .text_size(px(self.settings.summary().ui_font_size.clamp(12, 24) as f32))

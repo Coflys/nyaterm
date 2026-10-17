@@ -21,7 +21,7 @@ use super::TransferBrowserAvailability;
 
 /// Colours the transfers panel needs that are not on the palette itself.
 ///
-/// All three are wallpaper-dependent, so they cannot be derived from the palette
+/// These depend on wallpaper and native transparency, so they cannot be derived from the palette
 /// alone and have to be resolved where the shell settings live.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::features) struct TransferChrome {
@@ -1050,6 +1050,37 @@ mod tests {
             assert_eq!(transfer.transparent_surface.a, 1.0);
             assert_eq!(transfer.transparent_section_header.a, 1.0);
             assert_eq!(transfer.surface.a, 1.0);
+        });
+    }
+
+    #[test]
+    fn native_material_and_content_opacity_refresh_cached_panel_colours_without_interaction() {
+        use nyaterm_core::models::window_material::WindowMaterial;
+        let dir = TestConfigDir::new("nyaterm-native-material-panel-colours");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            for material in [
+                WindowMaterial::Blurred,
+                WindowMaterial::Transparent,
+                WindowMaterial::Opaque,
+            ] {
+                app.set_window_material(material, cx);
+                app.set_background_content_opacity(45, cx);
+                let native = app.shell_background().native_transparent;
+                let chrome = app.transfer_panel.read(cx).snapshot().unwrap().chrome;
+                assert_eq!(
+                    chrome.surface,
+                    app.shell_surface_color(chrome.palette.surface)
+                );
+                assert_eq!(chrome.transparent_surface.a, if native { 0. } else { 1. });
+                if native {
+                    assert!((chrome.surface.a - 0.45).abs() < 0.002);
+                }
+            }
+            app.cancel_settings(cx);
         });
     }
 

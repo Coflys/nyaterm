@@ -1125,6 +1125,21 @@ impl SettingsFeatureState {
         true
     }
 
+    pub(in crate::features) fn set_window_material(
+        &mut self,
+        material: nyaterm_core::models::window_material::WindowMaterial,
+    ) {
+        self.summary.window_material = material;
+    }
+
+    pub(in crate::features) fn set_window_background_opacity(&mut self, opacity: u8) -> bool {
+        if self.summary.window_background_opacity == opacity {
+            return false;
+        }
+        self.summary.window_background_opacity = opacity;
+        true
+    }
+
     pub(in crate::features) fn toggle_file_explorer_auto_sync_cwd(
         &mut self,
         connection_id: String,

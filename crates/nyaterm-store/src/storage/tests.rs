@@ -2715,6 +2715,114 @@ fn save_appearance_theme_and_contrast_roundtrip() {
 }
 
 #[test]
+fn window_material_defaults_ignore_legacy_preferences_and_preserve_unknown_fields() {
+    use nyaterm_core::models::window_material::WindowMaterial;
+
+    let dir = unique_temp_dir("window-material-compatibility");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let legacy = serde_json::json!({"appearance": {
+        "window_transparency": "acrylic", "window_transparency_tint": 0.3,
+        "window_transparency_blur": true, "background_opacity": 0.45,
+        "future_field": {"enabled": true}
+    }});
+    store.save_settings_value(&legacy).expect("legacy document");
+    let mut summary = store.load_app_settings_summary().expect("read legacy");
+    assert_eq!(summary.window_material, WindowMaterial::Opaque);
+    assert_eq!(summary.window_background_opacity, 20);
+    assert_eq!(summary.background_content_opacity, 45);
+    summary.window_material = WindowMaterial::Blurred;
+    summary.window_background_opacity = 0;
+    let saved = store
+        .save_appearance_settings(&summary)
+        .expect("save material");
+    assert_eq!(saved.window_material, WindowMaterial::Blurred);
+    assert_eq!(saved.window_background_opacity, 0);
+    let raw = store.load_settings_value().expect("raw document");
+    for key in [
+        "window_transparency",
+        "window_transparency_tint",
+        "window_transparency_blur",
+        "future_field",
+        "background_opacity",
+    ] {
+        assert_eq!(raw["appearance"][key], legacy["appearance"][key]);
+    }
+    let mut future = raw;
+    future["appearance"]["window_material"] = serde_json::json!("future_backdrop");
+    future["appearance"]["window_background_opacity"] = serde_json::json!(150);
+    store.save_settings_value(&future).expect("future document");
+    let summary = store.load_app_settings_summary().expect("future material");
+    assert_eq!(
+        summary.window_material,
+        WindowMaterial::Unknown("future_backdrop".into())
+    );
+    assert_eq!(summary.window_background_opacity, 100);
+    store
+        .save_appearance_settings(&summary)
+        .expect("unrelated save");
+    assert_eq!(
+        store.load_settings_value().unwrap()["appearance"]["window_material"],
+        "future_backdrop"
+    );
+}
+
+#[test]
+fn native_window_material_is_restored_from_backup_and_preserved_during_sync() {
+    use nyaterm_core::models::window_material::WindowMaterial;
+    use nyaterm_core::portable_snapshot::PortableSnapshotKind;
+    let dir = unique_temp_dir("native-material-snapshots");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    settings.window_material = WindowMaterial::Blurred;
+    settings.window_background_opacity = 35;
+    store.save_appearance_settings(&settings).unwrap();
+    let mut backup = store
+        .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "device", "test")
+        .unwrap();
+    backup.recalculate_hash().unwrap();
+    let mut sync = store
+        .build_raw_portable_snapshot(PortableSnapshotKind::Sync, "device", "test")
+        .unwrap();
+    sync.recalculate_hash().unwrap();
+    let synced: serde_json::Value = serde_json::from_str(&sync.entities["settings"]).unwrap();
+    assert!(synced["appearance"].get("window_material").is_none());
+    assert!(
+        synced["appearance"]
+            .get("window_background_opacity")
+            .is_none()
+    );
+    settings.window_material = WindowMaterial::Transparent;
+    settings.window_background_opacity = 75;
+    store.save_appearance_settings(&settings).unwrap();
+    store.apply_raw_portable_snapshot(&sync).unwrap();
+    let local = store.load_app_settings_summary().unwrap();
+    assert_eq!(local.window_material, WindowMaterial::Transparent);
+    assert_eq!(local.window_background_opacity, 75);
+    store.apply_raw_portable_snapshot(&backup).unwrap();
+    let restored = store.load_app_settings_summary().unwrap();
+    assert_eq!(restored.window_material, WindowMaterial::Blurred);
+    assert_eq!(restored.window_background_opacity, 35);
+}
+
+#[test]
+fn malformed_native_window_settings_are_rejected_without_overwriting_user_data() {
+    let dir = unique_temp_dir("native-material-malformed");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let settings = store.load_app_settings_summary().unwrap();
+    for appearance in [
+        serde_json::json!({"window_material": {"future": "format"}}),
+        serde_json::json!({"window_background_opacity": "invalid"}),
+        serde_json::json!({"window_background_opacity": 0.2}),
+    ] {
+        let raw = serde_json::json!({"appearance": appearance});
+        store.save_settings_value(&raw).unwrap();
+        assert!(store.load_app_settings_summary().is_err());
+        assert!(store.save_appearance_settings(&settings).is_err());
+        assert_eq!(store.load_settings_value().unwrap(), raw);
+    }
+}
+
+#[test]
 fn save_empty_search_engine_list_roundtrip() {
     let dir = unique_temp_dir("settings-empty-search-engines");
     let store = ConnectionStore::open(&dir).expect("store");

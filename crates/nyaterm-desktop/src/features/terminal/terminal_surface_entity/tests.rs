@@ -43,6 +43,86 @@ struct TerminalSurfaceLayoutTestView {
 }
 
 #[test]
+fn window_tint_and_transparent_surface_keep_explicit_and_inverse_ansi_backgrounds_opaque() {
+    use crate::features::shell::window_material::ShellBackground;
+
+    struct TintedTerminal {
+        surface: Entity<TerminalSurface>,
+        tint: gpui::Rgba,
+    }
+
+    impl Render for TintedTerminal {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .bg(self.tint)
+                .child(self.surface.clone())
+        }
+    }
+
+    let mut screen = TerminalScreen::new(40, 3);
+    screen.advance(b"\x1b[48;2;18;52;86mA\x1b[0m\x1b[38;2;171;205;239;7mB\x1b[0m");
+    let snapshot = Arc::new(screen.viewport_snapshot(0));
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let surface = cx.new(|_| TerminalSurface::new("ansi-backgrounds"));
+    cx.update_entity(&surface, |surface, _| {
+        surface.apply_frame_snapshot(
+            TerminalSurfaceFrameSnapshot::new(
+                snapshot,
+                TerminalScrollVisualState {
+                    session_id: "ansi-backgrounds".into(),
+                    scroll_offset: 0,
+                    scroll_residual_lines: 0.,
+                    display_offset: 0,
+                    scrollback_len: 0,
+                    viewport_rows: 3,
+                    has_new_while_scrolled: false,
+                    performance_overlay: None,
+                    skipped_output_chars: 0,
+                },
+            )
+            .with_presentation(false, false, "block"),
+        );
+    });
+    let rendered_surface = surface.clone();
+    let (host, vcx) = cx.add_window_view(move |_, _| TintedTerminal {
+        surface: rendered_surface,
+        tint: gpui::rgba(0),
+    });
+    for native_transparent in [false, true] {
+        for opacity in [0, 20, 100] {
+            let background = ShellBackground {
+                native_transparent,
+                wallpaper: false,
+                content_opacity: 0,
+                window_opacity: opacity,
+            };
+            vcx.update(|window, cx| {
+                surface.update(cx, |surface, cx| {
+                    surface.set_background_transparent(background.transparent_surfaces());
+                    cx.notify();
+                });
+                host.update(cx, |host, cx| {
+                    host.tint = background.root_color(0x010203);
+                    cx.notify();
+                });
+                let _ = window.draw(cx);
+                for color in [0x123456, 0xabcdef] {
+                    assert!(
+                        window.painted_quads().iter().any(|quad| {
+                            quad.background == gpui::Background::from(gpui::rgb(color))
+                        }),
+                        "ANSI background {color:06x} must remain fully opaque"
+                    );
+                }
+            });
+        }
+    }
+}
+
+#[test]
 fn input_colors_are_cleared_when_rules_change_or_alternate_screen_takes_over() {
     let rules = nyaterm_core::keyword_highlight_presets::get_builtin_keyword_rules(true);
     let highlighter = compile_terminal_keyword_highlighter(&rules);

@@ -4,10 +4,10 @@ use std::sync::Arc;
 use rust_i18n::t;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, MouseButton,
-    SharedString, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div,
+    prelude::*, px, rgb, rgba,
 };
-use nyaterm_ui::{NYA_FORM_CONTROL_HEIGHT_PX, NyaSelectOption, NyaSlider};
+use nyaterm_ui::{NYA_FORM_CONTROL_HEIGHT_PX, NyaSelectOption};
 
 use crate::features::{
     FontAvailability, FontCatalogLoadState, FontResolutionSource, FontResolutionStatus,
@@ -22,6 +22,7 @@ use crate::features::{
 use crate::theme::ThemePalette;
 
 use super::super::{settings_form_row, settings_form_section, settings_switch};
+use super::window_background::AppearanceOpacity;
 
 struct AppearanceFontStackPresentation {
     terminal: bool,
@@ -44,6 +45,7 @@ impl SettingsPanel {
             .flex_col()
             .gap_5()
             .child(self.theme_designer_section(cx))
+            .child(self.window_background_section(cx))
             .child(settings_form_section(
                 palette,
                 None,
@@ -189,8 +191,7 @@ impl SettingsPanel {
                             )),
                             self.appearance_background_fit_select(has_image, cx),
                         ))
-                        .child(self.appearance_opacity_slider(false, has_image, cx))
-                        .child(self.appearance_opacity_slider(true, has_image, cx))
+                        .child(self.appearance_opacity_slider(AppearanceOpacity::Image, has_image, cx))
                 },
             ))
             .child(self.appearance_font_stack_settings_section(false, cx))
@@ -534,119 +535,6 @@ impl SettingsPanel {
         let families = configured_appearance_font_stack(raw, fallback);
         self.settings
             .resolve_font_stack(&families, terminal, platform_default)
-    }
-
-    fn appearance_opacity_slider(
-        &mut self,
-        content: bool,
-        enabled: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = self.theme_palette();
-        let value = if content {
-            self.settings.summary().background_content_opacity
-        } else {
-            self.settings.summary().background_image_opacity
-        };
-        let label = if content {
-            t!("settings.backgroundContentOpacity")
-        } else {
-            t!("settings.backgroundImageOpacity")
-        };
-        let desc = if content {
-            t!("settings.backgroundContentOpacityDesc", value = "82%").to_string()
-        } else {
-            t!("settings.backgroundImageOpacityDesc").to_string()
-        };
-        let slider = if content {
-            &self.content_opacity_slider
-        } else {
-            &self.image_opacity_slider
-        };
-        let focus = if content {
-            self.content_opacity_focus.clone()
-        } else {
-            self.image_opacity_focus.clone()
-        };
-        let mouse_focus = focus.clone();
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .track_focus(&focus)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_, _, window, cx| {
-                    window.focus(&mouse_focus, cx);
-                }),
-            )
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                if !enabled {
-                    return;
-                }
-                let current = if content {
-                    this.settings.summary().background_content_opacity
-                } else {
-                    this.settings.summary().background_image_opacity
-                };
-                let next = match event.keystroke.key.as_str() {
-                    "left" | "down" => current.saturating_sub(1),
-                    "right" | "up" => current.saturating_add(1).min(100),
-                    "home" => 0,
-                    "end" => 100,
-                    _ => return,
-                };
-                if next != current {
-                    if content {
-                        this.set_background_content_opacity(next, cx);
-                    } else {
-                        this.set_background_image_opacity(next, cx);
-                    }
-                }
-                cx.stop_propagation();
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .justify_between()
-                    .gap_4()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight(500.))
-                                    .text_color(rgb(palette.text))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .mt_1()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette.text_dimmed))
-                                    .child(desc),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(rgb(palette.border))
-                            .bg(rgb(palette.input))
-                            .px_2()
-                            .py_1()
-                            .font_family(crate::features::shell::gpui_code_font_family())
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.text_muted))
-                            .child(format!("{value}%")),
-                    ),
-            )
-            .child(NyaSlider::new(slider).disabled(!enabled).w_full())
     }
 
     fn appearance_theme_select(
