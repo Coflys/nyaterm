@@ -63,6 +63,7 @@ pub(super) fn set_connection_editor_icon(
     // remote system overwrite it. Clearing the icon hands control back.
     editor.icon_auto_detect = editor.icon.is_none();
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -91,10 +92,6 @@ pub(super) fn set_connection_editor_select_value(
     match select {
         ConnectionEditorSelect::Authentication => {
             editor.auth_mode = value.unwrap_or_else(|| "password".to_string());
-            if editor.auth_mode == "none" {
-                clear_connection_editor_password_secret(editor);
-                editor.key_id = None;
-            }
         }
         ConnectionEditorSelect::SshAgentEndpoint => {
             editor.agent_endpoint = match value.as_deref() {
@@ -137,6 +134,7 @@ pub(super) fn set_connection_editor_select_value(
                 editor.kind,
                 ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
             ) {
+                editor.account_source_saved = value.is_some();
                 editor.account_id = value;
                 editor.password_id = None;
             } else {
@@ -144,8 +142,14 @@ pub(super) fn set_connection_editor_select_value(
             }
         }
         ConnectionEditorSelect::Account => {
+            editor.account_source_saved = value.is_some();
             editor.account_id = value;
             editor.password_id = None;
+            if editor.account_id.is_none()
+                && editor.password_source == ConnectionEditorPasswordSource::Saved
+            {
+                editor.password_source = ConnectionEditorPasswordSource::Ask;
+            }
         }
         ConnectionEditorSelect::SshKey => editor.key_id = value,
         ConnectionEditorSelect::Otp => {
@@ -270,6 +274,7 @@ pub(super) fn set_connection_editor_select_value(
         }
     }
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -281,16 +286,8 @@ pub(super) fn set_connection_editor_password_source(
         return false;
     };
     editor.password_source = source;
-    match source {
-        ConnectionEditorPasswordSource::Ask => clear_connection_editor_password_secret(editor),
-        ConnectionEditorPasswordSource::Direct => editor.password_id = None,
-        ConnectionEditorPasswordSource::Saved => {
-            editor.password.expose_secret_mut().clear();
-            editor.existing_password = None;
-            editor.existing_password_locked = false;
-        }
-    }
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -356,6 +353,7 @@ pub(super) fn set_connection_editor_ssh_algorithm_tab(
     }
     editor.ssh_algorithm_tab = tab;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -388,6 +386,7 @@ pub(super) fn set_connection_editor_ssh_algorithm_enabled(
         values.remove(position);
     }
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -419,6 +418,7 @@ pub(super) fn move_connection_editor_ssh_algorithm(
     };
     values.swap(index, target);
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -444,6 +444,7 @@ pub(super) fn add_connection_editor_agent_endpoint(
         .push(nyaterm_core::SshAgentEndpoint::Auto);
     editor.agent_forwarding_config.sources.external_agent = true;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -465,6 +466,7 @@ pub(super) fn select_connection_editor_agent_endpoint(
     }
     editor.agent_forwarding_endpoint_index = index;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -497,6 +499,7 @@ pub(super) fn set_connection_editor_agent_endpoint_type(
     };
     editor.agent_forwarding_endpoint_index = index;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -519,6 +522,7 @@ pub(super) fn remove_connection_editor_agent_endpoint(
         .agent_forwarding_endpoint_index
         .min(endpoints.len().saturating_sub(1));
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -547,6 +551,7 @@ pub(super) fn move_connection_editor_agent_endpoint(
     endpoints.swap(index, target);
     editor.agent_forwarding_endpoint_index = target;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -574,6 +579,7 @@ pub(super) fn toggle_connection_editor_agent_allowlist_fingerprint(
         return false;
     }
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -586,6 +592,7 @@ pub(super) fn set_connection_editor_telnet_tab(
     };
     editor.telnet_advanced_tab = tab;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -598,6 +605,7 @@ pub(super) fn set_connection_editor_rdp_tab(
     };
     editor.rdp_advanced_tab = tab;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -646,6 +654,7 @@ pub(super) fn set_connection_editor_kind(
         _ => editor.port.clone(),
     };
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -671,6 +680,7 @@ pub(super) fn commit_connection_editor_new_group(
     editor.new_group_name.clear();
     editor.focused_field = ConnectionEditorField::Name;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -802,6 +812,7 @@ pub(super) fn toggle_connection_editor_flag(
         }
     }
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -829,34 +840,8 @@ pub(super) fn insert_connection_editor_description_newline(
     }
     editor.description.push('\n');
     editor.error = None;
+    editor.field_errors.clear();
     true
-}
-
-pub(super) fn advance_connection_editor_focus(draft: &mut Option<ConnectionEditorState>) -> bool {
-    let Some(editor) = draft.as_mut() else {
-        return false;
-    };
-    let password_field_visible = editor.auth_mode == "password"
-        && editor.password_source == ConnectionEditorPasswordSource::Direct;
-    let post_login_fields_visible = editor.advanced.is_open(ConnectionKindTab::Ssh)
-        && editor.post_login_enabled
-        && editor.advanced_behavior_tab == ConnectionEditorAdvancedTab::PostLogin;
-    editor.focused_field = editor.focused_field.next(
-        editor.kind,
-        editor.auth_mode.as_str(),
-        password_field_visible,
-        post_login_fields_visible,
-    );
-    editor.error = None;
-    true
-}
-
-fn clear_connection_editor_password_secret(editor: &mut ConnectionEditorState) {
-    editor.password_source = ConnectionEditorPasswordSource::Ask;
-    editor.password_id = None;
-    editor.password.expose_secret_mut().clear();
-    editor.existing_password = None;
-    editor.existing_password_locked = false;
 }
 
 pub(super) fn set_connection_editor_error(
@@ -879,6 +864,7 @@ pub(super) fn apply_connection_editor_shell_path(
     };
     editor.shell_path = shell_path;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -891,6 +877,7 @@ pub(super) fn apply_connection_editor_working_dir(
     };
     editor.working_dir = working_dir;
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -1186,6 +1173,7 @@ pub(super) fn set_connection_editor_forwarding_endpoint_field(
         _ => return false,
     };
     editor.error = None;
+    editor.field_errors.clear();
     true
 }
 
@@ -1223,6 +1211,7 @@ pub(super) fn set_connection_editor_field_text(
     text: String,
 ) {
     draft.error = None;
+    draft.field_errors.clear();
     match field {
         ConnectionEditorField::Name => draft.name = text,
         ConnectionEditorField::NewTag => draft.new_tag = text,

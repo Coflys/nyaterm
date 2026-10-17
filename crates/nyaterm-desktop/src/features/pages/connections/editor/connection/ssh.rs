@@ -17,13 +17,13 @@ use nyaterm_ui::{NyaCheckbox, NyaScrollable, NyaSelect, NyaTabItem, NyaTabs, Nya
 use crate::features::{NyaTermApp, connections::ConnectionEditorToggle};
 use crate::models::{
     ConnectionEditorAdvancedTab, ConnectionEditorCredentialOverlay, ConnectionEditorField,
-    ConnectionEditorPasswordSource, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
+    ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
 };
 
 use super::super::super::list::{
     ConnectionEditorChoice, ConnectionEditorRenderContext, EDITOR_CONTROL_HEIGHT_PX,
-    EditorSecretFieldOptions, connection_editor_select, editor_field, editor_secret_field,
-    editor_stepper_field, editor_switch_row, forwarding_endpoint_editor_field, required,
+    connection_editor_select, editor_field, editor_stepper_field, editor_switch_row,
+    forwarding_endpoint_editor_field, required,
 };
 
 use super::{ConnectionEditorSectionContext, recording::connection_editor_recording_section};
@@ -366,26 +366,6 @@ pub(super) fn connection_editor_ssh_section(
             this.set_connection_editor_advanced_tab(tab, cx);
         }));
 
-    let password_source_tabs = NyaTabs::new("connection-password-source-tabs")
-        .items([
-            NyaTabItem::new(t!("dialog.askWhenConnecting")),
-            NyaTabItem::new(t!("dialog.directPassword")),
-            NyaTabItem::new(t!("dialog.account")),
-        ])
-        .selected_index(match editor.password_source {
-            ConnectionEditorPasswordSource::Ask => 0,
-            ConnectionEditorPasswordSource::Direct => 1,
-            ConnectionEditorPasswordSource::Saved => 2,
-        })
-        .on_select(cx.listener(|this, index, _, cx| {
-            let source = match *index {
-                0 => ConnectionEditorPasswordSource::Ask,
-                1 => ConnectionEditorPasswordSource::Direct,
-                _ => ConnectionEditorPasswordSource::Saved,
-            };
-            this.set_connection_editor_password_source(source, cx);
-        }));
-
     div()
         .debug_selector(|| "connection-editor-ssh-section".to_string())
         .flex()
@@ -412,19 +392,7 @@ pub(super) fn connection_editor_ssh_section(
                     cx,
                 ))),
         )
-        .child(editor_field(
-            palette,
-            required(t!("dialog.username")),
-            ConnectionEditorField::Username,
-            fields,
-            cx,
-        ))
-        .child(connection_editor_select(
-            ConnectionEditorRenderContext { palette, fields, cx },
-            "connection-editor-account",
-            t!("dialog.account"),
-            ConnectionEditorSelect::Account,
-        ))
+        .child(super::authentication::login_identity(section, cx))
         .child(
             div()
                 .flex()
@@ -450,96 +418,7 @@ pub(super) fn connection_editor_ssh_section(
                     .child(t!("dialog.noAuthenticationDescription")),
             )
         })
-        .when(editor.auth_mode == "password", |this| {
-            this.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(palette.text_muted))
-                            .child(t!("dialog.passwordSource")),
-                    )
-                    .child(password_source_tabs)
-                    .when(
-                        editor.password_source == ConnectionEditorPasswordSource::Ask,
-                        |this| {
-                            this.child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded_md()
-                                    .bg(rgba((palette.accent << 8) | 0x18))
-                                    .text_size(px(10.))
-                                    .text_color(rgb(palette.text_muted))
-                                    .child(t!("dialog.askPasswordDescription")),
-                            )
-                        },
-                    )
-                    .when(
-                        editor.password_source == ConnectionEditorPasswordSource::Direct,
-                        |this| {
-                            this.child(editor_secret_field(
-                                palette,
-                                t!("dialog.password"),
-                                ConnectionEditorField::Password,
-                                fields,
-                                EditorSecretFieldOptions::new(
-                                    false,
-                                    t!("passwordManager.showPassword"),
-                                    t!("dialog.clearPassword"),
-                                    cx.listener(|this, _, _, cx| {
-                                        this.toggle_connection_editor_password_visibility(cx);
-                                    }),
-                                    cx.listener(|this, _, _, cx| {
-                                        this.clear_connection_editor_password(cx);
-                                    }),
-                                ),
-                                cx,
-                            ))
-                        },
-                    )
-                    .when(
-                        editor.password_source == ConnectionEditorPasswordSource::Saved,
-                        |this| {
-                            this.child(
-                                div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_end()
-                                    .gap_2()
-                                    .child(div().min_w(px(180.)).flex_1().child(
-                                        connection_editor_select(
-                                            ConnectionEditorRenderContext {
-                                                palette,
-                                                fields,
-                                                cx,
-                                            },
-                                            "connection-editor-saved-password",
-                                            t!("dialog.account"),
-                                            ConnectionEditorSelect::SavedPassword,
-                                        ),
-                                    ))
-                                    .child(
-                                        nyaterm_ui::NyaButton::new(
-                                            "connection-editor-manage-passwords",
-                                            t!("dialog.managePasswords"),
-                                        )
-                                        .form_control()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.set_connection_editor_credential_overlay(
-                                                Some(ConnectionEditorCredentialOverlay::Passwords),
-                                                cx,
-                                            );
-                                        })),
-                                    ),
-                            )
-                        },
-                    ),
-            )
-        })
+        .when(editor.auth_mode == "password", |this| this.child(super::authentication::password_source(section, cx)))
         .when(editor.auth_mode == "agent", |this| {
             this.child(
                 div()

@@ -6,6 +6,7 @@ use nyaterm_core::{
 };
 use nyaterm_store::{StoreDomain, store_request};
 use nyaterm_transport::SessionKind;
+use nyaterm_ui::NyaDialogWindowExt as _;
 
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup};
 use crate::models::DiagnosticsPathPromptResult;
@@ -39,6 +40,9 @@ impl NyaTermApp {
         }
         self.security.remember_screen_lock_focus(window.focused(cx));
         self.security.activate_screen_lock(String::new());
+        self.forget_text_inputs("security.editor.");
+        self.connection_state.clear_editor_secrets(cx);
+        window.close_all_nya_dialogs(cx);
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status("screen locked".to_string());
         if self.settings.summary().has_master_password {

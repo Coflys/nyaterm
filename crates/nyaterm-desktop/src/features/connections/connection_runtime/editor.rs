@@ -9,7 +9,7 @@ use nyaterm_store::StoreDomain;
 
 use super::helpers::{
     ConnectionEditorToggle, ConnectionEditorValidationError, build_saved_connection_from_editor,
-    connection_editor_from_saved,
+    connection_editor_from_saved, validate_editor_account,
 };
 use crate::features::NyaTermApp;
 use crate::models::{
@@ -25,6 +25,7 @@ impl NyaTermApp {
         editor: &ConnectionEditorState,
     ) -> Option<String> {
         build_saved_connection_from_editor(editor)
+            .and_then(|_| validate_editor_account(editor, self.security.passwords()))
             .err()
             .map(|error| self.connection_editor_validation_message(&error))
     }
@@ -42,6 +43,15 @@ impl NyaTermApp {
             SshAlgorithmListKind::HostKey => t!("dialog.algorithmHostKeys"),
         };
         match error {
+            ConnectionEditorValidationError::MissingAccount => {
+                t!("passwordManager.missingAccount").into()
+            }
+            ConnectionEditorValidationError::AccountPasswordMissing => {
+                t!("authForm.accountPasswordMissing").into()
+            }
+            ConnectionEditorValidationError::PasswordReplacementRequired => {
+                t!("authForm.passwordRequired").into()
+            }
             ConnectionEditorValidationError::HostRequired => t!("dialog.hostRequired").into(),
             ConnectionEditorValidationError::PortInvalid => t!("dialog.portInvalid").into(),
             ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
@@ -185,6 +195,9 @@ impl NyaTermApp {
                 password_source: ConnectionEditorPasswordSource::Ask,
                 password_id: None,
                 account_id: None,
+                account_source_saved: false,
+                password_edit: crate::models::ConnectionPasswordEdit::Replace,
+                field_errors: Default::default(),
                 password: nyaterm_core::SecretString::default(),
                 existing_password: None,
                 existing_password_locked: false,
@@ -360,16 +373,17 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn clear_connection_editor_password(&mut self, cx: &mut Context<Self>) {
-        if let Some(field) = self
-            .connection_state
-            .editor_fields()
-            .get(&ConnectionEditorField::Password)
-            .cloned()
-        {
-            field.update(cx, |field, cx| field.clear(cx));
-        }
+    pub(in crate::features) fn edit_connection_password(
+        &mut self,
+        edit: crate::models::ConnectionPasswordEdit,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection_state.set_editor_password_edit(edit, cx);
         cx.notify();
+    }
+
+    pub(in crate::features) fn clear_connection_editor_password(&mut self, cx: &mut Context<Self>) {
+        self.edit_connection_password(crate::models::ConnectionPasswordEdit::Remove, cx);
     }
 
     pub(in crate::features) fn set_connection_editor_baud_rate(
@@ -453,6 +467,46 @@ impl NyaTermApp {
     ) {
         self.connection_state
             .set_editor_select_value(select, value.map(ToOwned::to_owned));
+        let account_selection = select == ConnectionEditorSelect::Account
+            || (select == ConnectionEditorSelect::SavedPassword
+                && self
+                    .connection_state
+                    .active_editor_draft()
+                    .is_some_and(|editor| {
+                        matches!(
+                            editor.kind,
+                            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                        )
+                    }));
+        if account_selection
+            && let Some(editor) = self.connection_state.active_editor_draft()
+            && editor.auth_mode == "password"
+        {
+            let has_password = value
+                .and_then(|id| {
+                    self.security
+                        .passwords()
+                        .iter()
+                        .find(|entry| entry.id == id)
+                })
+                .is_some_and(|entry| entry.has_password);
+            self.connection_state
+                .set_editor_password_source(if has_password {
+                    ConnectionEditorPasswordSource::Saved
+                } else {
+                    ConnectionEditorPasswordSource::Ask
+                });
+        }
+
+        cx.notify();
+    }
+
+    pub(in crate::features) fn set_connection_account_source(
+        &mut self,
+        saved: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection_state.set_editor_account_source(saved);
         cx.notify();
     }
 
@@ -816,6 +870,9 @@ impl NyaTermApp {
                 return true;
             }
             "enter" => {
+                if self.connection_state.editor_credential_overlay().is_some() {
+                    return true;
+                }
                 if !keystroke.modifiers.platform
                     && !keystroke.modifiers.control
                     && self.connection_state.editor_tag_field_is_focused(cx)
@@ -835,12 +892,33 @@ impl NyaTermApp {
                     self.commit_connection_editor_new_group(cx);
                     return true;
                 }
-                self.save_connection_editor(window, cx);
-                return true;
+                let input_focused = self
+                    .connection_state
+                    .editor_fields()
+                    .values()
+                    .any(|field| field.read(cx).component_focus_handle(cx).is_focused(window))
+                    || self
+                        .connection_state
+                        .editor_number_fields()
+                        .values()
+                        .any(|field| field.read(cx).component_focus_handle(cx).is_focused(window));
+                if input_focused
+                    || self
+                        .connection_state
+                        .editor_focus_handle()
+                        .is_focused(window)
+                {
+                    self.save_connection_editor(window, cx);
+                    return true;
+                }
+                return false;
             }
             "tab" if !keystroke.modifiers.platform && !keystroke.modifiers.control => {
-                self.connection_state.advance_editor_focus();
-                cx.notify();
+                if keystroke.modifiers.shift {
+                    window.focus_prev(cx);
+                } else {
+                    window.focus_next(cx);
+                }
                 return true;
             }
             _ => {}
@@ -894,11 +972,88 @@ impl NyaTermApp {
             editor.group_id = Some(group.id.clone());
         }
 
-        let built = match build_saved_connection_from_editor(&editor) {
+        let built = match build_saved_connection_from_editor(&editor).and_then(|built| {
+            validate_editor_account(&editor, self.security.passwords()).map(|()| built)
+        }) {
             Ok(connection) => connection,
             Err(error) => {
                 let message = self.connection_editor_validation_message(&error);
-                self.set_connection_editor_error(message, cx);
+                let field = match error {
+                    ConnectionEditorValidationError::HostRequired => ConnectionEditorField::Host,
+                    ConnectionEditorValidationError::PortInvalid => ConnectionEditorField::Port,
+                    ConnectionEditorValidationError::UsernameRequired
+                    | ConnectionEditorValidationError::MissingAccount => {
+                        ConnectionEditorField::Username
+                    }
+                    ConnectionEditorValidationError::AccountPasswordMissing
+                    | ConnectionEditorValidationError::PasswordReplacementRequired
+                    | ConnectionEditorValidationError::VncPasswordTooLong => {
+                        ConnectionEditorField::Password
+                    }
+                    ConnectionEditorValidationError::ShellPathRequired => {
+                        ConnectionEditorField::ShellPath
+                    }
+                    ConnectionEditorValidationError::SerialPortRequired => {
+                        ConnectionEditorField::SerialPort
+                    }
+                    ConnectionEditorValidationError::BaudRateInvalid => {
+                        ConnectionEditorField::BaudRate
+                    }
+                    ConnectionEditorValidationError::VncUsernameTooLong => {
+                        ConnectionEditorField::Username
+                    }
+                    ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
+                        ConnectionEditorField::TelnetKeepAliveInterval
+                    }
+                    ConnectionEditorValidationError::RdpDisplayWidthInvalid => {
+                        ConnectionEditorField::RdpDisplayWidth
+                    }
+                    ConnectionEditorValidationError::RdpDisplayHeightInvalid => {
+                        ConnectionEditorField::RdpDisplayHeight
+                    }
+                    ConnectionEditorValidationError::RdpReconnectAttemptsInvalid => {
+                        ConnectionEditorField::RdpReconnectAttempts
+                    }
+                    ConnectionEditorValidationError::VncReconnectAttemptsInvalid => {
+                        ConnectionEditorField::VncReconnectAttempts
+                    }
+                    ConnectionEditorValidationError::PostLoginCommandRequired => {
+                        ConnectionEditorField::PostLoginCommand
+                    }
+                    ConnectionEditorValidationError::PostLoginDelayInvalid => {
+                        ConnectionEditorField::PostLoginDelay
+                    }
+                    ConnectionEditorValidationError::SftpShellDetectionTimeoutInvalid => {
+                        ConnectionEditorField::SftpShellDetectionTimeout
+                    }
+                    ConnectionEditorValidationError::SshAgentEndpoint(_)
+                    | ConnectionEditorValidationError::SshAlgorithms(_) => editor.focused_field,
+                };
+                self.connection_state.set_editor_field_error(field, message);
+                if matches!(
+                    error,
+                    ConnectionEditorValidationError::MissingAccount
+                        | ConnectionEditorValidationError::AccountPasswordMissing
+                ) {
+                    self.focus_connection_editor_select(
+                        if matches!(
+                            editor.kind,
+                            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                        ) {
+                            ConnectionEditorSelect::Account
+                        } else {
+                            ConnectionEditorSelect::SavedPassword
+                        },
+                        window,
+                        cx,
+                    );
+                } else if let Some(input) = self.connection_state.editor_fields().get(&field) {
+                    window.focus(&input.read(cx).component_focus_handle(cx), cx);
+                } else if let Some(input) = self.connection_state.editor_number_fields().get(&field)
+                {
+                    window.focus(&input.read(cx).component_focus_handle(cx), cx);
+                }
+                cx.notify();
                 return;
             }
         };
@@ -906,14 +1061,66 @@ impl NyaTermApp {
         let Some(save_generation) = self.connection_state.begin_editor_save() else {
             return;
         };
+        let origin_window = window.window_handle();
         let saved_id = built.id.clone();
         let persisted = built.clone();
+        let account_id = built
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.saved_account_id())
+            .map(str::to_owned);
+        let account_password = built
+            .auth
+            .as_ref()
+            .is_some_and(|auth| auth.mode == "password" && auth.uses_account_password());
+        let inspect_password =
+            !self.settings.summary().has_master_password || self.security.secrets_unlocked();
+        let ssh_username_required =
+            editor.kind == ConnectionKindTab::Ssh && editor.username.trim().is_empty();
+        let missing_account = t!("passwordManager.missingAccount").to_string();
+        let missing_password = t!("authForm.accountPasswordMissing").to_string();
+        let invalid_password = t!("authForm.accountPasswordUnreadable").to_string();
+        let missing_username = t!("dialog.usernameRequired").to_string();
         let connect_after_save = editor.connect_after_save;
         self.shell.set_status("saving connection...".to_string());
         let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 let mut persisted = persisted;
+                if let Some(id) = account_id.as_deref() {
+                    let Some(account) = store.load_password_by_id(id)? else {
+                        return Ok(Err((ConnectionEditorField::Username, missing_account)));
+                    };
+                    if ssh_username_required && account.username.trim().is_empty() {
+                        return Ok(Err((ConnectionEditorField::Username, missing_username)));
+                    }
+                    if account_password {
+                        if !account.has_password {
+                            return Ok(Err((ConnectionEditorField::Password, missing_password)));
+                        }
+                        if inspect_password {
+                            match store.load_decrypted_password_by_id(id) {
+                                Ok(Some(entry))
+                                    if entry
+                                        .password
+                                        .as_deref()
+                                        .is_some_and(|value| !value.trim().is_empty()) => {}
+                                Ok(_) => {
+                                    return Ok(Err((
+                                        ConnectionEditorField::Password,
+                                        missing_password,
+                                    )));
+                                }
+                                Err(_) => {
+                                    return Ok(Err((
+                                        ConnectionEditorField::Password,
+                                        invalid_password,
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(previous) = store.get_connection(&persisted.id)? {
                     persisted.extensions = previous.extensions;
                     persisted.asset = previous.asset;
@@ -923,10 +1130,44 @@ impl NyaTermApp {
                 } else {
                     store.save_connection(&persisted)?;
                 }
-                store.load_sessions()
+                store.load_sessions().map(Ok)
             }),
             move |this, event, cx| match event.outcome {
-                Ok(sessions) => {
+                Ok(Err((field, message))) => {
+                    if this
+                        .connection_state
+                        .finish_editor_save_request(save_generation)
+                    {
+                        this.connection_state.set_editor_field_error(field, message);
+                        let app = cx.weak_entity();
+                        cx.defer(move |cx| {
+                            let _ = origin_window.update(cx, |_, window, cx| {
+                                let _ = app.update(cx, |this, cx| {
+                                    if this.connection_state.editor_token() != Some(save_generation)
+                                    {
+                                        return;
+                                    }
+                                    let select = if this
+                                        .connection_state
+                                        .active_editor_draft()
+                                        .is_some_and(|editor| {
+                                            matches!(
+                                                editor.kind,
+                                                ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                                            )
+                                        }) {
+                                        ConnectionEditorSelect::Account
+                                    } else {
+                                        ConnectionEditorSelect::SavedPassword
+                                    };
+                                    this.focus_connection_editor_select(select, window, cx);
+                                });
+                            });
+                        });
+                        cx.notify();
+                    }
+                }
+                Ok(Ok(sessions)) => {
                     let saved = sessions
                         .connections
                         .iter()

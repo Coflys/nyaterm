@@ -1049,6 +1049,9 @@ mod tests {
 /// that already hold a `Context` — reading the app entity again from inside its
 /// own update panics.
 pub(super) struct ConnectionEditorFields {
+    pub(super) account: Option<nyaterm_core::SavedPassword>,
+    pub(super) account_password_locked: bool,
+    pub(super) errors: HashMap<ConnectionEditorField, String>,
     fields: HashMap<ConnectionEditorField, Entity<NyaInputState>>,
     number_fields: HashMap<ConnectionEditorField, Entity<NyaNumberInputState>>,
     selects: HashMap<ConnectionEditorSelect, Entity<NyaSelectState>>,
@@ -1065,6 +1068,9 @@ impl ConnectionEditorFields {
         forwarding_endpoint_fields: HashMap<(usize, ConnectionEditorField), Entity<NyaInputState>>,
     ) -> Self {
         Self {
+            account: None,
+            account_password_locked: false,
+            errors: HashMap::new(),
             fields,
             number_fields,
             selects,
@@ -1207,6 +1213,14 @@ pub(super) fn editor_field(
             this.child(field_caption(palette, &label))
         })
         .child(editor_field_box(palette, field, fields, cx))
+        .when_some(fields.errors.get(&field), |this, error| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.danger))
+                    .child(error.clone()),
+            )
+        })
 }
 
 pub(super) fn connection_editor_select_on_open(
@@ -1351,6 +1365,14 @@ where
                     .on_click(on_clear),
                 ),
         )
+        .when_some(fields.errors.get(&field), |this, error| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.danger))
+                    .child(error.clone()),
+            )
+        })
 }
 
 pub(super) fn forwarding_endpoint_editor_field(
@@ -1485,6 +1507,14 @@ pub(super) fn editor_stepper_field(
                         .child(NyaNumberInput::new(field))
                 })),
         )
+        .when_some(fields.errors.get(&field), |this, error| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.danger))
+                    .child(error.clone()),
+            )
+        })
 }
 
 pub(super) fn icon_action_button(

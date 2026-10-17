@@ -834,7 +834,7 @@ fn set_connection_editor_icon_trims_empty_values_and_clears_error() {
 }
 
 #[test]
-fn set_connection_editor_auth_none_clears_password_and_key_state() {
+fn switching_to_no_authentication_preserves_password_and_key_drafts() {
     let mut draft = Some(ConnectionEditorState {
         password_id: Some("saved-password".to_string()),
         key_id: Some("key-a".to_string()),
@@ -850,11 +850,14 @@ fn set_connection_editor_auth_none_clears_password_and_key_state() {
 
     let editor = draft.expect("editor remains open");
     assert_eq!(editor.auth_mode, "none");
-    assert_eq!(editor.password_source, ConnectionEditorPasswordSource::Ask);
-    assert_eq!(editor.password_id, None);
-    assert!(editor.password.is_empty());
-    assert_eq!(editor.existing_password, None);
-    assert_eq!(editor.key_id, None);
+    assert_eq!(
+        editor.password_source,
+        ConnectionEditorPasswordSource::Direct
+    );
+    assert_eq!(editor.password_id.as_deref(), Some("saved-password"));
+    assert_eq!(editor.password.expose_secret(), "draft-secret");
+    assert_eq!(editor.existing_password.as_deref(), Some("existing-secret"));
+    assert_eq!(editor.key_id.as_deref(), Some("key-a"));
     assert_eq!(editor.error, None);
 }
 
@@ -1113,35 +1116,23 @@ fn editor_tags_trim_deduplicate_remove_and_keep_draft_fields_independent() {
 }
 
 #[test]
-fn set_connection_editor_password_source_clears_secret_drafts() {
+fn switching_password_sources_preserves_the_direct_password_and_saved_reference() {
     let mut draft = Some(ConnectionEditorState {
         password_id: Some("saved-password".to_string()),
         ..connection_editor_state_with_secret_draft()
     });
-
-    assert!(set_connection_editor_password_source(
-        &mut draft,
-        ConnectionEditorPasswordSource::Saved
-    ));
-
-    let editor = draft.as_ref().expect("editor remains open");
-    assert_eq!(
-        editor.password_source,
-        ConnectionEditorPasswordSource::Saved
-    );
-    assert!(editor.password.is_empty());
-    assert_eq!(editor.existing_password, None);
-
-    assert!(set_connection_editor_password_source(
-        &mut draft,
-        ConnectionEditorPasswordSource::Ask
-    ));
-
-    let editor = draft.expect("editor remains open");
-    assert_eq!(editor.password_source, ConnectionEditorPasswordSource::Ask);
-    assert_eq!(editor.password_id, None);
-    assert!(editor.password.is_empty());
-    assert_eq!(editor.existing_password, None);
+    for source in [
+        ConnectionEditorPasswordSource::Saved,
+        ConnectionEditorPasswordSource::Ask,
+        ConnectionEditorPasswordSource::Direct,
+    ] {
+        assert!(set_connection_editor_password_source(&mut draft, source));
+        let editor = draft.as_ref().unwrap();
+        assert_eq!(editor.password_source, source);
+        assert_eq!(editor.password.expose_secret(), "draft-secret");
+        assert_eq!(editor.existing_password.as_deref(), Some("existing-secret"));
+        assert_eq!(editor.password_id.as_deref(), Some("saved-password"));
+    }
 }
 
 #[test]
@@ -2042,6 +2033,9 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         password_source: ConnectionEditorPasswordSource::Direct,
         password_id: None,
         account_id: None,
+        account_source_saved: false,
+        password_edit: crate::models::ConnectionPasswordEdit::Replace,
+        field_errors: Default::default(),
         password: "draft-secret".to_string().into(),
         existing_password: Some("existing-secret".to_string().into()),
         existing_password_locked: false,
@@ -2168,4 +2162,106 @@ fn raw_tcp_toggle_retains_telnet_keepalive_configuration() {
         assert_eq!(editor.raw_tcp_cli, expected_raw);
         assert_eq!(editor.telnet_keep_alive_interval_secs, "45");
     }
+}
+
+#[test]
+fn selecting_an_account_updates_password_source_without_replacing_the_manual_username() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let accounts = vec![
+            nyaterm_core::SavedPassword {
+                id: "with-password".into(),
+                name: "Ops".into(),
+                username: "deploy".into(),
+                password: None,
+                has_password: true,
+                sort_order: 0,
+            },
+            nyaterm_core::SavedPassword {
+                id: "username-only".into(),
+                name: "Identity".into(),
+                username: "admin".into(),
+                password: None,
+                has_password: false,
+                sort_order: 1,
+            },
+        ];
+        app.security
+            .replace_catalog(Vec::new(), Vec::new(), accounts, Vec::new());
+        app.connection_state
+            .begin_editor(connection_editor_state_with_secret_draft());
+        app.set_connection_editor_select_value(
+            ConnectionEditorSelect::Account,
+            Some("with-password"),
+            cx,
+        );
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.username, "root");
+        assert_eq!(draft.password_source, ConnectionEditorPasswordSource::Saved);
+        assert_eq!(draft.password.expose_secret(), "draft-secret");
+        app.set_connection_editor_select_value(
+            ConnectionEditorSelect::Account,
+            Some("username-only"),
+            cx,
+        );
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .password_source,
+            ConnectionEditorPasswordSource::Ask
+        );
+        app.set_connection_editor_select_value(
+            ConnectionEditorSelect::Authentication,
+            Some("key"),
+            cx,
+        );
+        app.set_connection_editor_select_value(
+            ConnectionEditorSelect::Account,
+            Some("with-password"),
+            cx,
+        );
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.auth_mode, "key");
+        assert_eq!(draft.password_source, ConnectionEditorPasswordSource::Ask);
+        app.set_connection_account_source(false, cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.username, "root");
+        assert!(draft.account_id.is_none());
+        assert_eq!(draft.password.expose_secret(), "draft-secret");
+    });
+}
+
+#[test]
+fn locking_connection_editor_clears_plaintext_but_keeps_the_existing_ciphertext_reference() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.existing_password = Some("encrypted-fixture".into());
+        draft.existing_password_locked = true;
+        app.connection_state.begin_editor(draft);
+        let old_token = app.connection_state.editor_token();
+        app.connection_state.build_editor_fields(cx);
+        app.connection_state.clear_editor_secrets(cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert!(draft.password.is_empty());
+        assert_eq!(
+            draft.existing_password.as_deref(),
+            Some("encrypted-fixture")
+        );
+        assert!(
+            app.connection_state.editor_fields()[&ConnectionEditorField::Password]
+                .read(cx)
+                .value(cx)
+                .is_empty()
+        );
+        app.close_connection_editor(cx);
+        app.connection_state
+            .begin_editor(connection_editor_state_with_secret_draft());
+        assert_ne!(app.connection_state.editor_token(), old_token);
+    });
 }

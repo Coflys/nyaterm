@@ -89,6 +89,13 @@ pub(crate) enum ConnectionEditorPasswordSource {
     Saved,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConnectionPasswordEdit {
+    Keep,
+    Replace,
+    Remove,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionEditorAdvancedTab {
     Network,
@@ -136,17 +143,6 @@ pub(crate) struct ConnectionEditorAdvancedVisibility {
 }
 
 impl ConnectionEditorAdvancedVisibility {
-    pub(crate) fn is_open(self, kind: ConnectionKindTab) -> bool {
-        match kind {
-            ConnectionKindTab::Ssh => self.ssh,
-            ConnectionKindTab::Local => self.local,
-            ConnectionKindTab::Telnet => self.telnet,
-            ConnectionKindTab::Serial => self.serial,
-            ConnectionKindTab::Rdp => self.rdp,
-            ConnectionKindTab::Vnc => self.vnc,
-        }
-    }
-
     pub(crate) fn toggle(&mut self, kind: ConnectionKindTab) -> bool {
         let open = match kind {
             ConnectionKindTab::Ssh => &mut self.ssh,
@@ -203,147 +199,6 @@ pub(crate) enum ConnectionEditorField {
     VncReconnectAttempts,
 }
 
-impl ConnectionEditorField {
-    pub(crate) fn next(
-        self,
-        kind: ConnectionKindTab,
-        auth_mode: &str,
-        password_field_visible: bool,
-        post_login_fields_visible: bool,
-    ) -> Self {
-        match kind {
-            ConnectionKindTab::Ssh => match self {
-                Self::Name => Self::Description,
-                Self::Description => Self::Host,
-                Self::Host => Self::Port,
-                Self::Port => Self::Username,
-                Self::Username if auth_mode == "password" && password_field_visible => {
-                    Self::Password
-                }
-                Self::Username if post_login_fields_visible => Self::PostLoginCommand,
-                Self::Username => Self::Name,
-                Self::Password if post_login_fields_visible => Self::PostLoginCommand,
-                Self::Password => Self::Name,
-                Self::PostLoginCommand => Self::PostLoginDelay,
-                Self::PostLoginDelay => Self::Name,
-                Self::SftpShellDetectionTimeout => Self::Name,
-                other => other.next_fallback(kind),
-            },
-            ConnectionKindTab::Local => match self {
-                Self::Name => Self::Description,
-                Self::Description => Self::ShellPath,
-                Self::ShellPath => Self::ShellArgs,
-                Self::ShellArgs => Self::WorkingDir,
-                Self::WorkingDir => Self::Name,
-                other => other.next_fallback(kind),
-            },
-            ConnectionKindTab::Telnet => match self {
-                Self::Name => Self::Description,
-                Self::Description => Self::Host,
-                Self::Host => Self::Port,
-                Self::Port => Self::Name,
-                other => other.next_fallback(kind),
-            },
-            ConnectionKindTab::Serial => match self {
-                Self::Name => Self::Description,
-                Self::Description => Self::SerialPort,
-                Self::SerialPort => Self::BaudRate,
-                Self::BaudRate => Self::Name,
-                other => other.next_fallback(kind),
-            },
-            ConnectionKindTab::Rdp => match self {
-                Self::Name => Self::Description,
-                Self::Description => Self::Host,
-                Self::Host => Self::Port,
-                Self::Port => Self::Username,
-                Self::Username => Self::Domain,
-                Self::Domain if auth_mode == "password" && password_field_visible => Self::Password,
-                Self::Domain => Self::Name,
-                Self::Password => Self::Name,
-                other => other.next_fallback(kind),
-            },
-            ConnectionKindTab::Vnc => match self {
-                Self::Name => Self::Description,
-                Self::Description => Self::Host,
-                Self::Host => Self::Port,
-                Self::Port if auth_mode == "password" && password_field_visible => Self::Password,
-                Self::Port => Self::Name,
-                Self::Password => Self::Name,
-                other => other.next_fallback(kind),
-            },
-        }
-    }
-
-    fn next_fallback(self, kind: ConnectionKindTab) -> Self {
-        match kind {
-            ConnectionKindTab::Ssh => Self::Name,
-            ConnectionKindTab::Local => Self::Name,
-            ConnectionKindTab::Telnet => Self::Name,
-            ConnectionKindTab::Serial => Self::Name,
-            ConnectionKindTab::Rdp => Self::Name,
-            ConnectionKindTab::Vnc => Self::Name,
-        }
-    }
-}
-
-#[cfg(test)]
-mod connection_editor_field_tests {
-    use super::{ConnectionEditorField, ConnectionKindTab};
-
-    #[test]
-    fn ssh_tab_order_skips_collapsed_post_login_fields() {
-        assert_eq!(
-            ConnectionEditorField::Password.next(ConnectionKindTab::Ssh, "password", true, false,),
-            ConnectionEditorField::Name
-        );
-        assert_eq!(
-            ConnectionEditorField::Username.next(ConnectionKindTab::Ssh, "key", false, false),
-            ConnectionEditorField::Name
-        );
-    }
-
-    #[test]
-    fn ssh_tab_order_reaches_visible_post_login_fields() {
-        assert_eq!(
-            ConnectionEditorField::Password.next(ConnectionKindTab::Ssh, "password", true, true,),
-            ConnectionEditorField::PostLoginCommand
-        );
-        assert_eq!(
-            ConnectionEditorField::PostLoginCommand.next(
-                ConnectionKindTab::Ssh,
-                "password",
-                true,
-                true,
-            ),
-            ConnectionEditorField::PostLoginDelay
-        );
-    }
-
-    #[test]
-    fn ssh_tab_order_skips_non_direct_password_field() {
-        assert_eq!(
-            ConnectionEditorField::Username.next(ConnectionKindTab::Ssh, "password", false, false,),
-            ConnectionEditorField::Name
-        );
-    }
-
-    #[test]
-    fn rdp_tab_order_reaches_domain_before_optional_password() {
-        assert_eq!(
-            ConnectionEditorField::Username.next(ConnectionKindTab::Rdp, "password", true, false,),
-            ConnectionEditorField::Domain
-        );
-        assert_eq!(
-            ConnectionEditorField::Domain.next(ConnectionKindTab::Rdp, "password", true, false,),
-            ConnectionEditorField::Password
-        );
-        assert_eq!(
-            ConnectionEditorField::Domain.next(ConnectionKindTab::Rdp, "none", false, false,),
-            ConnectionEditorField::Name
-        );
-    }
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConnectionEditorState {
     pub(crate) id: Option<String>,
@@ -378,6 +233,9 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) password_source: ConnectionEditorPasswordSource,
     pub(crate) password_id: Option<String>,
     pub(crate) account_id: Option<String>,
+    pub(crate) account_source_saved: bool,
+    pub(crate) field_errors: std::collections::HashMap<ConnectionEditorField, String>,
+    pub(crate) password_edit: ConnectionPasswordEdit,
     pub(crate) password: nyaterm_core::SecretString,
     pub(crate) existing_password: Option<nyaterm_core::SecretString>,
     pub(crate) existing_password_locked: bool,

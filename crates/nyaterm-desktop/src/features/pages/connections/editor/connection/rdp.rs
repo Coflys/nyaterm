@@ -10,14 +10,11 @@ use gpui::{
 use nyaterm_ui::{NyaSwitch, NyaTabItem, NyaTabs};
 
 use crate::features::{NyaTermApp, connections::ConnectionEditorToggle};
-use crate::models::{
-    ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorPasswordSource,
-    ConnectionEditorRdpTab, ConnectionEditorSelect,
-};
+use crate::models::{ConnectionEditorField, ConnectionEditorRdpTab, ConnectionEditorSelect};
 
 use super::super::super::list::{
-    ConnectionEditorRenderContext, EditorSecretFieldOptions, connection_editor_select,
-    editor_field, editor_secret_field, editor_stepper_field, required,
+    ConnectionEditorRenderContext, connection_editor_select, editor_field, editor_stepper_field,
+    required,
 };
 use super::ConnectionEditorSectionContext;
 
@@ -73,43 +70,6 @@ pub(super) fn connection_editor_rdp_section(
         fields,
         baud_popover_open: _,
     } = section;
-    let auth_tabs = NyaTabs::new("connection-rdp-auth-tabs")
-        .items([
-            NyaTabItem::new(t!("dialog.directPassword")),
-            NyaTabItem::new(t!("dialog.savedPassword")),
-            NyaTabItem::new(t!("dialog.askWhenConnecting")),
-            NyaTabItem::new(t!("dialog.noAuthentication")),
-        ])
-        .selected_index(if editor.auth_mode == "none" {
-            3
-        } else {
-            match editor.password_source {
-                ConnectionEditorPasswordSource::Direct => 0,
-                ConnectionEditorPasswordSource::Saved => 1,
-                ConnectionEditorPasswordSource::Ask => 2,
-            }
-        })
-        .on_select(cx.listener(move |this, index: &usize, _, cx| {
-            if *index == 3 {
-                this.set_connection_editor_select_value(
-                    ConnectionEditorSelect::Authentication,
-                    Some("none"),
-                    cx,
-                );
-            } else {
-                this.set_connection_editor_select_value(
-                    ConnectionEditorSelect::Authentication,
-                    Some("password"),
-                    cx,
-                );
-                let source = match *index {
-                    0 => ConnectionEditorPasswordSource::Direct,
-                    1 => ConnectionEditorPasswordSource::Saved,
-                    _ => ConnectionEditorPasswordSource::Ask,
-                };
-                this.set_connection_editor_password_source(source, cx);
-            }
-        }));
     let advanced_tabs = NyaTabs::new("connection-rdp-advanced-tabs")
         .items([
             NyaTabItem::new(t!("dialog.rdpSecurity")),
@@ -180,84 +140,7 @@ pub(super) fn connection_editor_rdp_section(
                     cx,
                 ))),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight(500.))
-                        .text_color(rgb(palette.text_muted))
-                        .child(t!("dialog.authentication")),
-                )
-                .child(auth_tabs)
-                .when(editor.auth_mode != "none", |this| {
-                    this.when(
-                        editor.password_source == ConnectionEditorPasswordSource::Direct,
-                        |this| {
-                            this.child(editor_secret_field(
-                                palette,
-                                t!("dialog.password"),
-                                ConnectionEditorField::Password,
-                                fields,
-                                EditorSecretFieldOptions::new(
-                                    false,
-                                    t!("passwordManager.showPassword"),
-                                    t!("dialog.clearPassword"),
-                                    cx.listener(|this, _, _, cx| {
-                                        this.toggle_connection_editor_password_visibility(cx);
-                                    }),
-                                    cx.listener(|this, _, _, cx| {
-                                        this.clear_connection_editor_password(cx);
-                                    }),
-                                ),
-                                cx,
-                            ))
-                        },
-                    )
-                    .when(
-                        editor.password_source == ConnectionEditorPasswordSource::Saved,
-                        |this| {
-                            this.child(
-                                div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_end()
-                                    .gap_2()
-                                    .child(div().min_w(px(180.)).flex_1().child(
-                                        connection_editor_select(
-                                            ConnectionEditorRenderContext {
-                                                palette,
-                                                fields,
-                                                cx,
-                                            },
-                                            "connection-editor-rdp-saved-password",
-                                            t!("dialog.savedPassword"),
-                                            ConnectionEditorSelect::SavedPassword,
-                                        ),
-                                    ))
-                                    .child(
-                                        nyaterm_ui::NyaButton::new(
-                                            "connection-editor-rdp-manage-passwords",
-                                            t!("dialog.managePasswords"),
-                                        )
-                                        .form_control()
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.set_connection_editor_credential_overlay(
-                                                Some(ConnectionEditorCredentialOverlay::Passwords),
-                                                cx,
-                                            );
-                                            }),
-                                        ),
-                                    ),
-                            )
-                        },
-                    )
-                }),
-        )
+        .child(super::authentication::password_authentication(section, cx))
         .child(
             div()
                 .id("connection-editor-rdp-advanced-toggle")

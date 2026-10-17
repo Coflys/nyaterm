@@ -38,16 +38,16 @@ mod network_logic;
 
 use self::editor_logic::{
     ConnectionEditorPlaceholder, add_connection_editor_agent_endpoint,
-    advance_connection_editor_focus, apply_connection_editor_shell_path,
-    apply_connection_editor_working_dir, clear_connection_editor_runtime_state,
-    commit_connection_editor_new_group, connection_editor_inline_panel_draft, editor_field_seeds,
-    forwarding_endpoint_field_seeds, insert_connection_editor_description_newline,
-    move_connection_editor_agent_endpoint, move_connection_editor_ssh_algorithm,
-    remove_connection_editor_agent_endpoint, select_connection_editor_agent_endpoint,
-    select_saved_connection_after_editor_save, set_connection_editor_advanced_tab,
-    set_connection_editor_agent_endpoint_type, set_connection_editor_error,
-    set_connection_editor_field_text, set_connection_editor_forwarding_endpoint_field,
-    set_connection_editor_icon, set_connection_editor_icon_auto_detect, set_connection_editor_kind,
+    apply_connection_editor_shell_path, apply_connection_editor_working_dir,
+    clear_connection_editor_runtime_state, commit_connection_editor_new_group,
+    connection_editor_inline_panel_draft, editor_field_seeds, forwarding_endpoint_field_seeds,
+    insert_connection_editor_description_newline, move_connection_editor_agent_endpoint,
+    move_connection_editor_ssh_algorithm, remove_connection_editor_agent_endpoint,
+    select_connection_editor_agent_endpoint, select_saved_connection_after_editor_save,
+    set_connection_editor_advanced_tab, set_connection_editor_agent_endpoint_type,
+    set_connection_editor_error, set_connection_editor_field_text,
+    set_connection_editor_forwarding_endpoint_field, set_connection_editor_icon,
+    set_connection_editor_icon_auto_detect, set_connection_editor_kind,
     set_connection_editor_password_source, set_connection_editor_rdp_tab,
     set_connection_editor_select_value, set_connection_editor_ssh_algorithm_enabled,
     set_connection_editor_ssh_algorithm_tab, set_connection_editor_telnet_tab,
@@ -1106,6 +1106,63 @@ impl ConnectionFeatureState {
         self.editor.set_icon_auto_detect(enabled)
     }
 
+    pub fn set_editor_password_edit(
+        &mut self,
+        edit: crate::models::ConnectionPasswordEdit,
+        cx: &mut App,
+    ) {
+        if let Some(editor) = self.editor.draft.as_mut() {
+            editor.password_edit = edit;
+            editor.password.expose_secret_mut().clear();
+            editor.error = None;
+            editor.field_errors.clear();
+        }
+        self.reset_editor_field(ConnectionEditorField::Password, "", cx);
+    }
+
+    pub fn set_editor_account_source(&mut self, saved: bool) {
+        if let Some(editor) = self.editor.draft.as_mut() {
+            editor.account_source_saved = saved;
+            if !saved {
+                editor.account_id = None;
+                editor.password_id = None;
+                if editor.password_source == ConnectionEditorPasswordSource::Saved {
+                    editor.password_source = ConnectionEditorPasswordSource::Ask;
+                }
+            }
+            editor.error = None;
+            editor.field_errors.clear();
+        }
+    }
+
+    pub fn set_editor_field_error(&mut self, field: ConnectionEditorField, message: String) {
+        if let Some(editor) = self.editor.draft.as_mut() {
+            editor.field_errors.clear();
+            editor.field_errors.insert(field, message.clone());
+            editor.error = Some(message);
+            editor.focused_field = field;
+        }
+    }
+
+    pub fn clear_editor_secrets(&mut self, cx: &mut App) {
+        if let Some(editor) = self.editor.draft.as_mut() {
+            editor.password.expose_secret_mut().clear();
+            // Ciphertext may remain so saving unrelated metadata cannot remove it.
+            if !editor.existing_password_locked {
+                editor.existing_password = None;
+            }
+            editor.password_edit = crate::models::ConnectionPasswordEdit::Keep;
+        }
+        self.reset_editor_field(ConnectionEditorField::Password, "", cx);
+    }
+
+    pub fn editor_token(&self) -> Option<u64> {
+        self.editor
+            .draft
+            .as_ref()
+            .map(|_| self.editor.save_generation)
+    }
+
     pub fn set_editor_select_value(
         &mut self,
         select: ConnectionEditorSelect,
@@ -1191,10 +1248,6 @@ impl ConnectionFeatureState {
 
     pub fn insert_editor_description_newline(&mut self) -> bool {
         self.editor.insert_description_newline()
-    }
-
-    pub fn advance_editor_focus(&mut self) -> bool {
-        self.editor.advance_focus()
     }
 
     pub fn set_editor_error(&mut self, error: String) -> bool {
@@ -1810,6 +1863,7 @@ impl ConnectionImportState {
 
 impl ConnectionEditorFeatureState {
     pub fn begin_edit(&mut self, draft: ConnectionEditorState) {
+        self.save_generation = self.save_generation.wrapping_add(1);
         self.icon_picker_open = false;
         self.group_select_open = false;
         self.agent_identity_picker_open = false;
@@ -2099,10 +2153,6 @@ impl ConnectionEditorFeatureState {
         insert_connection_editor_description_newline(&mut self.draft)
     }
 
-    pub fn advance_focus(&mut self) -> bool {
-        advance_connection_editor_focus(&mut self.draft)
-    }
-
     pub fn set_error(&mut self, error: String) -> bool {
         set_connection_editor_error(&mut self.draft, error)
     }
@@ -2116,6 +2166,7 @@ impl ConnectionEditorFeatureState {
     }
 
     pub fn close(&mut self) {
+        self.save_generation = self.save_generation.wrapping_add(1);
         self.agent_identity_picker_open = false;
         self.credential_overlay = None;
         self.baud_popover_open = false;

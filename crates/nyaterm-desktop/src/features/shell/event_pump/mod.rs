@@ -474,6 +474,9 @@ impl NyaTermApp {
     ) -> bool {
         self.security.remember_screen_lock_focus(window.focused(cx));
         self.security.activate_idle_screen_lock();
+        self.forget_text_inputs("security.editor.");
+        self.connection_state.clear_editor_secrets(cx);
+        nyaterm_ui::NyaDialogWindowExt::close_all_nya_dialogs(window, cx);
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status(format!(
             "screen locked after {} minute(s) idle",

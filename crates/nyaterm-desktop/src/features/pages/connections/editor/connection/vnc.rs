@@ -7,17 +7,14 @@ use gpui::{
     },
     px, rgb, rgba, svg,
 };
-use nyaterm_ui::{NyaSwitch, NyaTabItem, NyaTabs};
+use nyaterm_ui::NyaSwitch;
 
 use crate::features::{NyaTermApp, connections::ConnectionEditorToggle};
-use crate::models::{
-    ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorPasswordSource,
-    ConnectionEditorSelect,
-};
+use crate::models::{ConnectionEditorField, ConnectionEditorSelect};
 
 use super::super::super::list::{
-    ConnectionEditorRenderContext, EditorSecretFieldOptions, connection_editor_select,
-    editor_field, editor_secret_field, editor_stepper_field, required,
+    ConnectionEditorRenderContext, connection_editor_select, editor_field, editor_stepper_field,
+    required,
 };
 use super::ConnectionEditorSectionContext;
 
@@ -73,47 +70,7 @@ pub(super) fn connection_editor_vnc_section(
         fields,
         baud_popover_open: _,
     } = section;
-    let password_enabled = editor.vnc_security.mode != "none";
-    let auth_tabs = NyaTabs::new("connection-vnc-auth-tabs")
-        .items([
-            NyaTabItem::new(t!("dialog.directPassword")),
-            NyaTabItem::new(t!("dialog.savedPassword")),
-            NyaTabItem::new(t!("dialog.askWhenConnecting")),
-            NyaTabItem::new(t!("dialog.noAuthentication")),
-        ])
-        .selected_index(if editor.auth_mode == "none" {
-            3
-        } else {
-            match editor.password_source {
-                ConnectionEditorPasswordSource::Direct => 0,
-                ConnectionEditorPasswordSource::Saved => 1,
-                ConnectionEditorPasswordSource::Ask => 2,
-            }
-        })
-        .on_select(cx.listener(move |this, index: &usize, _, cx| {
-            if !password_enabled {
-                return;
-            }
-            if *index == 3 {
-                this.set_connection_editor_select_value(
-                    ConnectionEditorSelect::Authentication,
-                    Some("none"),
-                    cx,
-                );
-            } else {
-                this.set_connection_editor_select_value(
-                    ConnectionEditorSelect::Authentication,
-                    Some("password"),
-                    cx,
-                );
-                let source = match *index {
-                    0 => ConnectionEditorPasswordSource::Direct,
-                    1 => ConnectionEditorPasswordSource::Saved,
-                    _ => ConnectionEditorPasswordSource::Ask,
-                };
-                this.set_connection_editor_password_source(source, cx);
-            }
-        }));
+
     div()
         .debug_selector(|| "connection-editor-vnc-section".to_string())
         .flex()
@@ -138,90 +95,10 @@ pub(super) fn connection_editor_vnc_section(
                     cx,
                 ))),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .opacity(if password_enabled { 1.0 } else { 0.5 })
-                .child(auth_tabs),
-        )
-        .when(editor.auth_mode == "password", |this| {
-            this.when(
-                editor.password_source == ConnectionEditorPasswordSource::Direct,
-                |this| {
-                    this.child(editor_secret_field(
-                        palette,
-                        t!("dialog.password"),
-                        ConnectionEditorField::Password,
-                        fields,
-                        EditorSecretFieldOptions::new(
-                            !password_enabled,
-                            t!("passwordManager.showPassword"),
-                            t!("dialog.clearPassword"),
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_connection_editor_password_visibility(cx);
-                            }),
-                            cx.listener(|this, _, _, cx| {
-                                this.clear_connection_editor_password(cx);
-                            }),
-                        ),
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette.text_muted))
-                            .child(t!("dialog.vncPasswordLimit")),
-                    )
-                },
-            )
-            .when(
-                editor.password_source == ConnectionEditorPasswordSource::Saved,
-                |this| {
-                    this.child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_end()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .min_w(px(180.))
-                                    .flex_1()
-                                    .child(connection_editor_select(
-                                        ConnectionEditorRenderContext {
-                                            palette,
-                                            fields,
-                                            cx,
-                                        },
-                                        "connection-editor-vnc-saved-password",
-                                        t!("dialog.savedPassword"),
-                                        ConnectionEditorSelect::SavedPassword,
-                                    )),
-                            )
-                            .child(
-                                nyaterm_ui::NyaButton::new(
-                                    "connection-editor-vnc-manage-passwords",
-                                    t!("dialog.managePasswords"),
-                                )
-                                .form_control()
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.set_connection_editor_credential_overlay(
-                                            Some(ConnectionEditorCredentialOverlay::Passwords),
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            ),
-                    )
-                },
-            )
-        })
+        .child(super::authentication::password_authentication(section, cx))
         .child(editor_field(
             palette,
-            t!("dialog.username"),
+            t!("credentialManager.usernameOptionalLabel"),
             ConnectionEditorField::Username,
             fields,
             cx,
