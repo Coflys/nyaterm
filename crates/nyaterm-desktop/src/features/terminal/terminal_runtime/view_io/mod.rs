@@ -75,19 +75,25 @@ fn terminal_cached_scrollback_snapshot_covering_display_offset(
     if display_offset == 0 {
         return None;
     }
-    if let Some(snapshot) = view.scrollback_snapshots.get(&display_offset) {
+    if let Some(snapshot) = view.scrollback_snapshots.get(&display_offset)
+        && view
+            .history_state()
+            .preserves_coordinates_from(snapshot.history)
+    {
         return Some(snapshot.clone());
     }
     let scrollback_len = view.scrollback_len_for_ui();
     view.scrollback_snapshots
         .values()
         .filter(|snapshot| {
-            terminal_snapshot_covers_display_offset(
-                snapshot.as_ref(),
-                display_offset,
-                viewport_rows,
-                scrollback_len,
-            )
+            view.history_state()
+                .preserves_coordinates_from(snapshot.history)
+                && terminal_snapshot_covers_display_offset(
+                    snapshot.as_ref(),
+                    display_offset,
+                    viewport_rows,
+                    scrollback_len,
+                )
         })
         .min_by_key(|snapshot| snapshot.display_offset.abs_diff(display_offset))
         .cloned()
@@ -100,7 +106,9 @@ fn terminal_retained_snapshot_matches_view(
     viewport_rows: usize,
 ) -> bool {
     let scrollback_len = view.scrollback_len_for_ui();
-    terminal_snapshot_matches_grid_geometry(snapshot, view.screen.cols(), view.screen.rows())
+    view.history_state()
+        .preserves_coordinates_from(snapshot.history)
+        && terminal_snapshot_matches_grid_geometry(snapshot, view.screen.cols(), view.screen.rows())
         && snapshot.scrollback_len == scrollback_len
         && terminal_snapshot_covers_display_offset(
             snapshot,
@@ -140,19 +148,26 @@ fn terminal_paint_window_snapshot_for_view(
             return Some(snapshot.clone());
         }
         return retained_surface_snapshot.filter(|snapshot| {
-            terminal_snapshot_matches_grid_geometry(
-                snapshot.as_ref(),
-                view.screen.cols(),
-                view.screen.rows(),
-            ) && terminal_snapshot_covers_display_offset(
-                snapshot.as_ref(),
-                display_offset,
-                viewport_rows,
-                scrollback_len,
-            )
+            view.history_state()
+                .preserves_coordinates_from(snapshot.history)
+                && terminal_snapshot_matches_grid_geometry(
+                    snapshot.as_ref(),
+                    view.screen.cols(),
+                    view.screen.rows(),
+                )
+                && terminal_snapshot_covers_display_offset(
+                    snapshot.as_ref(),
+                    display_offset,
+                    viewport_rows,
+                    scrollback_len,
+                )
         });
     }
-    if let Some(snapshot) = retained_surface_snapshot {
+    if let Some(snapshot) = retained_surface_snapshot
+        && view.is_some_and(|view| {
+            terminal_retained_snapshot_matches_view(&snapshot, view, display_offset, viewport_rows)
+        })
+    {
         return Some(snapshot);
     }
     let view = view?;
@@ -217,7 +232,11 @@ fn terminal_snapshot_with_newer_edge_row(
     base: std::sync::Arc<TerminalSnapshot>,
     newer: std::sync::Arc<TerminalSnapshot>,
 ) -> std::sync::Arc<TerminalSnapshot> {
-    if base.cols == 0 || base.row_count() == 0 || base.cols != newer.cols || newer.row_count() == 0
+    if base.cols == 0
+        || base.row_count() == 0
+        || base.cols != newer.cols
+        || newer.row_count() == 0
+        || !base.history.preserves_coordinates_from(newer.history)
     {
         return base;
     }
@@ -225,6 +244,7 @@ fn terminal_snapshot_with_newer_edge_row(
     rows.push(newer.rows().last().unwrap().clone());
     std::sync::Arc::new(TerminalSnapshot::from_rows(
         nyaterm_terminal::TerminalSnapshotMeta {
+            history: base.history,
             shell_input_anchor: base.shell_input_anchor,
             cols: base.cols,
             viewport_rows: base.viewport_rows,
@@ -285,6 +305,7 @@ fn terminal_snapshot_with_retained_scroll_window(
         .collect();
     std::sync::Arc::new(TerminalSnapshot::from_rows(
         nyaterm_terminal::TerminalSnapshotMeta {
+            history: base.history,
             shell_input_anchor: base.shell_input_anchor,
             cols: base.cols,
             viewport_rows: base.viewport_rows,
@@ -692,6 +713,7 @@ impl NyaTermApp {
         };
         let scroll_offset = view.scroll_offset;
         let scroll_residual_lines = self.terminal_scroll_residual_for_session(Some(session_id));
+        let history = view.history_state();
         let scrollback_len = view.scrollback_len_for_ui();
         let viewport_rows = view.viewport_rows_for_ui();
         let display_offset =
@@ -851,6 +873,7 @@ impl NyaTermApp {
                 TerminalSurfaceFrameSnapshot::new(
                     snapshot,
                     TerminalScrollVisualState {
+                        history,
                         session_id: session_id.to_string(),
                         scroll_offset,
                         scroll_residual_lines,
@@ -924,6 +947,9 @@ impl NyaTermApp {
         let is_disconnected = self.session.is_disconnected(session_id);
         let render_output_pressure = self.runtime_output_pressure_active();
         let view = self.terminal.view.views.get(session_id);
+        let history = view
+            .map(TerminalViewState::history_state)
+            .unwrap_or_default();
         let scroll_offset = view.map(|v| v.scroll_offset).unwrap_or(0);
         let scroll_residual_lines = self.terminal_scroll_residual_for_session(Some(session_id));
         let has_new = view.map(|v| v.has_new_while_scrolled).unwrap_or(false);
@@ -1092,6 +1118,7 @@ impl NyaTermApp {
                 }
             }
             let scroll_state = TerminalScrollVisualState {
+                history,
                 session_id: session_id.to_string(),
                 scroll_offset,
                 scroll_residual_lines,
@@ -1425,6 +1452,7 @@ impl NyaTermApp {
                 TerminalSurfaceFrameSnapshot::new(
                     snapshot,
                     TerminalScrollVisualState {
+                        history,
                         session_id: session_id.to_string(),
                         scroll_offset,
                         scroll_residual_lines,
@@ -1493,6 +1521,7 @@ impl NyaTermApp {
         };
         let scroll_offset = view.scroll_offset;
         let scroll_residual_lines = self.terminal_scroll_residual_for_session(Some(session_id));
+        let history = view.history_state();
         let scrollback_len = view.scrollback_len_for_ui();
         let viewport_rows = view.viewport_rows_for_ui();
         let display_offset =
@@ -1501,6 +1530,7 @@ impl NyaTermApp {
         let performance_overlay = view.performance_overlay;
         let skipped = view.skipped_output_chars;
         let desired_scroll_state = TerminalScrollVisualState {
+            history,
             session_id: session_id.to_string(),
             scroll_offset,
             scroll_residual_lines,
@@ -1514,11 +1544,12 @@ impl NyaTermApp {
         let (can_reuse_snapshot, scroll_state_current) = {
             let surface = surface.read(cx);
             (
-                surface.has_snapshot_covering_display_offset(
-                    display_offset,
-                    viewport_rows,
-                    scrollback_len,
-                ),
+                surface.history_coordinates_match(history)
+                    && surface.has_snapshot_covering_display_offset(
+                        display_offset,
+                        viewport_rows,
+                        scrollback_len,
+                    ),
                 surface.scroll_visual_state_matches(&desired_scroll_state),
             )
         };
@@ -1628,6 +1659,7 @@ impl NyaTermApp {
         };
         let scroll_offset = view.scroll_offset;
         let scroll_residual_lines = self.terminal_scroll_residual_for_session(Some(session_id));
+        let history = view.history_state();
         let scrollback_len = view.scrollback_len_for_ui();
         let viewport_rows = view.viewport_rows_for_ui();
         let display_offset =
@@ -1636,6 +1668,7 @@ impl NyaTermApp {
         let performance_overlay = view.performance_overlay;
         let skipped = view.skipped_output_chars;
         let desired_scroll_state = TerminalScrollVisualState {
+            history,
             session_id: session_id.to_string(),
             scroll_offset,
             scroll_residual_lines,
@@ -1649,11 +1682,12 @@ impl NyaTermApp {
         let (can_reuse_snapshot, scroll_state_current) = {
             let surface = surface.read(cx);
             (
-                surface.has_snapshot_covering_display_offset(
-                    display_offset,
-                    viewport_rows,
-                    scrollback_len,
-                ),
+                surface.history_coordinates_match(history)
+                    && surface.has_snapshot_covering_display_offset(
+                        display_offset,
+                        viewport_rows,
+                        scrollback_len,
+                    ),
                 surface.scroll_visual_state_matches(&desired_scroll_state),
             )
         };

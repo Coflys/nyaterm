@@ -1526,3 +1526,15 @@ fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw
         manager.close(&id).unwrap();
     }
 }
+
+#[test]
+fn retained_snapshot_from_before_history_rotation_is_not_painted() {
+    let mut view = TerminalViewState::new();
+    view.screen = TerminalScreen::new(16, 3);
+    view.screen.set_scrollback_limit(8);
+    view.append_text("0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    let old = Arc::new(view.screen.viewport_snapshot(3));
+    view.append_text("11\r\n");
+    assert!(!terminal_retained_snapshot_matches_view(&old, &view, 3, 3));
+    assert!(terminal_paint_window_snapshot_for_view(Some(&view), 3, 3, Some(old)).is_none());
+}

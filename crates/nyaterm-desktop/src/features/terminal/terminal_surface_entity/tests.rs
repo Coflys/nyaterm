@@ -72,6 +72,7 @@ fn window_tint_and_transparent_surface_keep_explicit_and_inverse_ansi_background
             TerminalSurfaceFrameSnapshot::new(
                 snapshot,
                 TerminalScrollVisualState {
+                    history: screen.history_state(),
                     session_id: "ansi-backgrounds".into(),
                     scroll_offset: 0,
                     scroll_residual_lines: 0.,
@@ -188,12 +189,14 @@ fn rendered_terminal_grid_bounds(show_line_numbers: bool) -> gpui::Bounds<gpui::
     let surface = cx.new(|_| TerminalSurface::new("session"));
     let snapshot = Arc::new(TerminalScreen::default().viewport_snapshot(0));
     let rows = snapshot.row_count();
+    let history = snapshot.history;
     cx.update_entity(&surface, |surface, _cx| {
         surface.show_line_numbers = show_line_numbers;
         surface.apply_frame_snapshot(
             TerminalSurfaceFrameSnapshot::new(
                 snapshot,
                 TerminalScrollVisualState {
+                    history,
                     session_id: "session".to_string(),
                     scroll_offset: 0,
                     scroll_residual_lines: 0.0,
@@ -264,6 +267,7 @@ fn clear_all_paints_input_at_top_and_keeps_host_rows_for_hit_testing() {
             surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
                 snapshot.clone(),
                 TerminalScrollVisualState {
+                    history: screen.history_state(),
                     session_id: "session".to_string(),
                     scroll_offset: 0,
                     scroll_residual_lines: 0.0,
@@ -324,6 +328,7 @@ fn enriched_snapshot_keeps_existing_rows_at_the_same_pixel_height() {
                 surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
                     snapshot,
                     TerminalScrollVisualState {
+                        history: screen.history_state(),
                         session_id: "session".to_string(),
                         scroll_offset: 0,
                         scroll_residual_lines: 0.0,
@@ -383,6 +388,7 @@ fn real_window_draw_renders_visible_inactive_but_skips_unmounted_surface() {
     screen.advance_decoded_text(&terminal_test_output_lines(32));
     let snapshot = Arc::new(screen.viewport_snapshot(0));
     let viewport_rows = snapshot.row_count().max(1);
+    let history = snapshot.history;
     let surface = cx.new({
         let layout_cache = Arc::clone(&layout_cache);
         let snapshot = Arc::clone(&snapshot);
@@ -394,6 +400,7 @@ fn real_window_draw_renders_visible_inactive_but_skips_unmounted_surface() {
                     TerminalSurfaceFrameSnapshot::new(
                         snapshot,
                         TerminalScrollVisualState {
+                            history,
                             session_id: "session".to_string(),
                             scroll_offset: 0,
                             scroll_residual_lines: 0.0,
@@ -439,6 +446,7 @@ fn real_window_draw_renders_visible_inactive_but_skips_unmounted_surface() {
                 TerminalSurfaceFrameSnapshot::new(
                     Arc::clone(&snapshot),
                     TerminalScrollVisualState {
+                        history,
                         session_id: "session".to_string(),
                         scroll_offset: 0,
                         scroll_residual_lines: 0.0,
@@ -485,6 +493,7 @@ fn real_window_draw_renders_visible_inactive_but_skips_unmounted_surface() {
                 TerminalSurfaceFrameSnapshot::new(
                     hidden_snapshot,
                     TerminalScrollVisualState {
+                        history,
                         session_id: "session".to_string(),
                         scroll_offset: 0,
                         scroll_residual_lines: 0.0,
@@ -587,10 +596,13 @@ macro_rules! apply_test_frame_snapshot {
         $show_cursor:expr,
         $cursor_style:expr $(,)?
     ) => {{
+        let snapshot = $snapshot;
+        let history = snapshot.history;
         $surface.apply_frame_snapshot(
             TerminalSurfaceFrameSnapshot::new(
-                $snapshot,
+                snapshot,
                 TerminalScrollVisualState {
+                    history,
                     session_id: "session".to_string(),
                     scroll_offset: $scroll_offset,
                     scroll_residual_lines: $scroll_residual_lines,
@@ -735,6 +747,7 @@ fn visual_scroll_offset_tracks_target_display_and_residual() {
 #[test]
 fn text_first_repaint_waits_for_cached_target_text() {
     let state = TerminalScrollVisualState {
+        history: Default::default(),
         session_id: "session".to_string(),
         scroll_offset: 4,
         scroll_residual_lines: 0.0,
@@ -1215,6 +1228,7 @@ fn applying_identical_scroll_visual_state_is_a_noop() {
         surface, snapshot, 0, 0.0, 0, 10, rows, false, None, 0, false, false, "block",
     );
     let state = TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 0,
         scroll_residual_lines: 0.0,
@@ -1240,6 +1254,7 @@ fn repeated_pending_scroll_visual_state_does_not_need_repaint() {
         surface, snapshot, 0, 0.0, 0, 10, rows, false, None, 0, false, false, "block",
     );
     let state = TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 1,
         scroll_residual_lines: 0.0,
@@ -1284,6 +1299,7 @@ fn scroll_without_target_snapshot_preserves_stale_paint_state() {
         surface, snapshot, 0, 0.0, 0, 10, rows, false, None, 0, true, true, "block",
     );
     surface.update_scroll_chrome_without_snapshot(&TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 1,
         scroll_residual_lines: 0.0,
@@ -1569,6 +1585,7 @@ fn matching_scroll_snapshot_clears_pending_visual_freeze() {
         "block",
     );
     surface.update_scroll_chrome_without_snapshot(&TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 1,
         scroll_residual_lines: 0.0,
@@ -1629,6 +1646,7 @@ fn repeated_pending_scroll_chrome_update_is_noop() {
 
     assert!(
         surface.update_scroll_chrome_without_snapshot(&TerminalScrollVisualState {
+            history: screen.history_state(),
             session_id: "session".to_string(),
             scroll_offset: 1,
             scroll_residual_lines: 0.0,
@@ -1645,6 +1663,7 @@ fn repeated_pending_scroll_chrome_update_is_noop() {
 
     assert!(
         !surface.update_scroll_chrome_without_snapshot(&TerminalScrollVisualState {
+            history: screen.history_state(),
             session_id: "session".to_string(),
             scroll_offset: 1,
             scroll_residual_lines: 0.0,
@@ -1725,6 +1744,7 @@ fn local_surface_scroll_state_reuses_covering_snapshot_immediately() {
         "block",
     );
     let text_updated = surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 1,
         scroll_residual_lines: 0.25,
@@ -2095,6 +2115,7 @@ fn local_surface_snapshot_request_dedupe_resets_when_scrollback_changes() {
     );
 
     surface.update_scroll_chrome_without_snapshot(&TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 5,
         scroll_residual_lines: 0.0,
@@ -2284,6 +2305,7 @@ fn protocol_scroll_wheel_defers_parent_update_until_surface_lease_is_released() 
         surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
             snapshot.clone(),
             TerminalScrollVisualState {
+                history: screen.history_state(),
                 session_id: session_id.to_string(),
                 scroll_offset: 0,
                 scroll_residual_lines: 0.0,
@@ -2341,6 +2363,7 @@ fn protocol_scroll_wheel_defers_parent_update_until_surface_lease_is_released() 
 fn local_surface_scroll_app_sync_is_frame_coalesced() {
     let mut surface = TerminalSurface::new("session");
     let first = TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 1,
         scroll_residual_lines: 0.25,
@@ -2378,6 +2401,7 @@ fn local_surface_scroll_state_marks_pending_when_snapshot_missing() {
         surface, snapshot, 0, 0.0, 0, 10, rows, false, None, 0, false, false, "block",
     );
     let text_updated = surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: surface.history,
         session_id: "session".to_string(),
         scroll_offset: 4,
         scroll_residual_lines: 0.0,
@@ -2444,6 +2468,7 @@ fn local_surface_scroll_state_promotes_retained_snapshot_window() {
     assert!(surface.has_action_link_decorations);
 
     let text_updated = surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
         session_id: "session".to_string(),
         scroll_offset: first_offset,
         scroll_residual_lines: 0.0,
@@ -2532,6 +2557,7 @@ fn retained_snapshot_promotion_preserves_dynamic_absolute_selection() {
 
     assert!(
         surface.apply_scroll_visual_state(TerminalScrollVisualState {
+            history: screen.history_state(),
             session_id: "session".to_string(),
             scroll_offset: history_offset,
             scroll_residual_lines: 0.0,
@@ -2658,6 +2684,7 @@ fn local_surface_scroll_state_synthesizes_cross_window_on_hot_path() {
     }));
 
     let text_updated = surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
         session_id: "session".to_string(),
         scroll_offset: target_offset,
         scroll_residual_lines: 0.0,
@@ -2728,6 +2755,7 @@ fn local_surface_scroll_state_synthesizes_row_cache_on_hot_path() {
     assert!(!surface.retained_rows.is_empty());
 
     let text_updated = surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
         session_id: "session".to_string(),
         scroll_offset: target_offset,
         scroll_residual_lines: 0.0,
@@ -2871,6 +2899,7 @@ fn local_surface_scroll_state_does_not_synthesize_across_gap() {
     );
 
     let text_updated = surface.apply_scroll_visual_state(TerminalScrollVisualState {
+        history: screen.history_state(),
         session_id: "session".to_string(),
         scroll_offset: target_offset,
         scroll_residual_lines: 0.0,
@@ -2963,6 +2992,7 @@ fn output_growth_scroll_position_reuse_does_not_mark_snapshot_pending() {
     );
 
     surface.update_scroll_position_without_snapshot(&TerminalScrollVisualState {
+        history: screen.history_state(),
         session_id: "session".to_string(),
         scroll_offset: new_display_offset,
         scroll_residual_lines: 0.0,
@@ -3032,6 +3062,7 @@ fn scroll_position_reuse_preserves_stale_decorations_until_recomputed() {
     );
 
     surface.update_scroll_position_without_snapshot(&TerminalScrollVisualState {
+        history: screen.history_state(),
         session_id: "session".to_string(),
         scroll_offset: new_display_offset,
         scroll_residual_lines: 0.0,
@@ -3154,4 +3185,131 @@ fn surface_retained_scroll_state_resets_when_viewport_rows_change() {
     assert_eq!(surface.retained_snapshots[0].display_offset, 0);
     assert_eq!(surface.viewport_rows, new_viewport_rows);
     assert!(!surface.has_action_link_decorations);
+}
+
+#[test]
+fn full_history_rotation_discards_retained_rows_and_rejects_old_prefetch() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(8);
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    let old = Arc::new(screen.viewport_snapshot(5));
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        old.clone(),
+        5,
+        0.0,
+        5,
+        8,
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    let old_rows = surface.retained_rows.clone();
+    screen.advance(b"11\r\n12\r\n");
+    let fresh = Arc::new(screen.viewport_snapshot(0));
+    apply_test_frame_snapshot!(
+        surface,
+        fresh.clone(),
+        0,
+        0.0,
+        0,
+        8,
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    assert_eq!(surface.retained_snapshots.len(), 1);
+    assert!(
+        surface
+            .retained_rows
+            .values()
+            .all(|row| !old_rows.values().any(|old| Arc::ptr_eq(old, row)))
+    );
+    assert!(!surface.retain_prefetched_snapshot(old));
+    assert!(!surface.has_snapshot_covering_display_offset(5, 3, 8));
+    assert_eq!(surface.snapshot.as_ref().unwrap().history, fresh.history);
+}
+
+#[test]
+fn ordinary_history_growth_keeps_retained_absolute_rows() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(32);
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n");
+    let old = Arc::new(screen.viewport_snapshot(4));
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface,
+        old,
+        4,
+        0.0,
+        4,
+        screen.scrollback_len(),
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    let retained = surface.retained_rows.clone();
+    screen.advance(b"8\r\n9\r\n");
+    let fresh = Arc::new(screen.viewport_snapshot(0));
+    apply_test_frame_snapshot!(
+        surface,
+        fresh,
+        0,
+        0.0,
+        0,
+        screen.scrollback_len(),
+        3,
+        false,
+        None,
+        0,
+        false,
+        false,
+        "block"
+    );
+    assert_eq!(surface.retained_snapshots.len(), 2);
+    for (key, row) in retained {
+        assert!(Arc::ptr_eq(surface.retained_rows.get(&key).unwrap(), &row));
+    }
+}
+
+#[test]
+fn pending_local_scroll_reanchors_across_full_history_rotation() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(8);
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    let old = Arc::new(screen.viewport_snapshot_with_window(3, 5, 3));
+    let mut surface = TerminalSurface::new("session");
+    apply_test_frame_snapshot!(
+        surface, old, 3, 0.0, 3, 8, 3, false, None, 0, false, false, "block"
+    );
+    let result = surface.apply_local_scroll_wheel_visual_state(1.0).unwrap();
+    assert_eq!(surface.scroll_offset, 4);
+    surface.remember_pending_local_scroll_sync(
+        surface.current_scroll_visual_state(),
+        result.generation,
+    );
+    let reading = screen.viewport_snapshot(4).line(0).unwrap().to_string();
+    screen.advance(b"11\r\n");
+    let fresh = Arc::new(screen.viewport_snapshot_with_window(4, 4, 4));
+    apply_test_frame_snapshot!(
+        surface, fresh, 4, 0.0, 4, 8, 3, true, None, 0, false, false, "block"
+    );
+    assert_eq!(surface.scroll_offset, 5);
+    assert_eq!(surface.display_offset, 5);
+    let snapshot = surface.snapshot.as_ref().unwrap();
+    let anchor = terminal_snapshot_anchor_row_for_display_offset(snapshot, 5, 3, 8);
+    assert_eq!(snapshot.line(anchor), Some(reading.as_str()));
 }

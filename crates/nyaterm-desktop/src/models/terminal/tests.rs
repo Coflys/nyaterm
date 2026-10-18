@@ -3887,3 +3887,76 @@ fn synthetic_command_blocks_preserve_order_without_recording_or_output_observers
     pipeline.shutdown();
     recording.shutdown();
 }
+
+#[test]
+fn full_history_output_reanchors_reading_and_invalidates_query_caches() {
+    let mut view = TerminalViewState::new();
+    view.screen = TerminalScreen::new(16, 3);
+    view.screen.set_scrollback_limit(8);
+    view.append_text("0\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    view.scroll_offset = 3;
+    let old_snapshot = Arc::new(view.screen.viewport_snapshot(3));
+    let reading = old_snapshot.line(0).unwrap().to_string();
+    view.remember_scrollback_snapshot(3, old_snapshot.clone());
+    view.pending_snapshot_offsets.insert(3);
+    view.priority_pending_snapshot_offsets.insert(3);
+    view.append_text("11\r\n12\r\n");
+    assert_eq!(view.scroll_offset, 5);
+    assert!(view.has_new_while_scrolled);
+    assert_eq!(
+        view.screen.viewport_snapshot(5).line(0),
+        Some(reading.as_str())
+    );
+    assert!(view.scrollback_snapshots.is_empty());
+    assert!(view.pending_snapshot_offsets.is_empty());
+    assert!(view.priority_pending_snapshot_offsets.is_empty());
+    view.remember_scrollback_snapshot(3, old_snapshot);
+    assert!(view.scrollback_snapshots.is_empty());
+}
+
+#[test]
+fn repeated_full_history_frames_keep_anchor_until_the_read_line_is_evicted() {
+    let mut view = TerminalViewState::new();
+    let mut worker = TerminalScreen::new(16, 3);
+    worker.set_scrollback_limit(16);
+    for index in 0..20 {
+        worker.advance_decoded_text(&format!("{index}\r\n"));
+    }
+    view.screen.resize(16, 3);
+    view.apply_terminal_live_snapshot_frame(Arc::new(worker.snapshot()), None, 1);
+    view.scroll_offset = 3;
+    let reading = worker.viewport_snapshot(3).line(0).unwrap().to_string();
+    for index in 20..30 {
+        worker.advance_decoded_text(&format!("{index}\r\n"));
+        view.apply_terminal_live_snapshot_frame(Arc::new(worker.snapshot()), None, index);
+        assert_eq!(view.scroll_offset, 3 + (index as usize - 19));
+        assert_eq!(
+            worker.viewport_snapshot(view.scroll_offset).line(0),
+            Some(reading.as_str())
+        );
+    }
+    view.scroll_offset = 0;
+    worker.advance(b"30\r\n");
+    view.apply_terminal_live_snapshot_frame(Arc::new(worker.snapshot()), None, 31);
+    assert_eq!(view.scroll_offset, 0);
+}
+
+#[test]
+fn hidden_session_keeps_history_anchor_when_releasing_its_snapshot() {
+    let mut view = TerminalViewState::new();
+    let mut worker = TerminalScreen::new(16, 3);
+    worker.set_scrollback_limit(8);
+    for index in 0..12 {
+        worker.advance_decoded_text(&format!("{index}\r\n"));
+    }
+    view.screen.resize(16, 3);
+    view.apply_terminal_live_snapshot_frame(Arc::new(worker.snapshot()), None, 1);
+    view.scroll_offset = 3;
+    let baseline = view.history_state();
+    view.apply_terminal_background_frame_parts(None, None, TerminalProtocolState::default(), 0, 2);
+    assert!(view.frame_snapshot.is_none());
+    assert_eq!(view.history_state(), baseline);
+    worker.advance(b"12\r\n13\r\n");
+    view.apply_terminal_live_snapshot_frame(Arc::new(worker.snapshot()), None, 3);
+    assert_eq!(view.scroll_offset, 5);
+}

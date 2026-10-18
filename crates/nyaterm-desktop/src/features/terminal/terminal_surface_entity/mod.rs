@@ -312,6 +312,7 @@ pub(in crate::features) struct TerminalSurface {
     app: Option<WeakEntity<NyaTermApp>>,
     snapshot: Option<Arc<TerminalSnapshot>>,
     retained_snapshots: Vec<Arc<TerminalSnapshot>>,
+    history: nyaterm_terminal::TerminalHistoryState,
     retained_rows: BTreeMap<usize, Arc<nyaterm_terminal::TerminalSnapshotRow>>,
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
@@ -387,6 +388,7 @@ impl TerminalSurface {
             app: None,
             snapshot: None,
             retained_snapshots: Vec::new(),
+            history: Default::default(),
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
@@ -593,6 +595,13 @@ impl TerminalSurface {
             })
     }
 
+    pub(in crate::features) fn history_coordinates_match(
+        &self,
+        history: nyaterm_terminal::TerminalHistoryState,
+    ) -> bool {
+        history.preserves_coordinates_from(self.history)
+    }
+
     pub(in crate::features) fn has_snapshot_covering_display_offset(
         &self,
         display_offset: usize,
@@ -621,6 +630,9 @@ impl TerminalSurface {
         snapshot: Arc<TerminalSnapshot>,
     ) -> bool {
         if snapshot.row_count() == 0
+            || (self.history.cols > 0
+                && !snapshot.history.preserves_coordinates_from(self.history)
+                && !self.history.preserves_coordinates_from(snapshot.history))
             || self.snapshot.as_ref().is_some_and(|current| {
                 current.cols != snapshot.cols
                     || current.viewport_rows != snapshot.viewport_rows
@@ -632,6 +644,9 @@ impl TerminalSurface {
                 .any(|retained| Arc::ptr_eq(retained, &snapshot))
         {
             return false;
+        }
+        if self.history.cols == 0 {
+            self.history = snapshot.history;
         }
         self.remember_retained_snapshot(snapshot);
         self.prune_pending_scroll_snapshot_offsets();
@@ -659,6 +674,7 @@ impl TerminalSurface {
         scroll.viewport_rows = scroll.viewport_rows.max(1);
         let TerminalScrollVisualState {
             session_id: _,
+            history,
             scroll_offset,
             scroll_residual_lines,
             display_offset,
@@ -670,11 +686,14 @@ impl TerminalSurface {
         } = scroll.clone();
         let desired_show_cursor = show_cursor
             && !terminal_visual_scroll_active_for_state(scroll_offset, scroll_residual_lines);
-        let retained_rows_should_reset =
-            self.retained_rows_should_reset(snapshot.as_ref(), scrollback_len, viewport_rows);
-        let pending_local_scroll_state = (!retained_rows_should_reset)
-            .then(|| self.pending_local_scroll_state_reanchored_for_frame(&scroll))
-            .flatten();
+        let retained_rows_should_reset = self.retained_rows_should_reset(
+            snapshot.as_ref(),
+            history,
+            scrollback_len,
+            viewport_rows,
+        );
+        let pending_local_scroll_state =
+            self.pending_local_scroll_state_reanchored_for_frame(&scroll);
         if !retained_rows_should_reset
             && pending_local_scroll_state.is_none()
             && !self.has_pending_local_scroll_sync()
@@ -700,7 +719,12 @@ impl TerminalSurface {
             self.clear_retained_scroll_state();
         }
         self.remember_retained_snapshot(snapshot.clone());
+        self.history = history;
         if let Some(state) = pending_local_scroll_state {
+            if retained_rows_should_reset {
+                self.display_offset = snapshot.display_offset;
+                self.snapshot = Some(snapshot.clone());
+            }
             let text_updated = self.apply_scroll_visual_state(state);
             if text_updated {
                 self.show_cursor = false;
@@ -708,6 +732,7 @@ impl TerminalSurface {
             return false;
         }
         self.snapshot = Some(snapshot);
+        self.history = history;
         self.scroll_offset = scroll_offset;
         self.scroll_residual_lines = scroll_residual_lines;
         self.display_offset = display_offset;
@@ -733,24 +758,26 @@ impl TerminalSurface {
     ) -> Option<TerminalScrollVisualState> {
         let pending = self.pending_local_scroll_sync.as_ref()?;
         let mut state = pending.state.clone();
-        if state.scroll_offset == frame.scroll_offset
+        if state.history == frame.history
+            && state.scroll_offset == frame.scroll_offset
             && state.display_offset == frame.display_offset
             && (state.scroll_residual_lines - frame.scroll_residual_lines).abs()
                 < f32::EPSILON * 8.0
         {
             return None;
         }
+        frame.history.scrolled_since(state.history)?;
         if state.scroll_offset == 0 {
             state.scroll_residual_lines = 0.0;
         } else {
-            state.scroll_offset = state
-                .scroll_offset
-                .saturating_add(frame.scrollback_len.saturating_sub(state.scrollback_len))
-                .min(frame.scrollback_len);
+            state.scroll_offset = frame
+                .history
+                .reanchor_offset(state.history, state.scroll_offset);
             if state.scroll_offset >= frame.scrollback_len && state.scroll_residual_lines > 0.0 {
                 state.scroll_residual_lines = 0.0;
             }
         }
+        state.history = frame.history;
         state.scrollback_len = frame.scrollback_len;
         state.viewport_rows = frame.viewport_rows.max(1);
         state.display_offset = terminal_display_offset_from_state(
@@ -771,10 +798,14 @@ impl TerminalSurface {
     fn retained_rows_should_reset(
         &self,
         snapshot: &TerminalSnapshot,
+        history: nyaterm_terminal::TerminalHistoryState,
         scrollback_len: usize,
         viewport_rows: usize,
     ) -> bool {
         let viewport_rows = viewport_rows.max(1);
+        if self.history.cols > 0 && !history.preserves_coordinates_from(self.history) {
+            return true;
+        }
         let Some(previous) = self.snapshot.as_ref() else {
             return false;
         };
@@ -800,6 +831,11 @@ impl TerminalSurface {
         &mut self,
         state: &TerminalScrollVisualState,
     ) -> bool {
+        if !state.history.preserves_coordinates_from(self.history) {
+            self.clear_retained_scroll_state();
+            self.snapshot = None;
+        }
+        self.history = state.history;
         let scroll_offset = state.scroll_offset;
         let scroll_residual_lines = state.scroll_residual_lines;
         let display_offset = state.display_offset;
@@ -851,6 +887,11 @@ impl TerminalSurface {
         &mut self,
         state: &TerminalScrollVisualState,
     ) -> bool {
+        if !state.history.preserves_coordinates_from(self.history) {
+            self.clear_retained_scroll_state();
+            self.snapshot = None;
+        }
+        self.history = state.history;
         let scroll_offset = state.scroll_offset;
         let scroll_residual_lines = state.scroll_residual_lines;
         let display_offset = state.display_offset;
@@ -1246,6 +1287,7 @@ impl TerminalSurface {
 
         Some(Arc::new(TerminalSnapshot::from_rows(
             nyaterm_terminal::TerminalSnapshotMeta {
+                history: self.history,
                 shell_input_anchor: None,
                 cols,
                 viewport_rows,
@@ -1286,6 +1328,7 @@ impl TerminalSurface {
         }
         Some(Arc::new(TerminalSnapshot::from_rows(
             nyaterm_terminal::TerminalSnapshotMeta {
+                history: self.history,
                 shell_input_anchor: None,
                 cols,
                 viewport_rows,
@@ -1813,7 +1856,8 @@ impl TerminalSurface {
         &self,
         state: &TerminalScrollVisualState,
     ) -> bool {
-        self.scroll_offset == state.scroll_offset
+        self.history == state.history
+            && self.scroll_offset == state.scroll_offset
             && (self.scroll_residual_lines - state.scroll_residual_lines).abs() < f32::EPSILON * 8.0
             && self.display_offset == state.display_offset
             && self.scrollback_len == state.scrollback_len
@@ -1838,7 +1882,8 @@ impl TerminalSurface {
     }
 
     fn scroll_chrome_state_matches(&self, state: &TerminalScrollVisualState) -> bool {
-        self.scroll_offset == state.scroll_offset
+        self.history == state.history
+            && self.scroll_offset == state.scroll_offset
             && (self.scroll_residual_lines - state.scroll_residual_lines).abs() < f32::EPSILON * 8.0
             && self.scrollback_len == state.scrollback_len
             && self.viewport_rows == state.viewport_rows.max(1)
@@ -1894,11 +1939,13 @@ impl TerminalSurface {
         &mut self,
         state: TerminalScrollVisualState,
     ) -> bool {
-        if self.has_snapshot_covering_display_offset(
-            state.display_offset,
-            state.viewport_rows,
-            state.scrollback_len,
-        ) {
+        if state.history.preserves_coordinates_from(self.history)
+            && self.has_snapshot_covering_display_offset(
+                state.display_offset,
+                state.viewport_rows,
+                state.scrollback_len,
+            )
+        {
             if self.scroll_position_state_matches(&state) {
                 return false;
             }
@@ -1914,11 +1961,13 @@ impl TerminalSurface {
     }
 
     fn scroll_visual_state_needs_repaint(&self, state: &TerminalScrollVisualState) -> bool {
-        if self.has_snapshot_covering_display_offset(
-            state.display_offset,
-            state.viewport_rows,
-            state.scrollback_len,
-        ) {
+        if state.history.preserves_coordinates_from(self.history)
+            && self.has_snapshot_covering_display_offset(
+                state.display_offset,
+                state.viewport_rows,
+                state.scrollback_len,
+            )
+        {
             !self.scroll_position_state_matches(state)
         } else {
             !self.scroll_chrome_state_matches(state)
@@ -2095,6 +2144,7 @@ impl TerminalSurface {
         let display_offset =
             terminal_display_offset_from_state(next_offset, next_residual, self.scrollback_len);
         let state = TerminalScrollVisualState {
+            history: self.history,
             session_id: self.session_id.clone(),
             scroll_offset: next_offset,
             scroll_residual_lines: next_residual,
@@ -2122,6 +2172,7 @@ impl TerminalSurface {
 
     fn current_scroll_visual_state(&self) -> TerminalScrollVisualState {
         TerminalScrollVisualState {
+            history: self.history,
             session_id: self.session_id.clone(),
             scroll_offset: self.scroll_offset,
             scroll_residual_lines: self.scroll_residual_lines,

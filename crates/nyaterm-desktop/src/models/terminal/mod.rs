@@ -703,6 +703,8 @@ pub(crate) struct TerminalViewState {
     pub(crate) max_line_number_digits: usize,
     /// Latest live viewport prepared by the background terminal frame processor.
     pub(crate) frame_snapshot: Option<Arc<TerminalSnapshot>>,
+    /// Anchor baseline while a hidden session releases its heavy frame snapshot.
+    detached_history: Option<nyaterm_terminal::TerminalHistoryState>,
     /// Immutable input colors paired with frame_snapshot, independent of the
     /// input-idle output batch scheduler. Cleared whenever that snapshot changes.
     pub(crate) frame_input_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
@@ -770,6 +772,7 @@ impl TerminalViewState {
             screen: TerminalScreen::default(),
             max_line_number_digits: 1,
             frame_snapshot: None,
+            detached_history: None,
             frame_input_highlights: None,
             frame_action_links: None,
             scrollback_snapshots: HashMap::new(),
@@ -822,6 +825,7 @@ impl TerminalViewState {
             screen,
             max_line_number_digits: 1,
             frame_snapshot: None,
+            detached_history: None,
             frame_input_highlights: None,
             frame_action_links: None,
             scrollback_snapshots: HashMap::new(),
@@ -861,11 +865,12 @@ impl TerminalViewState {
         }
     }
 
-    fn scrollback_len_for_anchor(&self) -> usize {
+    pub(crate) fn history_state(&self) -> nyaterm_terminal::TerminalHistoryState {
         self.frame_snapshot
             .as_ref()
-            .map(|snapshot| snapshot.scrollback_len)
-            .unwrap_or_else(|| self.screen.scrollback_len())
+            .map(|snapshot| snapshot.history)
+            .or(self.detached_history)
+            .unwrap_or_else(|| self.screen.history_state())
     }
 
     pub(crate) fn live_snapshot_with_scroll_window(&self) -> Arc<TerminalSnapshot> {
@@ -884,8 +889,10 @@ impl TerminalViewState {
     fn clone_snapshot_with_scrollback_delta(
         snapshot: &Arc<TerminalSnapshot>,
         delta: usize,
+        history: nyaterm_terminal::TerminalHistoryState,
     ) -> Arc<TerminalSnapshot> {
         let mut snapshot = (**snapshot).clone();
+        snapshot.history = history;
         snapshot.scrollback_len = snapshot.scrollback_len.saturating_add(delta);
         snapshot.total_rows = snapshot.total_rows.saturating_add(delta);
         snapshot.display_offset = snapshot.display_offset.saturating_add(delta);
@@ -896,13 +903,14 @@ impl TerminalViewState {
         if delta == 0 {
             return;
         }
+        let history = self.history_state();
         self.scrollback_snapshots = self
             .scrollback_snapshots
             .drain()
             .map(|(offset, snapshot)| {
                 (
                     offset.saturating_add(delta),
-                    Self::clone_snapshot_with_scrollback_delta(&snapshot, delta),
+                    Self::clone_snapshot_with_scrollback_delta(&snapshot, delta, history),
                 )
             })
             .collect();
@@ -917,22 +925,21 @@ impl TerminalViewState {
         self.priority_pending_snapshot_offsets.clear();
     }
 
-    fn anchor_scrollback_after_len_change(&mut self, old_len: usize, new_len: usize) {
-        if new_len < old_len {
+    fn anchor_scrollback_after_history_change(
+        &mut self,
+        previous: nyaterm_terminal::TerminalHistoryState,
+    ) {
+        let current = self.history_state();
+        let scrolled = current.scrolled_since(previous);
+        if !current.preserves_coordinates_from(previous) {
             self.clear_scrollback_query_caches();
-            self.clamp_scroll_offset();
-            return;
+        } else if self.scroll_offset > 0 {
+            self.rekey_scrollback_query_caches_for_growth(scrolled.unwrap_or(0));
+        } else if scrolled.is_some_and(|rows| rows > 0) {
+            self.clear_scrollback_query_caches();
         }
-        let delta = new_len.saturating_sub(old_len);
-        if self.scroll_offset == 0 {
-            if delta > 0 {
-                self.clear_scrollback_query_caches();
-            }
-            return;
-        }
-        if delta > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_add(delta).min(new_len);
-            self.rekey_scrollback_query_caches_for_growth(delta);
+        self.scroll_offset = current.reanchor_offset(previous, self.scroll_offset);
+        if self.scroll_offset > 0 && scrolled.is_some_and(|rows| rows > 0) {
             self.has_new_while_scrolled = true;
         }
         self.clamp_scroll_offset();
@@ -972,20 +979,18 @@ impl TerminalViewState {
         if text.is_empty() {
             return;
         }
-        let old_scrollback_len = self.scrollback_len_for_anchor();
+        let previous_history = self.history_state();
         self.screen.advance_decoded_text(text);
         self.screen_revision = self.screen_revision.saturating_add(1);
         self.last_screen_change_at = Instant::now();
+        self.detached_history = None;
         self.frame_snapshot = Some(self.live_snapshot_with_scroll_window());
         self.grid_resize_pending = false;
         self.frame_action_links = None;
         self.enter_render_degraded_mode();
         self.protocol_state = TerminalProtocolState::from_screen(&self.screen);
         append_terminal_ui_output_tail(&mut self.output, text);
-        self.anchor_scrollback_after_len_change(
-            old_scrollback_len,
-            self.scrollback_len_for_anchor(),
-        );
+        self.anchor_scrollback_after_history_change(previous_history);
     }
 
     /// Feed already-protected bytes into the view (used when the caller applies
@@ -995,10 +1000,11 @@ impl TerminalViewState {
         if data.is_empty() {
             return;
         }
-        let old_scrollback_len = self.scrollback_len_for_anchor();
+        let previous_history = self.history_state();
         self.screen.advance(data);
         self.screen_revision = self.screen_revision.saturating_add(1);
         self.last_screen_change_at = Instant::now();
+        self.detached_history = None;
         self.frame_snapshot = Some(self.live_snapshot_with_scroll_window());
         self.grid_resize_pending = false;
         self.frame_action_links = None;
@@ -1008,10 +1014,7 @@ impl TerminalViewState {
             &mut self.output,
             &self.output_decoder.decode_output_text(data),
         );
-        self.anchor_scrollback_after_len_change(
-            old_scrollback_len,
-            self.scrollback_len_for_anchor(),
-        );
+        self.anchor_scrollback_after_history_change(previous_history);
     }
 
     /// Drop the oldest part of an oversized burst so the latest screen state wins
@@ -1140,11 +1143,7 @@ impl TerminalViewState {
     }
 
     pub(crate) fn clamp_scroll_offset(&mut self) {
-        let max = self
-            .frame_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.scrollback_len)
-            .unwrap_or_else(|| self.screen.scrollback_len());
+        let max = self.scrollback_len_for_ui();
         if self.scroll_offset > max {
             self.scroll_offset = max;
         }
@@ -1165,8 +1164,7 @@ impl TerminalViewState {
         if !visible_text.is_empty() && !self.render_degraded {
             append_terminal_ui_output_tail(&mut self.output, visible_text);
         }
-        let old_scrollback_len = self.scrollback_len_for_anchor();
-        let new_scrollback_len = snapshot.scrollback_len;
+        let previous_history = self.history_state();
         self.observe_line_number_digits(&snapshot);
         let preserved_action_links = action_links.or_else(|| {
             self.frame_action_links
@@ -1174,6 +1172,7 @@ impl TerminalViewState {
                 .filter(|links| links.has_matching_decorated_snapshot_rows(snapshot.as_ref()))
         });
         self.frame_input_highlights = None;
+        self.detached_history = None;
         self.frame_snapshot = Some(snapshot);
         self.frame_action_links = preserved_action_links;
         self.protocol_state = protocol_state;
@@ -1187,7 +1186,7 @@ impl TerminalViewState {
         if skipped_output_bytes > 0 {
             self.note_skipped_output(skipped_output_bytes);
         }
-        self.anchor_scrollback_after_len_change(old_scrollback_len, new_scrollback_len);
+        self.anchor_scrollback_after_history_change(previous_history);
     }
 
     pub(crate) fn apply_terminal_live_snapshot_frame(
@@ -1196,8 +1195,7 @@ impl TerminalViewState {
         action_links: Option<TerminalFrameActionLinks>,
         revision: u64,
     ) {
-        let old_scrollback_len = self.scrollback_len_for_anchor();
-        let new_scrollback_len = snapshot.scrollback_len;
+        let previous_history = self.history_state();
         self.observe_line_number_digits(&snapshot);
         let preserved_action_links = action_links.or_else(|| {
             self.frame_action_links
@@ -1205,6 +1203,7 @@ impl TerminalViewState {
                 .filter(|links| links.has_matching_decorated_snapshot_rows(snapshot.as_ref()))
         });
         self.frame_input_highlights = None;
+        self.detached_history = None;
         self.frame_snapshot = Some(snapshot);
         self.frame_action_links = preserved_action_links;
         self.grid_resize_pending = false;
@@ -1212,7 +1211,7 @@ impl TerminalViewState {
             self.screen_revision = revision;
             self.last_screen_change_at = Instant::now();
         }
-        self.anchor_scrollback_after_len_change(old_scrollback_len, new_scrollback_len);
+        self.anchor_scrollback_after_history_change(previous_history);
     }
 
     pub(crate) fn apply_terminal_background_frame_parts(
@@ -1223,18 +1222,23 @@ impl TerminalViewState {
         skipped_output_bytes: usize,
         revision: u64,
     ) {
+        let previous_history = self.history_state();
+        let has_snapshot = snapshot.is_some();
         // Hidden sessions keep protocol/revision current without retaining a full
         // viewport snapshot until the surface becomes visible again.
         if let Some(snapshot) = snapshot {
             self.observe_line_number_digits(&snapshot);
             self.frame_input_highlights = None;
+            self.detached_history = None;
             self.frame_snapshot = Some(snapshot);
             self.frame_action_links = action_links;
             self.grid_resize_pending = false;
         } else {
             // Drop heavy paint state while backgrounded under pressure.
             self.frame_input_highlights = None;
+            self.detached_history = Some(previous_history);
             self.frame_snapshot = None;
+            self.clear_scrollback_query_caches();
             self.frame_action_links = None;
         }
         self.protocol_state = protocol_state;
@@ -1243,7 +1247,9 @@ impl TerminalViewState {
         if skipped_output_bytes > 0 {
             self.note_skipped_output(skipped_output_bytes);
         }
-        self.clamp_scroll_offset();
+        if has_snapshot {
+            self.anchor_scrollback_after_history_change(previous_history);
+        }
     }
 
     pub(crate) fn backend_resize_changed(
@@ -1286,9 +1292,16 @@ impl TerminalViewState {
         offset: usize,
         snapshot: Arc<TerminalSnapshot>,
     ) {
+        if !self
+            .history_state()
+            .preserves_coordinates_from(snapshot.history)
+        {
+            return;
+        }
         self.observe_line_number_digits(&snapshot);
         if offset == 0 {
             self.frame_input_highlights = None;
+            self.detached_history = None;
             self.frame_snapshot = Some(snapshot);
             return;
         }
@@ -1341,10 +1354,7 @@ impl TerminalViewState {
     }
 
     pub(crate) fn scrollback_len_for_ui(&self) -> usize {
-        self.frame_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.scrollback_len)
-            .unwrap_or_else(|| self.screen.scrollback_len())
+        self.history_state().scrollback_len
     }
 
     pub(crate) fn viewport_rows_for_ui(&self) -> usize {

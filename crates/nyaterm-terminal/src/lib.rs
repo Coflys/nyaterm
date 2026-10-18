@@ -233,8 +233,56 @@ pub struct TerminalSnapshotRow {
     pub shell_integration: bool,
 }
 
+/// History coordinates are independent of stable `TerminalLineId` identities.
+/// The scroll counter advances before history fills as well as during eviction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalHistoryState {
+    pub epoch: u64,
+    pub scroll_count: u64,
+    pub alternate_screen: bool,
+    pub scrollback_len: usize,
+    pub cols: usize,
+    pub viewport_rows: usize,
+}
+
+impl TerminalHistoryState {
+    /// None denotes reset, reflow, screen switch, or a backwards observation.
+    pub fn scrolled_since(self, previous: Self) -> Option<usize> {
+        if self.epoch != previous.epoch
+            || self.alternate_screen != previous.alternate_screen
+            || self.cols != previous.cols
+            || self.viewport_rows != previous.viewport_rows
+            || self.scrollback_len < previous.scrollback_len
+        {
+            return None;
+        }
+        let scrolled = self.scroll_count.wrapping_sub(previous.scroll_count);
+        if scrolled > i64::MAX as u64 {
+            return None;
+        }
+        usize::try_from(scrolled).ok()
+    }
+
+    /// Absolute row keys survive growth, but cannot survive history eviction.
+    pub fn preserves_coordinates_from(self, previous: Self) -> bool {
+        self.scrolled_since(previous).is_some_and(|scrolled| {
+            scrolled == self.scrollback_len.saturating_sub(previous.scrollback_len)
+        })
+    }
+
+    pub fn reanchor_offset(self, previous: Self, offset: usize) -> usize {
+        if offset == 0 {
+            return 0;
+        }
+        offset
+            .saturating_add(self.scrolled_since(previous).unwrap_or(0))
+            .min(self.scrollback_len)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSnapshotMeta {
+    pub history: TerminalHistoryState,
     pub cols: usize,
     pub viewport_rows: usize,
     pub cursor: CursorSnapshot,
@@ -262,6 +310,7 @@ pub struct TerminalDamageSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSnapshot {
+    pub history: TerminalHistoryState,
     pub cols: usize,
     pub viewport_rows: usize,
     pub row_data: Arc<[Arc<TerminalSnapshotRow>]>,
@@ -301,6 +350,7 @@ impl TerminalSnapshot {
     ) -> Self {
         let row_data = rows.into();
         Self {
+            history: meta.history,
             cols: meta.cols,
             viewport_rows: meta.viewport_rows,
             row_data,
@@ -1337,6 +1387,10 @@ impl TerminalCore {
         self.retain_active_presentation_range();
     }
 
+    pub fn history_state(&self) -> TerminalHistoryState {
+        history_state_from_term(&self.term, self.active_line_state())
+    }
+
     pub fn snapshot(&self) -> TerminalSnapshot {
         self.viewport_snapshot(0)
     }
@@ -2350,6 +2404,7 @@ fn snapshot_window_from_term(
     };
     let snapshot = TerminalSnapshot::from_rows(
         TerminalSnapshotMeta {
+            history: history_state_from_term(term, line_state),
             cols,
             viewport_rows,
             cursor,
@@ -2365,6 +2420,29 @@ fn snapshot_window_from_term(
         row_data,
     );
     (snapshot, stats)
+}
+
+fn history_state_from_term(
+    term: &Term<NyaTermEventProxy>,
+    line_state: &ScreenLineState,
+) -> TerminalHistoryState {
+    let alternate_screen = term.mode().contains(TermMode::ALT_SCREEN);
+    TerminalHistoryState {
+        epoch: line_state.epoch,
+        scroll_count: if alternate_screen {
+            term.alternate_grid_scroll_epoch()
+        } else {
+            term.primary_grid_scroll_epoch()
+        },
+        alternate_screen,
+        scrollback_len: if alternate_screen {
+            0
+        } else {
+            term.grid().history_size()
+        },
+        cols: term.columns(),
+        viewport_rows: term.screen_lines(),
+    }
 }
 
 struct SnapshotRowMetadata {
