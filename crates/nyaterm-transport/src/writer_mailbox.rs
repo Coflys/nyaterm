@@ -12,6 +12,7 @@ pub(crate) const ITEM_LIMIT: usize = 1024;
 struct State {
     queue: VecDeque<TransportWriterCommand>,
     bytes: usize,
+    peak_bytes: usize,
     items: usize,
     stopped: bool,
 }
@@ -33,6 +34,44 @@ fn byte_cost(command: &TransportWriterCommand) -> usize {
 }
 
 impl WriterMailbox {
+    pub(crate) fn peak_bytes(&self) -> usize {
+        self.0
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .peak_bytes
+    }
+
+    pub(crate) fn wait_capacity(
+        &self,
+        bytes: usize,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> io::Result<()> {
+        use std::sync::atomic::Ordering;
+        if bytes > BYTE_LIMIT {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let (lock, changed) = &*self.0;
+        let mut state = lock
+            .lock()
+            .map_err(|_| io::Error::other("writer mailbox poisoned"))?;
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if state.stopped {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            if bytes <= BYTE_LIMIT.saturating_sub(state.bytes) && state.items < ITEM_LIMIT {
+                return Ok(());
+            }
+            state = changed
+                .wait_timeout(state, Duration::from_millis(25))
+                .map_err(|_| io::Error::other("writer mailbox poisoned"))?
+                .0;
+        }
+    }
+
     pub(crate) fn send(&self, command: TransportWriterCommand) -> io::Result<()> {
         let bytes = byte_cost(&command);
         let (lock, changed) = &*self.0;
@@ -53,9 +92,10 @@ impl WriterMailbox {
         }
         state.queue.try_reserve(1).map_err(io::Error::other)?;
         state.bytes += bytes;
+        state.peak_bytes = state.peak_bytes.max(state.bytes);
         state.items += 1;
         state.queue.push_back(command);
-        changed.notify_one();
+        changed.notify_all();
         Ok(())
     }
 
@@ -144,6 +184,8 @@ impl Drop for WritePermit {
         let mut state = self.mailbox.0.0.lock().unwrap_or_else(|p| p.into_inner());
         state.bytes -= self.bytes;
         state.items -= 1;
+        drop(state);
+        self.mailbox.0.1.notify_all();
     }
 }
 
@@ -199,5 +241,46 @@ mod tests {
                 matches!(command, TransportWriterCommand::TelnetControl(data) if data == vec![(index % 256) as u8])
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod waiter_tests {
+    use super::{BYTE_LIMIT, WriterMailbox};
+    use crate::TransportWriterCommand;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn data_arrival_wakes_writer_even_while_a_larger_capacity_waiter_is_parked() {
+        let mailbox = WriterMailbox::default();
+        mailbox
+            .send(TransportWriterCommand::Write(vec![0; BYTE_LIMIT / 2]))
+            .unwrap();
+        let (_, in_flight) = mailbox.receive(None).unwrap().unwrap();
+        let capacity = mailbox.clone();
+        let waiter =
+            std::thread::spawn(move || capacity.wait_capacity(BYTE_LIMIT, &AtomicBool::new(false)));
+        // This waiter remains ineligible when the one-byte write arrives.
+        std::thread::sleep(Duration::from_millis(20));
+        let reader = mailbox.clone();
+        let (tx, rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let result = reader.receive(Some(Duration::from_secs(2))).unwrap();
+            tx.send(result.is_some()).unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        mailbox
+            .send(TransportWriterCommand::Write(vec![1]))
+            .unwrap();
+        let received = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        drop(in_flight);
+        waiter.join().unwrap().unwrap();
+        writer.join().unwrap();
+        assert!(
+            received,
+            "capacity waiter must not steal the data-arrival wake"
+        );
     }
 }

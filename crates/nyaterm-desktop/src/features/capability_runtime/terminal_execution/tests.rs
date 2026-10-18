@@ -144,6 +144,10 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
         };
         assert_eq!(result["exitCode"], 0, "{source}: {result}");
         assert!(
+            !result["output"].as_str().unwrap().contains("__DF_CMD_"),
+            "{source}: captured an internal marker"
+        );
+        assert!(
             result["output"].as_str().unwrap().contains(if background {
                 "background-value"
             } else {
@@ -168,7 +172,12 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
     let text = futures::executor::block_on(text).unwrap().unwrap();
     assert_eq!(text.matches("┌ AI #").count(), 3);
     assert_eq!(text.matches("└").count(), 3);
-    assert!(!text.contains("__DF_CMD_"));
+    assert!(
+        !text.contains("__DF_CMD_"),
+        "internal marker leaked: start={}, end={}",
+        text.matches("__DF_CMD_START_").count(),
+        text.matches("__DF_CMD_END_").count()
+    );
     assert!(!text.contains("background-value"));
     let mut send_only = cx.update_entity(&app, |app, cx| {
         app.session

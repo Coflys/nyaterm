@@ -15,10 +15,10 @@ use super::{
     RemoteStatsService, SESSION_EVENT_QUEUE_OUTPUT_EVENT_LIMIT, SESSION_EVENT_QUEUE_OUTPUT_LIMIT,
     SerialSessionConfig, SessionError, SessionEvent, SessionEventConsumerId, SessionEventQueue,
     SessionManager, SftpService, SftpSettings, SshAlgorithmListKind, SshAlgorithmMode,
-    SshAlgorithmPreferences, SshAlgorithmRisk, SshAlgorithmValidationError, SshCommand,
-    SshKeyAuthConfig, SshProxyConfig, SshPtyDimensions, SshSessionConfig, SshSessionProfile,
-    TelnetSessionConfig, WILL, cipher, defaults_from_preferred, drain_deferred_ssh_open_commands,
-    expand_proxy_command, forwarded_tcpip_sender_for, has_password_prompt, has_username_prompt,
+    SshAlgorithmPreferences, SshAlgorithmRisk, SshAlgorithmValidationError, SshKeyAuthConfig,
+    SshProxyConfig, SshPtyDimensions, SshSessionConfig, SshSessionProfile, TelnetSessionConfig,
+    WILL, cipher, defaults_from_preferred, drain_deferred_ssh_open_commands, expand_proxy_command,
+    forwarded_tcpip_sender_for, has_password_prompt, has_username_prompt,
     is_process_list_unsupported, kex, local_pty_size, mac, normalize_process_signal,
     parse_process_output, register_x11_sender, remap_del_to_bs, resolve_preferred_algorithms,
     run_local_command, ssh_client_config, ssh_host_identifier, supported_ssh_algorithms,
@@ -2005,23 +2005,11 @@ fn ssh_pty_dimensions_use_config_size() {
 
 #[test]
 fn deferred_ssh_open_drain_keeps_writes_and_latest_resize() {
-    let (tx, mut rx) = tokio_mpsc::unbounded_channel();
-    tx.send(SshCommand::Write(b"before".to_vec())).unwrap();
-    tx.send(SshCommand::Resize {
-        cols: 100,
-        rows: 30,
-        pixel_width: 800,
-        pixel_height: 600,
-    })
-    .unwrap();
-    tx.send(SshCommand::Resize {
-        cols: 132,
-        rows: 43,
-        pixel_width: 1056,
-        pixel_height: 688,
-    })
-    .unwrap();
-    tx.send(SshCommand::Write(b"after".to_vec())).unwrap();
+    let (tx, mut rx) = crate::ssh_mailbox::channel();
+    tx.write(b"before".to_vec()).unwrap();
+    tx.resize(100, 30, 800, 600);
+    tx.resize(132, 43, 1056, 688);
+    tx.write(b"after".to_vec()).unwrap();
 
     let mut dimensions = SshPtyDimensions::new(80, 24, 0, 0);
     let mut pending_writes = VecDeque::new();
@@ -2031,16 +2019,19 @@ fn deferred_ssh_open_drain_keeps_writes_and_latest_resize() {
     assert!(!should_close);
     assert_eq!(dimensions, SshPtyDimensions::new(132, 43, 1056, 688));
     assert_eq!(
-        pending_writes.into_iter().collect::<Vec<_>>(),
+        pending_writes
+            .into_iter()
+            .map(|write| write.bytes)
+            .collect::<Vec<_>>(),
         vec![b"before".to_vec(), b"after".to_vec()]
     );
 }
 
 #[test]
 fn deferred_ssh_open_drain_closes_before_shell_open() {
-    let (tx, mut rx) = tokio_mpsc::unbounded_channel();
-    tx.send(SshCommand::Write(b"queued".to_vec())).unwrap();
-    tx.send(SshCommand::Close).unwrap();
+    let (tx, mut rx) = crate::ssh_mailbox::channel();
+    tx.write(b"queued".to_vec()).unwrap();
+    tx.close();
 
     let mut dimensions = SshPtyDimensions::new(80, 24, 0, 0);
     let mut pending_writes = VecDeque::new();
@@ -2048,15 +2039,12 @@ fn deferred_ssh_open_drain_closes_before_shell_open() {
         drain_deferred_ssh_open_commands(&mut rx, &mut dimensions, &mut pending_writes);
 
     assert!(should_close);
-    assert_eq!(
-        pending_writes.into_iter().collect::<Vec<_>>(),
-        vec![b"queued".to_vec()]
-    );
+    assert!(pending_writes.is_empty(), "close bypasses queued writes");
 }
 
 #[test]
 fn deferred_ssh_open_drain_closes_on_disconnected_command_channel() {
-    let (tx, mut rx) = tokio_mpsc::unbounded_channel();
+    let (tx, mut rx) = crate::ssh_mailbox::channel();
     drop(tx);
 
     let mut dimensions = SshPtyDimensions::new(80, 24, 0, 0);
@@ -3368,4 +3356,80 @@ fn output_boundary_preserves_source_order_across_budgeted_drains() {
     assert!(matches!(&events[0], SessionEvent::Output { data, .. } if data == b"before"));
     assert!(matches!(&events[1], SessionEvent::OutputBoundary { token, .. } if token == "task"));
     assert!(matches!(&events[2], SessionEvent::Output { data, .. } if data == b"after"));
+}
+
+#[test]
+fn async_output_backpressure_keeps_executor_responsive_and_resumes_in_order() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let queue = SessionEventQueue::new();
+        queue.push(SessionEvent::Output {
+            session_id: "async".into(),
+            data: vec![7; SESSION_EVENT_QUEUE_OUTPUT_LIMIT],
+        });
+        let producer = queue.clone();
+        let task = tokio::spawn(async move {
+            producer
+                .push_async(SessionEvent::Output {
+                    session_id: "async".into(),
+                    data: vec![9; 1024],
+                })
+                .await;
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!task.is_finished());
+        let first = queue.drain(1000);
+        assert_eq!(
+            first.stats.drained_output_bytes,
+            SESSION_EVENT_QUEUE_OUTPUT_LIMIT
+        );
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let next = queue.drain(1000);
+        assert!(
+            matches!(&next.events[0], SessionEvent::Output { data, .. } if data == &vec![9; 1024])
+        );
+        assert_eq!(queue.peak_output_bytes(), SESSION_EVENT_QUEUE_OUTPUT_LIMIT);
+    });
+}
+
+#[test]
+fn async_output_wait_and_producer_turn_are_released_by_cancellation() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let queue = SessionEventQueue::new();
+            queue.push(SessionEvent::Output {
+                session_id: "a".into(),
+                data: vec![0; SESSION_EVENT_QUEUE_OUTPUT_LIMIT],
+            });
+            let mut tasks = Vec::new();
+            for _ in 0..8 {
+                let producer = queue.clone();
+                tasks.push(tokio::spawn(async move {
+                    producer
+                        .push_async(SessionEvent::Output {
+                            session_id: "a".into(),
+                            data: vec![1; 1024],
+                        })
+                        .await;
+                }));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            queue.cancel_session("a");
+            for task in tasks {
+                tokio::time::timeout(Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            assert!(queue.drain(100).events.is_empty());
+        });
 }

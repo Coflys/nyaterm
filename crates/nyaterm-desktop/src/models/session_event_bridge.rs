@@ -78,6 +78,7 @@ struct SessionEventBridgeState {
 #[derive(Default)]
 struct SessionEventBridgeControl {
     owned_sessions: HashSet<String>,
+    protocol_consumers: HashMap<String, SessionEventConsumerId>,
     ui_routed_sessions: HashSet<String>,
     /// A UI handoff remains ordered until the UI has submitted its whole drain
     /// to the frame worker, including events already removed from `ui_queue`.
@@ -122,6 +123,7 @@ impl SessionEventBridge {
         let state = Arc::new(SessionEventBridgeState {
             control: Mutex::new(SessionEventBridgeControl {
                 owned_sessions: HashSet::new(),
+                protocol_consumers: HashMap::new(),
                 ui_routed_sessions: HashSet::new(),
                 pending_ui_sessions: HashSet::new(),
                 encoding,
@@ -167,9 +169,68 @@ impl SessionEventBridge {
         if session_id.is_empty() {
             return;
         }
+        let mut consumer = self.consumer_id;
         if let Ok(mut control) = self.state.control.lock() {
             control.owned_sessions.insert(session_id.to_string());
+            consumer = control
+                .protocol_consumers
+                .get(session_id)
+                .copied()
+                .unwrap_or(consumer);
         }
+        self.session_manager
+            .assign_session_event_consumer(session_id, consumer);
+    }
+
+    pub(crate) fn protocol_wake(&self) -> nyaterm_transport::zmodem::runtime::RuntimeWake {
+        let wake = self.state.ui_queue.wake.clone();
+        Arc::new(move || {
+            if let Some(wake) = &wake {
+                wake.signal(ANY_INTEREST);
+            }
+        })
+    }
+
+    pub(crate) fn bind_protocol_consumer(
+        &self,
+        session_id: &str,
+        consumer: SessionEventConsumerId,
+    ) {
+        self.state
+            .control
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .protocol_consumers
+            .insert(session_id.into(), consumer);
+    }
+
+    /// Fence the bridge's complete dequeue/routing turn before transferring input.
+    pub(crate) fn begin_protocol_handoff(
+        &self,
+        session_id: &str,
+        consumer: SessionEventConsumerId,
+    ) -> VecDeque<SessionEvent> {
+        let _gate = self
+            .state
+            .transfer_gate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        self.bind_protocol_consumer(session_id, consumer);
+        self.session_manager
+            .assign_session_event_consumer(session_id, consumer);
+        self.state.ui_queue.take_sessions(&[session_id.to_string()])
+    }
+
+    pub(crate) fn finish_protocol_handoff(&self, session_id: &str) {
+        let _gate = self
+            .state
+            .transfer_gate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut control = self.state.control.lock().unwrap_or_else(|p| p.into_inner());
+        control.protocol_consumers.remove(session_id);
+        control.pending_ui_sessions.insert(session_id.into());
+        drop(control);
         self.session_manager
             .assign_session_event_consumer(session_id, self.consumer_id);
     }
@@ -177,6 +238,7 @@ impl SessionEventBridge {
     pub(crate) fn release_session(&self, session_id: &str) {
         if let Ok(mut control) = self.state.control.lock() {
             control.owned_sessions.remove(session_id);
+            control.protocol_consumers.remove(session_id);
             control.ui_routed_sessions.remove(session_id);
             control.pending_ui_sessions.remove(session_id);
         }
@@ -198,6 +260,7 @@ impl SessionEventBridge {
         if let Ok(mut control) = self.state.control.lock() {
             for session_id in session_ids {
                 control.owned_sessions.remove(session_id);
+                control.protocol_consumers.remove(session_id);
                 control.ui_routed_sessions.remove(session_id);
                 control.pending_ui_sessions.remove(session_id);
             }
@@ -983,6 +1046,58 @@ mod tests {
     use crate::models::recording::RecordingWritePipeline;
     use crate::models::terminal::{TerminalFrameOutputSubmission, TerminalFramePipeline};
     use nyaterm_transport::{SessionEvent, SessionManager};
+
+    #[test]
+    fn protocol_handoff_extracts_only_its_session_and_keeps_migration_consumer() {
+        let manager = Arc::new(SessionManager::new());
+        let bridge = SessionEventBridge::spawn(
+            manager.clone(),
+            TerminalFramePipeline::default(),
+            None,
+            "UTF-8".into(),
+            1000,
+        );
+        bridge.claim_session("protocol");
+        for (id, bytes) in [
+            ("protocol", b"first".as_slice()),
+            ("other", b"unrelated".as_slice()),
+            ("protocol", b"second".as_slice()),
+        ] {
+            bridge.push_ui_event_for_test(SessionEvent::Output {
+                session_id: id.into(),
+                data: bytes.to_vec(),
+            });
+        }
+        let consumer = manager.register_event_consumer();
+        let pending = bridge.begin_protocol_handoff("protocol", consumer);
+        let bytes: Vec<u8> = pending
+            .into_iter()
+            .flat_map(|event| match event {
+                SessionEvent::Output { data, .. } => data,
+                _ => panic!("output"),
+            })
+            .collect();
+        assert_eq!(bytes, b"firstsecond");
+        bridge.claim_session("protocol");
+        assert_eq!(
+            bridge
+                .state
+                .control
+                .lock()
+                .unwrap()
+                .protocol_consumers
+                .get("protocol"),
+            Some(&consumer)
+        );
+        assert_eq!(
+            bridge.state.ui_queue.take_sessions(&["other".into()]).len(),
+            1
+        );
+        bridge.finish_protocol_handoff("protocol");
+        let control = bridge.state.control.lock().unwrap();
+        assert!(!control.protocol_consumers.contains_key("protocol"));
+        assert!(control.pending_ui_sessions.contains("protocol"));
+    }
 
     #[test]
     fn repeated_transfers_finish_while_both_event_bridges_are_idle() {

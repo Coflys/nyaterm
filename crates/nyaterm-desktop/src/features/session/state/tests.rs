@@ -1767,3 +1767,83 @@ fn telnet_reconnect_request_retains_custom_keepalive_through_event_routing() {
     };
     assert_eq!(config.keep_alive_interval_secs, 45);
 }
+
+#[test]
+fn zmodem_spawn_failure_preserves_ui_pending_and_bridge_consumer() {
+    let root = TestConfigDir::new("nyaterm-zmodem-spawn-failure");
+    let cx = TestAppContext::single();
+    let mut state = session_state(&cx, root.path());
+    state.extend_pending_events([SessionEvent::Output {
+        session_id: "z".into(),
+        data: b"pending".to_vec(),
+    }]);
+    let _failure = nyaterm_core::runtime::worker::fail_after(0);
+    assert!(
+        state
+            .start_zmodem_runtime(
+                "z",
+                nyaterm_transport::ZmodemTransfer::new(
+                    nyaterm_transport::ZmodemDirection::Download,
+                    &[]
+                )
+            )
+            .is_err()
+    );
+    assert_eq!(state.pending_event_count(), 1);
+    assert!(
+        matches!(state.pop_pending_event(), Some(SessionEvent::Output { data, .. }) if data == b"pending")
+    );
+}
+
+#[test]
+fn zmodem_handoff_preserves_ui_then_bridge_order_and_other_sessions() {
+    let root = TestConfigDir::new("nyaterm-zmodem-handoff-order");
+    let cx = TestAppContext::single();
+    let mut state = session_state(&cx, root.path());
+    state.extend_pending_events([
+        SessionEvent::Output {
+            session_id: "z".into(),
+            data: b"ui".to_vec(),
+        },
+        SessionEvent::Output {
+            session_id: "other".into(),
+            data: b"other".to_vec(),
+        },
+    ]);
+    state.push_event_bridge_ui_event_for_test(SessionEvent::Output {
+        session_id: "z".into(),
+        data: b"bridge".to_vec(),
+    });
+    let worker = state
+        .start_zmodem_runtime(
+            "z",
+            nyaterm_transport::ZmodemTransfer::new(
+                nyaterm_transport::ZmodemDirection::Download,
+                &[],
+            ),
+        )
+        .unwrap();
+    assert_eq!(state.pending_event_count(), 1);
+    worker.cancel("test");
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    let result = loop {
+        if let Some(event) = worker.try_recv_event()
+            && event.done
+        {
+            break event;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    };
+    let bytes: Vec<u8> = result
+        .pending_events
+        .iter()
+        .flat_map(|event| match event {
+            SessionEvent::Output { data, .. } => data.clone(),
+            _ => panic!("output"),
+        })
+        .collect();
+    assert_eq!(bytes, b"uibridge");
+    state.finish_zmodem_runtime("z", result.pending_events);
+    assert_eq!(state.pending_event_count(), 3);
+}

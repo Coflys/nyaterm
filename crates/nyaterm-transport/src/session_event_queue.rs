@@ -25,12 +25,14 @@ struct SessionEventQueueShared {
     /// Signalled after a drain crosses the low watermark, or when cancellation
     /// makes a producer ineligible to enqueue more output.
     output_space: Condvar,
+    async_changed: tokio::sync::Notify,
 }
 
 #[derive(Default)]
 struct SessionEventQueueInner {
     events: VecDeque<SessionEvent>,
     queued_output_bytes: usize,
+    peak_output_bytes: usize,
     output_backpressured: bool,
     producer_active: bool,
     closed: bool,
@@ -54,10 +56,37 @@ impl Drop for ProducerOrderGuard<'_> {
         inner.producer_active = false;
         drop(inner);
         self.shared.producer_order.notify_all();
+        self.shared.async_changed.notify_waiters();
     }
 }
 
 impl SessionEventQueue {
+    pub(super) fn peak_output_bytes(&self) -> usize {
+        self.shared
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .peak_output_bytes
+    }
+
+    pub(super) fn session_cancelled(&self, session_id: &str) -> bool {
+        let inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.closed || inner.cancelled_sessions.contains(session_id)
+    }
+
+    /// Inspect lifecycle without removing data while a file picker owns input.
+    pub(super) fn session_ended(&self, session_id: &str) -> bool {
+        let inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.closed
+            || inner.cancelled_sessions.contains(session_id)
+            || inner.events.iter().any(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Exited { .. } | SessionEvent::Error { .. }
+                ) && event_session_id(event) == session_id
+            })
+    }
+
     pub(super) fn new() -> Self {
         Self {
             shared: Arc::new(SessionEventQueueShared {
@@ -65,6 +94,7 @@ impl SessionEventQueue {
                 producer_order: Condvar::new(),
                 ready: Condvar::new(),
                 output_space: Condvar::new(),
+                async_changed: tokio::sync::Notify::new(),
             }),
         }
     }
@@ -124,7 +154,87 @@ impl SessionEventQueue {
                 }
                 inner.events.push_back(other);
                 drop(inner);
-                self.shared.ready.notify_one();
+                self.shared.ready.notify_all();
+            }
+        }
+    }
+
+    /// The SSH receive task must park without blocking the Tokio executor. It
+    /// shares the synchronous producers' ordering turn and byte accounting.
+    pub(super) async fn push_async(&self, event: SessionEvent) {
+        let session_id = event_session_id(&event).to_string();
+        let _turn = loop {
+            let changed = self.shared.async_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let acquired = {
+                let mut inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+                if !inner.accepts(&session_id) {
+                    return;
+                }
+                if inner.producer_active {
+                    false
+                } else {
+                    inner.producer_active = true;
+                    true
+                }
+            };
+            if acquired {
+                break ProducerOrderGuard {
+                    shared: &self.shared,
+                };
+            }
+            changed.await;
+        };
+        match event {
+            SessionEvent::Output { session_id, data } => {
+                for chunk in data.chunks(SESSION_EVENT_QUEUE_OUTPUT_EVENT_LIMIT) {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    loop {
+                        let changed = self.shared.async_changed.notified();
+                        tokio::pin!(changed);
+                        changed.as_mut().enable();
+                        let pushed = {
+                            let mut inner =
+                                self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+                            if !inner.accepts(&session_id) {
+                                return;
+                            }
+                            let fits = inner.queued_output_bytes.saturating_add(chunk.len())
+                                <= SESSION_EVENT_QUEUE_OUTPUT_LIMIT;
+                            if !inner.output_backpressured && fits {
+                                inner.queued_output_bytes += chunk.len();
+                                inner.peak_output_bytes =
+                                    inner.peak_output_bytes.max(inner.queued_output_bytes);
+                                inner.events.push_back(SessionEvent::Output {
+                                    session_id: session_id.clone(),
+                                    data: chunk.to_vec(),
+                                });
+                                inner.output_backpressured =
+                                    inner.queued_output_bytes >= SESSION_EVENT_QUEUE_OUTPUT_LIMIT;
+                                true
+                            } else {
+                                inner.output_backpressured = true;
+                                false
+                            }
+                        };
+                        if pushed {
+                            self.shared.ready.notify_all();
+                            break;
+                        }
+                        changed.await;
+                    }
+                }
+            }
+            other => {
+                let mut inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+                if inner.accepts(&session_id) {
+                    inner.events.push_back(other);
+                }
+                drop(inner);
+                self.shared.ready.notify_all();
             }
         }
     }
@@ -162,6 +272,7 @@ impl SessionEventQueue {
                 <= SESSION_EVENT_QUEUE_OUTPUT_LIMIT;
             if !inner.output_backpressured && fits {
                 inner.queued_output_bytes = inner.queued_output_bytes.saturating_add(data.len());
+                inner.peak_output_bytes = inner.peak_output_bytes.max(inner.queued_output_bytes);
                 inner
                     .events
                     .push_back(SessionEvent::Output { session_id, data });
@@ -169,7 +280,7 @@ impl SessionEventQueue {
                     inner.output_backpressured = true;
                 }
                 drop(inner);
-                self.shared.ready.notify_one();
+                self.shared.ready.notify_all();
                 return true;
             }
             inner.output_backpressured = true;
@@ -210,6 +321,7 @@ impl SessionEventQueue {
         drop(inner);
         self.shared.producer_order.notify_all();
         self.shared.output_space.notify_all();
+        self.shared.async_changed.notify_waiters();
         self.shared.ready.notify_all();
     }
 
@@ -244,6 +356,7 @@ impl SessionEventQueue {
         drop(inner);
         self.shared.producer_order.notify_all();
         self.shared.output_space.notify_all();
+        self.shared.async_changed.notify_waiters();
         self.shared.ready.notify_all();
     }
 
@@ -264,6 +377,7 @@ impl SessionEventQueue {
         drop(inner);
         if resumed {
             self.shared.output_space.notify_all();
+            self.shared.async_changed.notify_waiters();
         }
         drain
     }
@@ -306,6 +420,7 @@ impl SessionEventQueue {
         drop(inner);
         if resumed {
             self.shared.output_space.notify_all();
+            self.shared.async_changed.notify_waiters();
         }
         drain
     }
@@ -328,6 +443,7 @@ impl SessionEventQueue {
         drop(inner);
         if resumed {
             self.shared.output_space.notify_all();
+            self.shared.async_changed.notify_waiters();
         }
         drain
     }
