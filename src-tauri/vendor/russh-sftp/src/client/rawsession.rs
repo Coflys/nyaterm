@@ -302,14 +302,22 @@ impl RawSftpSession {
     }
 
     fn release_handle(&self) {
-        if self
-            .handles
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                count.checked_sub(1)
-            })
-            .is_err()
-        {
-            warn!("attempt to release more SFTP handles than exist");
+        // Use compare_exchange_weak to retain compatibility with Rust < 1.95.
+        let mut count = self.handles.load(Ordering::SeqCst);
+        loop {
+            let Some(next) = count.checked_sub(1) else {
+                warn!("attempt to release more SFTP handles than exist");
+                return;
+            };
+            match self.handles.compare_exchange_weak(
+                count,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return,
+                Err(current) => count = current,
+            }
         }
     }
 
