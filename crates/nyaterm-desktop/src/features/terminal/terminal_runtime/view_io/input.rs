@@ -1434,19 +1434,32 @@ pub(super) fn terminal_key_bytes_for_mode_and_settings(
     if let Some(bytes) = terminal_key_bytes_with_mode(event, mode) {
         return Some(bytes);
     }
-    // Alt-as-meta: ESC + character for shell word ops (Alt+b/f/d, etc.).
+    // Alt-as-meta uses the layout key, not the Option-generated text in key_char.
+    // GPUI folds shifted punctuation into key but retains Shift for ASCII letters.
     if alt_as_meta
         && event.keystroke.modifiers.alt
         && !event.keystroke.modifiers.control
         && !event.keystroke.modifiers.platform
         && !event.keystroke.modifiers.function
-        && let Some(input) = event.keystroke.key_char.as_deref()
-        && !input.is_empty()
     {
-        let mut bytes = Vec::with_capacity(input.len() + 1);
-        bytes.push(0x1b);
-        bytes.extend_from_slice(input.as_bytes());
-        return Some(bytes);
+        let key = event.keystroke.key.as_str();
+        let input = if key.chars().count() == 1 {
+            Some(key)
+        } else if key == "space" {
+            Some(" ")
+        } else {
+            event.keystroke.key_char.as_deref()
+        };
+        if let Some(input) = input.filter(|input| !input.is_empty()) {
+            let mut bytes = Vec::with_capacity(input.len() + 1);
+            bytes.push(0x1b);
+            if event.keystroke.modifiers.shift {
+                bytes.extend_from_slice(input.to_ascii_uppercase().as_bytes());
+            } else {
+                bytes.extend_from_slice(input.as_bytes());
+            }
+            return Some(bytes);
+        }
     }
     // Even when alt-as-meta is off, still emit ESC+letter for Alt+b/f/d word ops
     // that shells commonly expect (Tauri XTerminal parity).

@@ -1005,6 +1005,105 @@ fn terminal_key_encoding_keeps_alt_meta_setting_outside_mode() {
 }
 
 #[test]
+fn terminal_key_encoding_uses_layout_key_for_option_meta_shortcuts() {
+    for (key, key_char, expected) in [
+        (".", Some("≥"), "\x1b."),
+        ("b", Some("∫"), "\x1bb"),
+        ("f", Some("ƒ"), "\x1bf"),
+        ("d", Some("∂"), "\x1bd"),
+        ("b", Some("��"), "\x1bb"),
+        ("e", None, "\x1be"),
+        ("space", Some("\u{a0}"), "\x1b "),
+    ] {
+        let event = key_event(key, key_char, gpui::Modifiers::alt());
+
+        assert_eq!(
+            terminal_key_bytes_for_mode_and_settings(&event, TerminalKeyMode::default(), true),
+            Some(expected.as_bytes().to_vec()),
+            "Option+{key}"
+        );
+    }
+}
+
+#[test]
+fn terminal_key_encoding_preserves_shift_and_layout_characters_for_meta() {
+    for (key, key_char, shift, expected) in [
+        ("b", "ı", true, "\x1bB"),
+        (">", "˘", false, "\x1b>"),
+        ("é", "´", false, "\x1bé"),
+        ("Ö", "Ø", false, "\x1bÖ"),
+    ] {
+        let event = key_event(
+            key,
+            Some(key_char),
+            gpui::Modifiers {
+                alt: true,
+                shift,
+                ..gpui::Modifiers::default()
+            },
+        );
+
+        assert_eq!(
+            terminal_key_bytes_for_mode_and_settings(&event, TerminalKeyMode::default(), true),
+            Some(expected.as_bytes().to_vec())
+        );
+    }
+}
+
+#[test]
+fn terminal_key_encoding_preserves_protocol_sequences_with_meta_enabled() {
+    let event = key_event("b", Some("∫"), gpui::Modifiers::alt());
+    let mode = TerminalKeyMode {
+        kitty_keyboard_disambiguate: true,
+        ..TerminalKeyMode::default()
+    };
+    assert_eq!(
+        terminal_key_bytes_for_mode_and_settings(&event, mode, true),
+        Some(b"\x1b[98;3u".to_vec())
+    );
+
+    for (key, key_char, expected) in [
+        ("left", None, b"\x1b[1;3D".as_slice()),
+        ("backspace", None, b"\x1b\x7f".as_slice()),
+        ("tab", Some("\t"), b"\x1b\t".as_slice()),
+    ] {
+        let event = key_event(key, key_char, gpui::Modifiers::alt());
+        assert_eq!(
+            terminal_key_bytes_for_mode_and_settings(&event, TerminalKeyMode::default(), true),
+            Some(expected.to_vec())
+        );
+    }
+}
+
+#[test]
+fn terminal_key_encoding_preserves_word_shortcuts_with_meta_disabled() {
+    for (key, key_char) in [("b", "∫"), ("f", "ƒ"), ("d", "∂")] {
+        let event = key_event(key, Some(key_char), gpui::Modifiers::alt());
+        assert_eq!(
+            terminal_key_bytes_for_mode_and_settings(&event, TerminalKeyMode::default(), false),
+            Some(vec![0x1b, key.as_bytes()[0]])
+        );
+    }
+    let event = key_event(".", Some("≥"), gpui::Modifiers::alt());
+    assert!(
+        terminal_key_bytes_for_mode_and_settings(&event, TerminalKeyMode::default(), false)
+            .is_none()
+    );
+}
+
+#[test]
+fn ime_defer_leaves_option_shortcuts_for_terminal_encoding() {
+    let event = key_event("b", Some("∫"), gpui::Modifiers::alt());
+    for marked_text in ["", "五笔"] {
+        assert!(!terminal_should_defer_key_text_to_input_handler_for_state(
+            true,
+            marked_text,
+            &event
+        ));
+    }
+}
+
+#[test]
 fn ime_defer_does_not_swallow_plain_space_without_marked_text() {
     let event = key_event("space", None, gpui::Modifiers::default());
 
