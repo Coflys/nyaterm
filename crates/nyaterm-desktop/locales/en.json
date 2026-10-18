@@ -3652,5 +3652,9 @@
     "passwordRequired": "Enter a replacement password or cancel the change.",
     "passwordOptional": "Password (optional)",
     "accountPasswordMissing": "This account has no saved password. Choose another password source."
+  },
+  "input": {
+    "showSecret": "Show value",
+    "hideSecret": "Hide value"
   }
 }

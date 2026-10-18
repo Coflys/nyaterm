@@ -3651,5 +3651,9 @@
     "passwordRequired": "新しいパスワードを入力するか、変更を取り消してください。",
     "passwordOptional": "パスワード（任意）",
     "accountPasswordMissing": "このアカウントにはパスワードがありません。別の取得元を選択してください。"
+  },
+  "input": {
+    "showSecret": "内容を表示",
+    "hideSecret": "内容を非表示"
   }
 }

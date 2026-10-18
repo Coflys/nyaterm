@@ -3652,5 +3652,9 @@
     "passwordRequired": "請輸入新密碼，或取消修改。",
     "passwordOptional": "密碼（選填）",
     "accountPasswordMissing": "此帳戶未儲存密碼，請選擇其他密碼來源。"
+  },
+  "input": {
+    "showSecret": "顯示內容",
+    "hideSecret": "隱藏內容"
   }
 }
