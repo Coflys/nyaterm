@@ -34,7 +34,9 @@ pub use app_menu_bar::{NyaAppMenu, NyaAppMenuBar};
 pub use button::{NyaButton, NyaButtonVariant, NyaIconButton};
 pub use child_window::{ChildWindowSlot, activate_child_window};
 pub use command::{NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState};
-pub use dialog::{NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogWindowExt};
+pub use dialog::{
+    NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogHandle, NyaDialogWindowExt,
+};
 pub use document_editor::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
 pub use gpui_kit::component::color_picker::{
     ColorPicker as NyaColorPicker, ColorPickerEvent as NyaColorPickerEvent,
@@ -54,7 +56,8 @@ pub use gpui_kit::component::slider::{
 pub use gpui_kit::component::tag::Tag as NyaTag;
 pub use hover_card::NyaHoverCard;
 pub use input::{
-    NyaInput, NyaInputEvent, NyaInputShell, NyaInputState, NyaSearchInput, NyaTextArea,
+    NyaInput, NyaInputEvent, NyaInputKind, NyaInputLabels, NyaInputShell, NyaInputState,
+    NyaSearchInput, NyaTextArea, set_nya_input_label_provider,
 };
 pub use markdown::NyaMarkdown;
 pub use menu::{NyaContextMenu, NyaDropdownMenu, NyaMenuAnchor, NyaMenuItem};

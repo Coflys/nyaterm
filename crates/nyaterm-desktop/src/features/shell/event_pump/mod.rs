@@ -472,8 +472,10 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.hide_secret_inputs(cx);
         self.security.remember_screen_lock_focus(window.focused(cx));
         self.security.activate_idle_screen_lock();
+        self.forget_text_inputs("security.unlock.password");
         self.forget_text_inputs("security.editor.");
         self.connection_state.clear_editor_secrets(cx);
         nyaterm_ui::NyaDialogWindowExt::close_all_nya_dialogs(window, cx);

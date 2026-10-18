@@ -270,11 +270,7 @@ pub(super) fn password_source(
                     fields,
                     EditorSecretFieldOptions::new(
                         false,
-                        t!("passwordManager.showPassword"),
                         t!("authForm.removePassword"),
-                        cx.listener(|this, _, _, cx| {
-                            this.toggle_connection_editor_password_visibility(cx)
-                        }),
                         cx.listener(|this, _, _, cx| this.clear_connection_editor_password(cx)),
                     ),
                     cx,

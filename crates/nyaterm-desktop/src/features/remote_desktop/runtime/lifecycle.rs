@@ -75,7 +75,9 @@ impl NyaTermApp {
                         app.settle_remote_desktop_restore(cx);
                         return;
                     }
-                    let input = cx.new(|cx| NyaInputState::new(cx, "").masked(true));
+                    let input = cx.new(|cx| {
+                        NyaInputState::new(cx, "").kind(nyaterm_ui::NyaInputKind::Password)
+                    });
                     let render_input = input.clone();
                     let cancel_input = input.clone();
                     let cancel_id = session_id.clone();

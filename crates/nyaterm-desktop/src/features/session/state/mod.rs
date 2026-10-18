@@ -159,6 +159,7 @@ pub(in crate::features) struct PromptInputTarget {
     pub id: String,
     pub seed: String,
     pub echo: bool,
+    pub kind: nyaterm_ui::NyaInputKind,
 }
 
 /// Session-scoped overlays, confirmations and editing dialogs.
@@ -2306,6 +2307,11 @@ impl SessionPromptState {
             id: format!("ssh.keyboard-interactive.{}.{index}", state.id),
             seed: state.responses[index].clone(),
             echo: state.request.prompts[index].echo,
+            kind: if index == 0 && state.request.otp_id.is_some() {
+                nyaterm_ui::NyaInputKind::OneTimeCode
+            } else {
+                nyaterm_ui::NyaInputKind::Secret
+            },
         })
     }
 
@@ -2365,6 +2371,12 @@ impl SessionPromptState {
                 id: format!("ssh.credential.{}", state.id),
                 seed: state.value.clone(),
                 echo: state.prompt.echo,
+                kind: match state.prompt.kind {
+                    nyaterm_transport::SshCredentialPromptKind::Password => {
+                        nyaterm_ui::NyaInputKind::Password
+                    }
+                    _ => nyaterm_ui::NyaInputKind::Secret,
+                },
             });
         }
         let state = self.active_keyboard_interactive_prompt.as_ref()?;
@@ -2374,6 +2386,11 @@ impl SessionPromptState {
             id: format!("ssh.keyboard-interactive.{}.{index}", state.id),
             seed: state.responses[index].clone(),
             echo: state.request.prompts[index].echo,
+            kind: if index == 0 && state.request.otp_id.is_some() {
+                nyaterm_ui::NyaInputKind::OneTimeCode
+            } else {
+                nyaterm_ui::NyaInputKind::Secret
+            },
         })
     }
 

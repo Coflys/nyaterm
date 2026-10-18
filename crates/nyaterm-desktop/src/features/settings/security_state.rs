@@ -8,9 +8,10 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use gpui::FocusHandle;
+use gpui::{AnyWindowHandle, FocusHandle};
 use nyaterm_core::{OtpEntry, SavedCredential, SavedPassword, SecretString, SshKey};
 use nyaterm_store::KnownHostEntry;
+use nyaterm_ui::NyaDialogHandle;
 
 use crate::models::{
     SecurityAuthTab, SecurityCredentialEditorState, SecurityDropTarget, SecurityKeyEditorState,
@@ -65,7 +66,6 @@ pub(in crate::features) struct SecurityFeatureFocus {
     pub otp_editor: FocusHandle,
     pub password_editor: FocusHandle,
     pub credential_editor: FocusHandle,
-    pub unlock: FocusHandle,
     pub screen_lock: FocusHandle,
 }
 
@@ -135,7 +135,9 @@ struct SecurityUnlockState {
     pending_action: Option<SecurityUnlockAction>,
     request_id: u64,
     busy: bool,
-    focus: FocusHandle,
+    generation: u64,
+    window: Option<AnyWindowHandle>,
+    dialog: Option<NyaDialogHandle>,
 }
 
 /// Whole-application idle/manual lock screen.
@@ -203,7 +205,9 @@ impl SecurityFeatureState {
                 pending_action: None,
                 request_id: 0,
                 busy: false,
-                focus: focus.unlock,
+                generation: 0,
+                window: None,
+                dialog: None,
             },
             screen_lock: SecurityScreenLockState {
                 locked: false,
@@ -323,20 +327,48 @@ impl SecurityFeatureState {
         self.unlock.prompt_open
     }
 
+    pub(in crate::features) fn unlock_busy(&self) -> bool {
+        self.unlock.busy
+    }
+
+    pub(in crate::features) fn bind_unlock_window(&mut self, window: AnyWindowHandle) -> u64 {
+        self.unlock.window = Some(window);
+        self.unlock.generation
+    }
+
+    pub(in crate::features) fn unlock_dialog_matches(
+        &self,
+        generation: u64,
+        window: AnyWindowHandle,
+    ) -> bool {
+        self.unlock.generation == generation
+            && self.unlock.window == Some(window)
+            && (self.unlock.prompt_open || self.unlock.master_required_prompt_open)
+    }
+
+    pub(in crate::features) fn unlock_dialog_generation(&self) -> u64 {
+        self.unlock.generation
+    }
+
+    pub(in crate::features) fn bind_unlock_dialog(&mut self, dialog: NyaDialogHandle) {
+        self.unlock.dialog = Some(dialog);
+    }
+
+    pub(in crate::features) fn unlock_dialog(&self) -> Option<NyaDialogHandle> {
+        self.unlock.dialog.clone()
+    }
+
     pub(in crate::features) fn master_required_prompt_open(&self) -> bool {
         self.unlock.master_required_prompt_open
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn unlock_draft(&self) -> &str {
         self.unlock.draft.expose_secret()
     }
 
     pub(in crate::features) fn unlock_error(&self) -> Option<&str> {
         self.unlock.error.as_deref()
-    }
-
-    pub(in crate::features) fn unlock_focus(&self) -> &FocusHandle {
-        &self.unlock.focus
     }
 
     pub(in crate::features) fn set_pending_unlock_action(
@@ -347,6 +379,7 @@ impl SecurityFeatureState {
     }
 
     pub(in crate::features) fn show_master_required_prompt(&mut self) {
+        self.close_unlock_prompt();
         self.unlock.pending_action = None;
         self.unlock.prompt_open = false;
         self.unlock.master_required_prompt_open = true;
@@ -356,6 +389,7 @@ impl SecurityFeatureState {
     }
 
     pub(in crate::features) fn show_unlock_prompt(&mut self) {
+        self.close_unlock_prompt();
         self.unlock.master_required_prompt_open = false;
         self.unlock.prompt_open = true;
         self.unlock.draft.expose_secret_mut().clear();
@@ -369,6 +403,9 @@ impl SecurityFeatureState {
     }
 
     pub(in crate::features) fn close_master_required_prompt(&mut self) {
+        self.unlock.generation = self.unlock.generation.wrapping_add(1);
+        self.unlock.window = None;
+        self.unlock.dialog = None;
         self.unlock.master_required_prompt_open = false;
         self.unlock.pending_action = None;
     }
@@ -1175,6 +1212,9 @@ impl SecurityFeatureState {
     }
 
     pub(in crate::features) fn close_unlock_prompt(&mut self) {
+        self.unlock.generation = self.unlock.generation.wrapping_add(1);
+        self.unlock.window = None;
+        self.unlock.dialog = None;
         self.unlock.prompt_open = false;
         self.unlock.draft.expose_secret_mut().clear();
         self.unlock.error = None;
@@ -1253,7 +1293,6 @@ mod tests {
                 otp_editor: focus(),
                 password_editor: focus(),
                 credential_editor: focus(),
-                unlock: focus(),
                 screen_lock: focus(),
             },
         )
@@ -1376,7 +1415,6 @@ mod tests {
                 connection_origin: None,
                 error_field: None,
                 has_password: false,
-                show_password: false,
                 error: None,
             },
             "password editor opened".to_string(),
@@ -1395,7 +1433,6 @@ mod tests {
                 key_content_mode: true,
                 cert_content_mode: false,
                 cert_expanded: false,
-                show_passphrase: false,
                 has_key_data: false,
                 has_cert_data: false,
                 error: None,
@@ -1635,7 +1672,6 @@ mod tests {
                 connection_origin: None,
                 error_field: None,
                 has_password: false,
-                show_password: true,
                 error: None,
             },
             "editing".to_string(),
@@ -1662,7 +1698,6 @@ mod tests {
             references_expanded: false,
             connection_origin: Some(1),
             error_field: None,
-            show_password: true,
             error: None,
         };
         security.open_password_editor(draft.clone(), "editing".into());

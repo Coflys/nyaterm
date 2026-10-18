@@ -637,6 +637,7 @@ impl NyaTermApp {
     }
 
     fn finish_settings_page(&mut self, cx: &mut Context<Self>) {
+        self.hide_secret_inputs(cx);
         self.settings.theme_designer_mut().reset();
         self.forget_text_inputs("theme.designer.");
         self.cancel_github_gist_auth(cx);

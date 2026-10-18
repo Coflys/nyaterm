@@ -356,23 +356,6 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn toggle_connection_editor_password_visibility(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(field) = self
-            .connection_state
-            .editor_fields()
-            .get(&ConnectionEditorField::Password)
-            .cloned()
-        else {
-            return;
-        };
-        let masked = field.read(cx).is_masked();
-        field.update(cx, |field, cx| field.set_masked(!masked, cx));
-        cx.notify();
-    }
-
     pub(in crate::features) fn edit_connection_password(
         &mut self,
         edit: crate::models::ConnectionPasswordEdit,
@@ -465,6 +448,16 @@ impl NyaTermApp {
         value: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            select,
+            ConnectionEditorSelect::Authentication
+                | ConnectionEditorSelect::SavedPassword
+                | ConnectionEditorSelect::Account
+                | ConnectionEditorSelect::SshKey
+                | ConnectionEditorSelect::Otp
+        ) {
+            self.connection_state.hide_editor_secrets(cx);
+        }
         self.connection_state
             .set_editor_select_value(select, value.map(ToOwned::to_owned));
         let account_selection = select == ConnectionEditorSelect::Account
@@ -506,6 +499,7 @@ impl NyaTermApp {
         saved: bool,
         cx: &mut Context<Self>,
     ) {
+        self.connection_state.hide_editor_secrets(cx);
         self.connection_state.set_editor_account_source(saved);
         cx.notify();
     }
@@ -515,6 +509,7 @@ impl NyaTermApp {
         source: ConnectionEditorPasswordSource,
         cx: &mut Context<Self>,
     ) {
+        self.connection_state.hide_editor_secrets(cx);
         self.connection_state.set_editor_password_source(source);
         cx.notify();
     }
@@ -685,6 +680,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.connection_state.set_editor_kind(kind) {
+            self.connection_state.hide_editor_secrets(cx);
             self.connection_state
                 .select_editor_section(crate::models::ConnectionEditorSection::Basic);
             self.dismiss_connection_editor_menus(cx);
@@ -806,6 +802,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.connection_state.select_editor_section(section) {
+            self.connection_state.hide_editor_secrets(cx);
             self.dismiss_connection_editor_menus(cx);
             cx.notify();
         }

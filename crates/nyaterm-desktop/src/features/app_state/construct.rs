@@ -119,6 +119,7 @@ impl NyaTermApp {
         // Localized child views cache placeholders while they are constructed, so
         // the persisted locale must be active before any of those entities exist.
         crate::i18n::apply_locale(&settings.language);
+        crate::i18n::configure_input_labels(cx);
         let notes_in_layout = settings
             .ui_activity_bar_left_top
             .iter()
@@ -362,7 +363,6 @@ impl NyaTermApp {
                     otp_editor: cx.focus_handle(),
                     password_editor: cx.focus_handle(),
                     credential_editor: cx.focus_handle(),
-                    unlock: cx.focus_handle(),
                     screen_lock: cx.focus_handle(),
                 },
             ),

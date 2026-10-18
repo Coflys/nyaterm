@@ -40,7 +40,6 @@ impl NyaTermApp {
                 key_content_mode: false,
                 cert_content_mode: false,
                 cert_expanded: key.has_cert_data,
-                show_passphrase: false,
                 has_key_data: key.has_key_data,
                 has_cert_data: key.has_cert_data,
                 error: None,
@@ -57,7 +56,6 @@ impl NyaTermApp {
                 key_content_mode: true,
                 cert_content_mode: false,
                 cert_expanded: false,
-                show_passphrase: false,
                 has_key_data: false,
                 has_cert_data: false,
                 error: None,
@@ -162,19 +160,6 @@ impl NyaTermApp {
         }
         if let Some(editor) = self.security.key_editor_mut() {
             editor.cert_expanded = !editor.cert_expanded;
-        }
-        cx.notify();
-    }
-
-    pub(in crate::features) fn toggle_security_key_passphrase_visibility(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        if self.security.editor_busy() {
-            return;
-        }
-        if let Some(editor) = self.security.key_editor_mut() {
-            editor.show_passphrase = !editor.show_passphrase;
         }
         cx.notify();
     }

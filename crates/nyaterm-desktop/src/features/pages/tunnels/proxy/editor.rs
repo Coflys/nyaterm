@@ -108,6 +108,7 @@ pub(in crate::features::pages::tunnels) fn network_proxy_editor_content(
             TextInputSetup {
                 placeholder: password_placeholder.into(),
                 masked: true,
+                kind: nyaterm_ui::NyaInputKind::Password,
                 multi_line: false,
                 submit_on_enter: false,
                 code: false,

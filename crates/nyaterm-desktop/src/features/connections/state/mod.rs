@@ -771,6 +771,11 @@ impl ConnectionFeatureState {
             }
             let entity = cx.new(|cx| {
                 let input = NyaInputState::new(cx, value)
+                    .kind(if masked {
+                        nyaterm_ui::NyaInputKind::Password
+                    } else {
+                        nyaterm_ui::NyaInputKind::Text
+                    })
                     .masked(masked)
                     .placeholder(placeholder);
                 match field {
@@ -1243,6 +1248,12 @@ impl ConnectionFeatureState {
             editor.password_edit = crate::models::ConnectionPasswordEdit::Keep;
         }
         self.reset_editor_field(ConnectionEditorField::Password, "", cx);
+    }
+
+    pub fn hide_editor_secrets(&self, cx: &mut App) {
+        if let Some(input) = self.editor.fields.get(&ConnectionEditorField::Password) {
+            input.update(cx, |state, cx| state.hide_secret(cx));
+        }
     }
 
     pub fn editor_token(&self) -> Option<u64> {

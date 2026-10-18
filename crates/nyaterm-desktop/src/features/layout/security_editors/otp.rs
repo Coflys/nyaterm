@@ -108,6 +108,7 @@ impl NyaTermApp {
                 TextInputSetup {
                     placeholder: secret_placeholder.into(),
                     masked: true,
+                    kind: nyaterm_ui::NyaInputKind::Secret,
                     multi_line: false,
                     submit_on_enter: false,
                     code: false,

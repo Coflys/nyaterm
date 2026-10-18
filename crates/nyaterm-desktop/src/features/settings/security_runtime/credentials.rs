@@ -50,7 +50,6 @@ impl NyaTermApp {
                 password_prompt_regex: entry.password_prompt_regex.unwrap_or_default(),
                 enabled: entry.enabled,
                 has_password: entry.has_password,
-                show_password: false,
                 error: None,
             }
         } else {
@@ -63,7 +62,6 @@ impl NyaTermApp {
                 password_prompt_regex: String::new(),
                 enabled: true,
                 has_password: false,
-                show_password: false,
                 error: None,
             }
         };
@@ -133,19 +131,6 @@ impl NyaTermApp {
         }
         if let Some(editor) = self.security.credential_editor_mut() {
             editor.enabled = !editor.enabled;
-        }
-        cx.notify();
-    }
-
-    pub(in crate::features) fn toggle_security_credential_editor_visibility(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        if self.security.editor_busy() {
-            return;
-        }
-        if let Some(editor) = self.security.credential_editor_mut() {
-            editor.show_password = !editor.show_password;
         }
         cx.notify();
     }

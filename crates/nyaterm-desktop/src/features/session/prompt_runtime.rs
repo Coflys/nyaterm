@@ -344,11 +344,7 @@ impl NyaTermApp {
                 else {
                     return false;
                 };
-                let setup = if target.echo {
-                    TextInputSetup::default()
-                } else {
-                    TextInputSetup::masked()
-                };
+                let setup = prompt_input_setup(target.kind, target.echo);
                 let field = self.text_input(target.id, &target.seed, setup, cx);
                 window.focus(&field.read(cx).focus_handle(), cx);
                 cx.notify();
@@ -399,11 +395,7 @@ impl NyaTermApp {
         let Some(target) = self.session.prompts.active_input_target() else {
             return false;
         };
-        let setup = if target.echo {
-            TextInputSetup::default()
-        } else {
-            TextInputSetup::masked()
-        };
+        let setup = prompt_input_setup(target.kind, target.echo);
         let field = self.text_input(target.id, &target.seed, setup, cx);
         window.focus(&field.read(cx).focus_handle(), cx);
         true
@@ -722,6 +714,22 @@ pub(in crate::features) fn keyboard_interactive_prompt_target(
     }
 }
 
+/// Server echo controls initial masking; known OTP prompts retain their semantic type.
+pub(in crate::features) fn prompt_input_setup(
+    kind: nyaterm_ui::NyaInputKind,
+    echo: bool,
+) -> TextInputSetup {
+    if kind == nyaterm_ui::NyaInputKind::OneTimeCode {
+        TextInputSetup::one_time_code(!echo)
+    } else {
+        TextInputSetup {
+            kind,
+            masked: !echo,
+            ..TextInputSetup::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod text_input_id_tests {
     use super::{keyboard_interactive_text_input_id, parse_keyboard_interactive_text_input_id};
@@ -745,5 +753,23 @@ mod text_input_id_tests {
             parse_keyboard_interactive_text_input_id("prompt.not-a-number"),
             None
         );
+    }
+    #[test]
+    fn authentication_input_semantics_preserve_server_echo_and_known_otp() {
+        use super::prompt_input_setup;
+        use nyaterm_ui::NyaInputKind;
+        let password = prompt_input_setup(NyaInputKind::Password, false);
+        assert!(password.masked);
+        assert_eq!(password.kind, NyaInputKind::Password);
+        let echoed = prompt_input_setup(NyaInputKind::Secret, true);
+        assert!(!echoed.masked);
+        assert_eq!(echoed.kind, NyaInputKind::Secret);
+        let echoed_password = prompt_input_setup(NyaInputKind::Password, true);
+        assert!(!echoed_password.masked);
+        assert_eq!(echoed_password.kind, NyaInputKind::Password);
+        let otp = prompt_input_setup(NyaInputKind::OneTimeCode, false);
+        assert!(otp.masked);
+        assert_eq!(otp.kind, NyaInputKind::OneTimeCode);
+        assert!(!prompt_input_setup(NyaInputKind::OneTimeCode, true).masked);
     }
 }

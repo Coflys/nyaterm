@@ -38,8 +38,10 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.hide_secret_inputs(cx);
         self.security.remember_screen_lock_focus(window.focused(cx));
         self.security.activate_screen_lock(String::new());
+        self.forget_text_inputs("security.unlock.password");
         self.forget_text_inputs("security.editor.");
         self.connection_state.clear_editor_secrets(cx);
         window.close_all_nya_dialogs(cx);

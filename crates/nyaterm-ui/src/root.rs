@@ -144,6 +144,70 @@ mod tests {
         }
     }
 
+    #[gpui::test]
+    fn dialog_secret_toggle_does_not_submit_and_tracks_its_stack_identity(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| RootContentFixture);
+            nya_root(content, window, cx)
+        });
+        let submitted = Rc::new(std::cell::Cell::new(0));
+        let (field, dialog) = cx.update(|window, cx| {
+            let field = cx.new(|cx| {
+                NyaInputState::new(cx, "fixture secret").kind(crate::NyaInputKind::Password)
+            });
+            let input = field.clone();
+            let submitted = submitted.clone();
+            let dialog = window.open_tracked_nya_dialog(cx, move |dialog, _, _| {
+                let submitted = submitted.clone();
+                dialog
+                    .title("Password form")
+                    .confirm(NyaDialogFooter::new("Cancel", "Save"))
+                    .content(NyaInputShell::new("dialog-secret", &input))
+                    .on_ok(move |_, _, _| {
+                        submitted.set(submitted.get() + 1);
+                        false
+                    })
+            });
+            assert!(dialog.is_top(window, cx));
+            (field, dialog)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            window.focus(&field.read(cx).component_focus_handle(cx), cx);
+            window.focus_next(cx);
+            _ = window.draw(cx);
+            assert_ne!(
+                window.focused(cx),
+                Some(field.read(cx).component_focus_handle(cx))
+            );
+        });
+        let key = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: key.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke: key });
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 0);
+        assert!(!field.read_with(cx, |field, _| field.is_masked()));
+        cx.update(|window, cx| {
+            let above = window.open_tracked_nya_dialog(cx, |dialog, _, _| dialog.title("Above"));
+            assert!(dialog.is_active());
+            assert!(!dialog.is_top(window, cx));
+            assert!(above.is_top(window, cx));
+            window.close_nya_dialog(cx);
+            assert!(!above.is_active());
+            assert!(dialog.is_top(window, cx));
+            window.close_nya_dialog(cx);
+            assert!(!dialog.is_active());
+            window.open_nya_dialog(cx, |dialog, _, _| dialog.title("Replacement"));
+            assert!(!dialog.is_top(window, cx));
+        });
+    }
+
     struct PointerContentFixture {
         down: Arc<AtomicUsize>,
         movement: Arc<AtomicUsize>,

@@ -55,7 +55,6 @@ pub(crate) struct SecurityKeyEditorState {
     pub(crate) key_content_mode: bool,
     pub(crate) cert_content_mode: bool,
     pub(crate) cert_expanded: bool,
-    pub(crate) show_passphrase: bool,
     pub(crate) has_key_data: bool,
     pub(crate) has_cert_data: bool,
     pub(crate) error: Option<String>,
@@ -93,7 +92,6 @@ pub(crate) struct SecurityPasswordEditorState {
     pub(crate) connection_origin: Option<u64>,
     pub(crate) error_field: Option<&'static str>,
     pub(crate) has_password: bool,
-    pub(crate) show_password: bool,
     pub(crate) error: Option<String>,
 }
 
@@ -107,6 +105,5 @@ pub(crate) struct SecurityCredentialEditorState {
     pub(crate) password_prompt_regex: String,
     pub(crate) enabled: bool,
     pub(crate) has_password: bool,
-    pub(crate) show_password: bool,
     pub(crate) error: Option<String>,
 }

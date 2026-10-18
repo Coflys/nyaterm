@@ -10,6 +10,7 @@ use nyaterm_transport::{
 };
 use nyaterm_ui::NyaScrollable;
 
+use crate::features::NyaTermApp;
 use crate::features::session::{
     AgentPromptRequest, AgentPromptState, CredentialPromptState, HostKeyPromptChoice,
     HostKeyPromptIssue, HostKeyPromptRequest, KeyboardInteractivePromptState,
@@ -17,7 +18,6 @@ use crate::features::session::{
     unix_seconds_now,
 };
 use crate::features::view_widgets::dialog_action_button;
-use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::widgets::small_button;
 
 impl NyaTermApp {
@@ -282,11 +282,11 @@ impl NyaTermApp {
             }
         };
         let input_id = credential_text_input_id(&prompt.id);
-        let input_setup = if prompt.prompt.echo {
-            TextInputSetup::default()
-        } else {
-            TextInputSetup::masked()
+        let kind = match prompt.prompt.kind {
+            SshCredentialPromptKind::Password => nyaterm_ui::NyaInputKind::Password,
+            _ => nyaterm_ui::NyaInputKind::Secret,
         };
+        let input_setup = crate::features::session::prompt_input_setup(kind, prompt.prompt.echo);
         let input = self.text_input_box(input_id, &prompt.value, input_setup, cx);
         let mut details = div()
             .flex()
@@ -416,11 +416,12 @@ impl NyaTermApp {
 
         for (index, field) in prompt.request.prompts.iter().enumerate() {
             let value = prompt.responses.get(index).cloned().unwrap_or_default();
-            let setup = if field.echo {
-                TextInputSetup::default()
+            let kind = if index == 0 && prompt.request.otp_id.is_some() {
+                nyaterm_ui::NyaInputKind::OneTimeCode
             } else {
-                TextInputSetup::masked()
+                nyaterm_ui::NyaInputKind::Secret
             };
+            let setup = crate::features::session::prompt_input_setup(kind, field.echo);
             let request_id = prompt.id.clone();
             let field_id = keyboard_interactive_text_input_id(&request_id, index);
             let click_listener = cx.listener(move |this, _, _, cx| {

@@ -52,7 +52,6 @@ impl NyaTermApp {
                 connection_origin: None,
                 error_field: None,
                 has_password: entry.has_password,
-                show_password: false,
                 error: None,
             }
         } else {
@@ -65,7 +64,6 @@ impl NyaTermApp {
                 connection_origin: None,
                 error_field: None,
                 has_password: false,
-                show_password: false,
                 error: None,
             }
         };
@@ -411,19 +409,6 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn toggle_security_password_editor_visibility(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        if self.security.editor_busy() {
-            return;
-        }
-        if let Some(editor) = self.security.password_editor_mut() {
-            editor.show_password = !editor.show_password;
-            cx.notify();
-        }
-    }
-
     fn load_security_password(&mut self, password_id: String, copy: bool, cx: &mut Context<Self>) {
         let editor_origin = self.security.account_editor_token();
         let request_password_id = password_id.clone();
@@ -526,7 +511,6 @@ impl NyaTermApp {
         self.forget_text_inputs("security.editor.pw-value");
         if let Some(editor) = self.security.password_editor_mut() {
             editor.password_update = update;
-            editor.show_password = false;
             editor.error = None;
             editor.error_field = None;
         }

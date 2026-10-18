@@ -151,7 +151,7 @@ impl NyaTermApp {
         tab: SettingsTab,
         cx: &mut Context<Self>,
     ) {
-        self.hide_ai_provider_secret(cx);
+        self.hide_secret_inputs(cx);
         self.ai.invalidate_provider_jobs();
         self.ensure_settings_tab_inputs(tab, cx);
         self.shell.set_settings_active_tab(tab);
@@ -246,7 +246,11 @@ impl NyaTermApp {
             self.ensure_text_input(
                 format!("cloud-sync.input.{}", field.input_key()),
                 &value,
-                secret_input_setup(field.is_secret()),
+                if field == CloudSyncInputField::WebdavPassword {
+                    TextInputSetup::masked()
+                } else {
+                    secret_input_setup(field.is_secret())
+                },
                 cx,
             );
         }
@@ -522,7 +526,7 @@ impl NyaTermApp {
         self.ensure_text_input(
             "settings.security.master-password",
             &master_password_draft,
-            crate::features::text_inputs::secret_input_setup(true),
+            TextInputSetup::new_password(),
             cx,
         );
         let idle_minutes = self.settings.summary().idle_lock_minutes;
@@ -566,7 +570,11 @@ impl NyaTermApp {
             self.ensure_text_input(
                 format!("ai.input.{}", field.input_key()),
                 &value,
-                secret_input_setup(field == AiInputField::ProxyPassword),
+                if field == AiInputField::ProxyPassword {
+                    TextInputSetup::masked()
+                } else {
+                    TextInputSetup::default()
+                },
                 cx,
             );
         }

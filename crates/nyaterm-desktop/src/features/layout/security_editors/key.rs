@@ -158,6 +158,7 @@ impl NyaTermApp {
                             TextInputSetup {
                                 placeholder: t!("settings.keyContentPlaceholder").into(),
                                 masked: false,
+                                kind: nyaterm_ui::NyaInputKind::Text,
                                 multi_line: true,
                                 submit_on_enter: false,
                                 code: false,
@@ -250,6 +251,7 @@ impl NyaTermApp {
                                 TextInputSetup {
                                     placeholder: t!("settings.certContentPlaceholder").into(),
                                     masked: false,
+                                    kind: nyaterm_ui::NyaInputKind::Text,
                                     multi_line: true,
                                     submit_on_enter: false,
                                     code: false,
@@ -301,33 +303,14 @@ impl NyaTermApp {
                         editor.passphrase.expose_secret().to_owned(),
                         TextInputSetup {
                             placeholder: "".into(),
-                            masked: !editor.show_passphrase,
+                            masked: true,
+                            kind: nyaterm_ui::NyaInputKind::Secret,
                             multi_line: false,
                             submit_on_enter: false,
                             code: false,
                         },
                         cx,
-                    )))
-                    .child(
-                        nyaterm_ui::NyaIconButton::new(
-                            "security-key-passphrase-visible",
-                            if editor.show_passphrase {
-                                "icons/eye-off.svg"
-                            } else {
-                                "icons/eye.svg"
-                            },
-                        )
-                        .form_control()
-                        .tooltip(t!(if editor.show_passphrase {
-                            "settings.hidePassphrase"
-                        } else {
-                            "settings.showPassphrase"
-                        }))
-                        .disabled(self.security.editor_busy())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_security_key_passphrase_visibility(cx)
-                        })),
-                    ),
+                    ))),
             )
             .when_some(editor.error.clone(), |this, error| {
                 this.child(

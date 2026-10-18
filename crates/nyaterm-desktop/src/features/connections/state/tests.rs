@@ -1306,12 +1306,26 @@ fn connection_editor_password_can_be_revealed_and_is_masked_again_when_reopened(
         assert!(field.read(cx).is_masked());
         assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
 
-        app.toggle_connection_editor_password_visibility(cx);
+        field.update(cx, |state, cx| state.set_masked(!state.is_masked(), cx));
         assert!(!field.read(cx).is_masked());
         assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
-        app.toggle_connection_editor_password_visibility(cx);
+        field.update(cx, |state, cx| state.set_masked(!state.is_masked(), cx));
         assert!(field.read(cx).is_masked());
-        app.toggle_connection_editor_password_visibility(cx);
+        field.update(cx, |state, cx| state.set_masked(!state.is_masked(), cx));
+
+        app.set_connection_editor_password_source(
+            crate::models::ConnectionEditorPasswordSource::Ask,
+            cx,
+        );
+        assert!(field.read(cx).is_masked());
+        assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
+        field.update(cx, |state, cx| state.set_masked(false, cx));
+        app.set_connection_editor_select_value(ConnectionEditorSelect::SshKey, None, cx);
+        assert!(field.read(cx).is_masked());
+        field.update(cx, |state, cx| state.set_masked(false, cx));
+        app.set_connection_editor_section(crate::models::ConnectionEditorSection::Network, cx);
+        assert!(field.read(cx).is_masked());
+        assert_eq!(field.read(cx).value(cx), draft.password.expose_secret());
 
         app.close_connection_editor(cx);
         app.connection_state.begin_editor(draft.clone());

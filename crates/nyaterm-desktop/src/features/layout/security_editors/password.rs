@@ -63,43 +63,20 @@ impl NyaTermApp {
         };
         body = body.child(div().text_xs().child(status));
         if let PasswordUpdate::Replace(value) = &editor.password_update {
-            body = body.child(
-                div()
-                    .flex()
-                    .items_end()
-                    .gap_1()
-                    .child(div().min_w_0().flex_1().child(security_editor_field(
-                        self,
-                        "pw-value",
-                        if editor.id.is_some() {
-                            t!("authForm.newPasswordRequiredLabel")
-                        } else {
-                            t!("authForm.passwordOptional")
-                        },
-                        value.expose_secret().to_owned(),
-                        TextInputSetup {
-                            masked: !editor.show_password,
-                            ..Default::default()
-                        },
-                        cx,
-                    )))
-                    .child(
-                        nyaterm_ui::NyaIconButton::new(
-                            "security-pw-toggle-vis",
-                            if editor.show_password {
-                                "icons/eye-off.svg"
-                            } else {
-                                "icons/eye.svg"
-                            },
-                        )
-                        .form_control()
-                        .disabled(busy)
-                        .tooltip(t!("passwordManager.showPassword"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_security_password_editor_visibility(cx)
-                        })),
-                    ),
-            );
+            body = body.child(div().flex().items_end().gap_1().child(
+                div().min_w_0().flex_1().child(security_editor_field(
+                    self,
+                    "pw-value",
+                    if editor.id.is_some() {
+                        t!("authForm.newPasswordRequiredLabel")
+                    } else {
+                        t!("authForm.passwordOptional")
+                    },
+                    value.expose_secret().to_owned(),
+                    TextInputSetup::new_password(),
+                    cx,
+                )),
+            ));
             if editor.error_field == Some("pw-value") {
                 body = body.child(
                     div()

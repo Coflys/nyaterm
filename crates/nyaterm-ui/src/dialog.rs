@@ -1,6 +1,11 @@
+use std::{
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
+
 use gpui::{
-    App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Styled as _, Window, px,
+    App, ClickEvent, Global, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, Styled as _, Window, WindowId, px,
 };
 use gpui_kit::component::{
     Disableable as _, WindowExt as _,
@@ -10,6 +15,40 @@ use gpui_kit::component::{
 
 pub struct NyaDialog {
     inner: Dialog,
+}
+
+/// A weak identity: the component stack's builder owns the dialog's lifetime.
+#[derive(Clone)]
+pub struct NyaDialogHandle {
+    window: WindowId,
+    marker: Weak<()>,
+}
+
+#[derive(Default)]
+struct DialogIdentities(HashMap<WindowId, Vec<Weak<()>>>);
+
+impl Global for DialogIdentities {}
+
+impl NyaDialogHandle {
+    pub fn is_active(&self) -> bool {
+        self.marker.strong_count() > 0
+    }
+
+    pub fn is_top(&self, window: &Window, cx: &mut App) -> bool {
+        if self.window != window.window_handle().window_id() {
+            return false;
+        }
+        let identities = cx.default_global::<DialogIdentities>();
+        identities.0.retain(|_, stack| {
+            stack.retain(|marker| marker.strong_count() > 0);
+            !stack.is_empty()
+        });
+        identities
+            .0
+            .get(&self.window)
+            .and_then(|stack| stack.last())
+            .is_some_and(|marker| marker.ptr_eq(&self.marker))
+    }
 }
 
 impl NyaDialog {
@@ -157,6 +196,7 @@ pub struct NyaDialogFooter {
     action_label: SharedString,
     danger: bool,
     disabled: bool,
+    action_disabled: bool,
     loading: bool,
 }
 
@@ -170,6 +210,7 @@ impl NyaDialogFooter {
             action_label: action_label.into(),
             danger: false,
             disabled: false,
+            action_disabled: false,
             loading: false,
         }
     }
@@ -186,6 +227,12 @@ impl NyaDialogFooter {
 
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    /// Keep cancellation available while an asynchronous action is running.
+    pub fn action_disabled(mut self, disabled: bool) -> Self {
+        self.action_disabled = disabled;
         self
     }
 
@@ -221,7 +268,7 @@ impl NyaDialogFooter {
             .label(self.action_label)
             .with_variant(action_variant)
             .loading(self.loading)
-            .disabled(self.disabled)
+            .disabled(self.disabled || self.action_disabled)
             .debug_selector(|| "nya-dialog-action-button".to_string());
 
         DialogFooter::new()
@@ -230,7 +277,7 @@ impl NyaDialogFooter {
             } else {
                 DialogClose::new().child(cancel).into_any_element()
             })
-            .child(if self.disabled {
+            .child(if self.disabled || self.action_disabled {
                 action.into_any_element()
             } else {
                 DialogAction::new().child(action).into_any_element()
@@ -259,6 +306,10 @@ pub trait NyaDialogWindowExt {
     where
         F: Fn(NyaDialog, &mut Window, &mut App) -> NyaDialog + 'static;
 
+    fn open_tracked_nya_dialog<F>(&mut self, cx: &mut App, build: F) -> NyaDialogHandle
+    where
+        F: Fn(NyaDialog, &mut Window, &mut App) -> NyaDialog + 'static;
+
     fn has_active_nya_dialog(&mut self, cx: &mut App) -> bool;
     fn close_nya_dialog(&mut self, cx: &mut App);
     fn close_all_nya_dialogs(&mut self, cx: &mut App);
@@ -269,11 +320,35 @@ impl NyaDialogWindowExt for Window {
     where
         F: Fn(NyaDialog, &mut Window, &mut App) -> NyaDialog + 'static,
     {
+        self.open_tracked_nya_dialog(cx, build);
+    }
+
+    fn open_tracked_nya_dialog<F>(&mut self, cx: &mut App, build: F) -> NyaDialogHandle
+    where
+        F: Fn(NyaDialog, &mut Window, &mut App) -> NyaDialog + 'static,
+    {
+        let marker = Rc::new(());
+        let handle = NyaDialogHandle {
+            window: self.window_handle().window_id(),
+            marker: Rc::downgrade(&marker),
+        };
+        let identities = cx.default_global::<DialogIdentities>();
+        identities.0.retain(|_, stack| {
+            stack.retain(|marker| marker.strong_count() > 0);
+            !stack.is_empty()
+        });
+        identities
+            .0
+            .entry(handle.window)
+            .or_default()
+            .push(handle.marker.clone());
         self.open_dialog(cx, move |dialog, window, cx| {
+            let _lifetime = &marker;
             build(NyaDialog::from_component(dialog), window, cx)
                 .into_component()
                 .shadow(gpui_base::Theme::global(cx).tokens.shadow.lg)
         });
+        handle
     }
 
     fn has_active_nya_dialog(&mut self, cx: &mut App) -> bool {
