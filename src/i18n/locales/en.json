@@ -536,6 +536,30 @@
     "encoding": "Terminal Encoding",
     "encodingFollowGlobal": "Follow Global Settings"
   },
+  "connectionEditor": {
+    "categories": {
+      "algorithms": "Security & algorithms",
+      "authentication": "Authentication",
+      "basic": "Basic information",
+      "compatibility": "Protocol & compatibility",
+      "display": "Display",
+      "forwarding": "Forwarding",
+      "network": "Network & proxy",
+      "post-login": "Post-login commands",
+      "rdpSession": "Session",
+      "security": "Security",
+      "serial": "Serial port",
+      "session": "Session",
+      "sftp": "SFTP",
+      "startup": "Startup",
+      "terminal": "Terminal",
+      "transfer": "Terminal & transfer"
+    },
+    "category": "Configuration category",
+    "emptyAlgorithms": "Select at least one algorithm.",
+    "hasErrors": "Has errors",
+    "unsupportedAlgorithm": "Remove or replace unsupported algorithms."
+  },
   "credentialAutofill": {
     "dismiss": "Dismiss",
     "fill": "Fill",

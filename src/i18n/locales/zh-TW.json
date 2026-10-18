@@ -535,6 +535,30 @@
     "encoding": "終端編碼",
     "encodingFollowGlobal": "跟隨全域設定"
   },
+  "connectionEditor": {
+    "categories": {
+      "algorithms": "安全與演算法",
+      "authentication": "身分驗證",
+      "basic": "基本資訊",
+      "compatibility": "協定與相容",
+      "display": "顯示",
+      "forwarding": "轉發",
+      "network": "網路與代理",
+      "post-login": "登入後命令",
+      "rdpSession": "工作階段",
+      "security": "安全",
+      "serial": "序列埠設定",
+      "session": "工作階段",
+      "sftp": "SFTP",
+      "startup": "啟動設定",
+      "terminal": "終端設定",
+      "transfer": "終端與傳輸"
+    },
+    "category": "設定分類",
+    "emptyAlgorithms": "請至少選擇一個演算法。",
+    "hasErrors": "存在錯誤",
+    "unsupportedAlgorithm": "包含不支援的演算法，請移除或重新選擇。"
+  },
   "credentialAutofill": {
     "dismiss": "關閉",
     "fill": "填充",

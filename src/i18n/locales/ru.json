@@ -536,6 +536,30 @@
     "encoding": "Кодировка терминала",
     "encodingFollowGlobal": "Следуйте глобальным настройкам"
   },
+  "connectionEditor": {
+    "categories": {
+      "algorithms": "Безопасность и алгоритмы",
+      "authentication": "Аутентификация",
+      "basic": "Основные сведения",
+      "compatibility": "Протокол и совместимость",
+      "display": "Экран",
+      "forwarding": "Перенаправление",
+      "network": "Сеть и прокси",
+      "post-login": "Команды после входа",
+      "rdpSession": "Сеанс",
+      "security": "Безопасность",
+      "serial": "Последовательный порт",
+      "session": "Сеанс",
+      "sftp": "SFTP",
+      "startup": "Запуск",
+      "terminal": "Терминал",
+      "transfer": "Терминал и передача"
+    },
+    "category": "Раздел настроек",
+    "emptyAlgorithms": "Выберите хотя бы один алгоритм.",
+    "hasErrors": "Есть ошибки",
+    "unsupportedAlgorithm": "Удалите или замените неподдерживаемые алгоритмы."
+  },
   "credentialAutofill": {
     "dismiss": "Отклонить",
     "fill": "Заполнить",
