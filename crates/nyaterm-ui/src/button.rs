@@ -32,6 +32,7 @@ pub struct NyaButton {
     compact: bool,
     form_control: bool,
     full_width: bool,
+    label_left: bool,
     selected: bool,
     disabled: bool,
     loading: bool,
@@ -56,6 +57,7 @@ impl NyaButton {
             compact: false,
             form_control: false,
             full_width: false,
+            label_left: false,
             selected: false,
             disabled: false,
             loading: false,
@@ -121,6 +123,12 @@ impl NyaButton {
         self
     }
 
+    /// Align the single button label to the start of the available content width.
+    pub fn label_left(mut self) -> Self {
+        self.label_left = true;
+        self
+    }
+
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -178,6 +186,7 @@ impl RenderOnce for NyaButton {
         } else if self.text_color.is_some()
             || self.text_size.is_some()
             || self.font_weight.is_some()
+            || self.label_left
         {
             // Kit's label container sets its own size. Style the label itself,
             // retaining one visible label and its accessible name.
@@ -186,6 +195,7 @@ impl RenderOnce for NyaButton {
                     .min_w_0()
                     .whitespace_nowrap()
                     .text_ellipsis()
+                    .when(self.label_left, |this| this.flex_1().text_left())
                     .when_some(self.text_color, |this, color| this.text_color(color))
                     .when_some(self.text_size, |this, size| this.text_size(size))
                     .when_some(self.font_weight, |this, weight| this.font_weight(weight))

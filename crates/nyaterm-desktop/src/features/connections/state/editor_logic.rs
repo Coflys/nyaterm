@@ -4,9 +4,8 @@ use nyaterm_ui::ChildWindowSlot;
 
 use super::super::connection_runtime::ConnectionEditorToggle;
 use crate::models::{
-    ConnectionEditorAdvancedTab, ConnectionEditorField, ConnectionEditorPasswordSource,
-    ConnectionEditorRdpTab, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
-    ConnectionEditorState, ConnectionEditorTelnetTab, ConnectionGroupEditorState,
+    ConnectionEditorField, ConnectionEditorPasswordSource, ConnectionEditorSelect,
+    ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionGroupEditorState,
     ConnectionKindTab,
 };
 
@@ -291,33 +290,6 @@ pub(super) fn set_connection_editor_password_source(
     true
 }
 
-pub(super) fn set_connection_editor_advanced_tab(
-    draft: &mut Option<ConnectionEditorState>,
-    tab: ConnectionEditorAdvancedTab,
-) -> bool {
-    let Some(editor) = draft.as_mut() else {
-        return false;
-    };
-    match tab {
-        ConnectionEditorAdvancedTab::Network
-        | ConnectionEditorAdvancedTab::TwoFactor
-        | ConnectionEditorAdvancedTab::AgentForwarding => editor.advanced_network_tab = tab,
-        ConnectionEditorAdvancedTab::PostLogin
-        | ConnectionEditorAdvancedTab::Terminal
-        | ConnectionEditorAdvancedTab::Sftp
-        | ConnectionEditorAdvancedTab::X11
-        | ConnectionEditorAdvancedTab::Backspace => editor.advanced_behavior_tab = tab,
-    }
-    if matches!(
-        editor.focused_field,
-        ConnectionEditorField::PostLoginCommand | ConnectionEditorField::PostLoginDelay
-    ) && tab != ConnectionEditorAdvancedTab::PostLogin
-    {
-        editor.focused_field = ConnectionEditorField::Name;
-    }
-    true
-}
-
 fn ssh_algorithm_values_mut(
     editor: &mut ConnectionEditorState,
     tab: ConnectionEditorSshAlgorithmTab,
@@ -583,32 +555,6 @@ pub(super) fn toggle_connection_editor_agent_allowlist_fingerprint(
     true
 }
 
-pub(super) fn set_connection_editor_telnet_tab(
-    draft: &mut Option<ConnectionEditorState>,
-    tab: ConnectionEditorTelnetTab,
-) -> bool {
-    let Some(editor) = draft.as_mut() else {
-        return false;
-    };
-    editor.telnet_advanced_tab = tab;
-    editor.error = None;
-    editor.field_errors.clear();
-    true
-}
-
-pub(super) fn set_connection_editor_rdp_tab(
-    draft: &mut Option<ConnectionEditorState>,
-    tab: ConnectionEditorRdpTab,
-) -> bool {
-    let Some(editor) = draft.as_mut() else {
-        return false;
-    };
-    editor.rdp_advanced_tab = tab;
-    editor.error = None;
-    editor.field_errors.clear();
-    true
-}
-
 pub(super) fn set_connection_editor_kind(
     draft: &mut Option<ConnectionEditorState>,
     kind: ConnectionKindTab,
@@ -617,6 +563,7 @@ pub(super) fn set_connection_editor_kind(
         return false;
     };
     editor.kind = kind;
+    editor.section = crate::models::ConnectionEditorSection::Basic;
     editor.focused_field = ConnectionEditorField::Name;
     editor.port = match kind {
         ConnectionKindTab::Ssh => {
@@ -798,17 +745,6 @@ pub(super) fn toggle_connection_editor_flag(
         ConnectionEditorToggle::RecordingAutoStart => {
             let recording = editor.recording.get_or_insert_with(Default::default);
             recording.auto_start = Some(!recording.auto_start.unwrap_or(false));
-        }
-        ConnectionEditorToggle::Advanced => {
-            let open = editor.advanced.toggle(editor.kind);
-            if !open
-                && matches!(
-                    editor.focused_field,
-                    ConnectionEditorField::PostLoginCommand | ConnectionEditorField::PostLoginDelay
-                )
-            {
-                editor.focused_field = ConnectionEditorField::Name;
-            }
         }
     }
     editor.error = None;

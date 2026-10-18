@@ -601,6 +601,23 @@
     "usernameRegexPlaceholder": "Expression régulière pour les invites de nom d'utilisateur"
   },
   "dialog": {
+    "editorSections": {
+      "basic": "Informations générales",
+      "authentication": "Authentification",
+      "network": "Réseau et proxy",
+      "terminal": "Terminal",
+      "sftp": "SFTP",
+      "forwarding": "Redirection",
+      "postLogin": "Commandes après connexion",
+      "algorithms": "Sécurité et algorithmes",
+      "autoLogin": "Connexion automatique",
+      "compatibility": "Protocole et compatibilité",
+      "security": "Sécurité",
+      "display": "Affichage",
+      "session": "Session",
+      "serial": "Port série",
+      "startup": "Démarrage"
+    },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
     "serialFlowControl": "Flow control",
     "serialFlowControlNone": "None",

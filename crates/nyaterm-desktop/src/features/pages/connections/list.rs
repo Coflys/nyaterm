@@ -1,3 +1,4 @@
+use crate::models::ConnectionEditorFocusTarget;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -461,6 +462,12 @@ pub(super) fn connection_editor_select(
     let show_label = !label.is_empty();
     div()
         .id(SharedString::from(id))
+        .anchor_scroll(
+            fields
+                .anchors
+                .get(&ConnectionEditorFocusTarget::Select(select))
+                .cloned(),
+        )
         .min_w_0()
         .flex_1()
         .flex()
@@ -1052,6 +1059,7 @@ pub(super) struct ConnectionEditorFields {
     pub(super) account: Option<nyaterm_core::SavedPassword>,
     pub(super) account_password_locked: bool,
     pub(super) errors: HashMap<ConnectionEditorField, String>,
+    pub(super) anchors: HashMap<ConnectionEditorFocusTarget, gpui::ScrollAnchor>,
     fields: HashMap<ConnectionEditorField, Entity<NyaInputState>>,
     number_fields: HashMap<ConnectionEditorField, Entity<NyaNumberInputState>>,
     selects: HashMap<ConnectionEditorSelect, Entity<NyaSelectState>>,
@@ -1071,6 +1079,7 @@ impl ConnectionEditorFields {
             account: None,
             account_password_locked: false,
             errors: HashMap::new(),
+            anchors: HashMap::new(),
             fields,
             number_fields,
             selects,
@@ -1206,6 +1215,16 @@ pub(super) fn editor_field(
 ) -> impl IntoElement {
     let label = label.into();
     div()
+        .id(SharedString::from(format!(
+            "connection-editor-field-{field:?}"
+        )))
+        .debug_selector(move || format!("connection-editor-field-{field:?}"))
+        .anchor_scroll(
+            fields
+                .anchors
+                .get(&ConnectionEditorFocusTarget::Field(field))
+                .cloned(),
+        )
         .flex()
         .flex_col()
         .gap_1()
@@ -1240,6 +1259,12 @@ pub(super) fn connection_editor_select_on_open(
     let show_label = !label.is_empty();
     div()
         .id(SharedString::from(id))
+        .anchor_scroll(
+            fields
+                .anchors
+                .get(&ConnectionEditorFocusTarget::Select(select))
+                .cloned(),
+        )
         .min_w_0()
         .flex_1()
         .flex()
@@ -1311,6 +1336,16 @@ where
         .as_ref()
         .is_none_or(|field| field.read(cx).is_masked());
     div()
+        .id(SharedString::from(format!(
+            "connection-editor-field-{field:?}"
+        )))
+        .debug_selector(move || format!("connection-editor-field-{field:?}"))
+        .anchor_scroll(
+            fields
+                .anchors
+                .get(&ConnectionEditorFocusTarget::Field(field))
+                .cloned(),
+        )
         .min_w_0()
         .flex()
         .flex_col()
@@ -1388,6 +1423,15 @@ pub(super) fn forwarding_endpoint_editor_field(
     let handle = entity.read(cx).focus_handle();
     let focused = entity.read(cx).has_focus();
     div()
+        .id(SharedString::from(format!(
+            "connection-editor-forwarding-{index}-{field:?}"
+        )))
+        .anchor_scroll(
+            fields
+                .anchors
+                .get(&ConnectionEditorFocusTarget::ForwardingEndpoint { index, field })
+                .cloned(),
+        )
         .flex()
         .flex_col()
         .gap_1()
@@ -1486,6 +1530,16 @@ pub(super) fn editor_stepper_field(
     let label = label.into();
     let entity = fields.get_number(&field);
     div()
+        .id(SharedString::from(format!(
+            "connection-editor-field-{field:?}"
+        )))
+        .debug_selector(move || format!("connection-editor-field-{field:?}"))
+        .anchor_scroll(
+            fields
+                .anchors
+                .get(&ConnectionEditorFocusTarget::Field(field))
+                .cloned(),
+        )
         .flex()
         .flex_col()
         .gap_1()

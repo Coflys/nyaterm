@@ -450,6 +450,14 @@ impl NyaSelectState {
             .unwrap_or_else(|| self.focus.clone())
     }
 
+    /// Discards a hidden popup while retaining the select entity and selected value.
+    pub fn dismiss_menu(&mut self, cx: &mut Context<Self>) {
+        self.state = None;
+        self.trigger_focus = None;
+        self.subscription = None;
+        cx.notify();
+    }
+
     pub fn is_focused(&self, window: &Window, cx: &App) -> bool {
         self.focus_handle(cx).is_focused(window)
     }

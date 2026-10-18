@@ -601,6 +601,23 @@
     "usernameRegexPlaceholder": "사용자 이름 프롬프트용 정규식"
   },
   "dialog": {
+    "editorSections": {
+      "basic": "기본 정보",
+      "authentication": "인증",
+      "network": "네트워크 및 프록시",
+      "terminal": "터미널 설정",
+      "sftp": "SFTP",
+      "forwarding": "전달",
+      "postLogin": "로그인 후 명령",
+      "algorithms": "보안 및 알고리즘",
+      "autoLogin": "자동 로그인",
+      "compatibility": "프로토콜 및 호환성",
+      "security": "보안",
+      "display": "디스플레이",
+      "session": "세션",
+      "serial": "직렬 포트 설정",
+      "startup": "시작 설정"
+    },
     "serialSoftwareFlowControlModemDisabled": "XON/XOFF가 바이너리 데이터를 소비할 수 있으므로 소프트웨어 흐름 제어에서는 XMODEM/YMODEM/ZMODEM 파일 전송이 비활성화됩니다.",
     "serialFlowControl": "흐름 제어",
     "serialFlowControlNone": "없음",

@@ -862,7 +862,14 @@ impl NyaTermApp {
                 |this, editor| {
                     this.child(full_window_overlay_layer(
                         "connection-editor-input-layer",
-                        self.connection_editor_panel(editor, cx),
+                        self.connection_editor_panel(
+                            editor,
+                            (
+                                f32::from(window.viewport_size().width),
+                                f32::from(window.viewport_size().height),
+                            ),
+                            cx,
+                        ),
                     ))
                 },
             )

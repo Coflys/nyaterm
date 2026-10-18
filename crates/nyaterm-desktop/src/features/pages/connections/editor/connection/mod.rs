@@ -1,4 +1,6 @@
+use crate::models::ConnectionEditorFocusTarget;
 mod authentication;
+mod layout;
 mod local;
 mod rdp;
 mod recording;
@@ -14,8 +16,8 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, FontWeight, IntoElement, KeyDownEvent, Pixels, Point,
-    SharedString, anchored, deferred, div,
+    AnyElement, App, Bounds, Context, Entity, FontWeight, IntoElement, Pixels, Point, SharedString,
+    anchored, deferred, div,
     prelude::{
         FluentBuilder, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
     },
@@ -24,7 +26,7 @@ use gpui::{
 use nyaterm_core::{ConnectionType, Group, SavedConnection, natural_compare, truncate_preview};
 use nyaterm_ui::{
     NyaCheckbox, NyaInput, NyaPopover, NyaScrollArea, NyaScrollable, NyaSelectOption,
-    NyaSelectState, NyaSwitch, NyaTabItem, NyaTabs, NyaTooltip,
+    NyaSelectState, NyaSwitch, NyaTooltip,
 };
 
 use self::local::connection_editor_local_section;
@@ -47,8 +49,8 @@ use crate::features::{
     view_widgets::themed_icon,
 };
 use crate::models::{
-    ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorSelect,
-    ConnectionEditorState, ConnectionKindTab,
+    ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorSection,
+    ConnectionEditorSelect, ConnectionEditorState, ConnectionKindTab,
 };
 
 #[derive(Clone, Copy)]
@@ -57,23 +59,26 @@ struct ConnectionEditorSectionContext<'a> {
     editor: &'a ConnectionEditorState,
     fields: &'a ConnectionEditorFields,
     baud_popover_open: bool,
+    narrow: bool,
 }
 
 impl NyaTermApp {
     pub(in crate::features) fn connection_editor_panel(
         &mut self,
         editor: ConnectionEditorState,
+        viewport: (f32, f32),
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.connection_editor_surface(editor, false, cx)
+        self.connection_editor_surface(editor, false, viewport, cx)
     }
 
     pub(in crate::features) fn connection_editor_window_view(
         &mut self,
         editor: ConnectionEditorState,
+        viewport: (f32, f32),
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.connection_editor_surface(editor, true, cx)
+        self.connection_editor_surface(editor, true, viewport, cx)
     }
 
     fn connection_editor_select_entity(
@@ -207,6 +212,7 @@ impl NyaTermApp {
         &mut self,
         editor: ConnectionEditorState,
         native_window: bool,
+        viewport: (f32, f32),
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.connection_state
@@ -250,13 +256,9 @@ impl NyaTermApp {
         } else {
             t!("dialog.newConnection")
         };
-        let local_label = t!("dialog.localTerminal");
-        let serial_label = t!("dialog.serial");
         let name_label = t!("dialog.connectionName");
         let description_label = t!("dialog.description");
         let group_title = t!("dialog.group");
-        let cancel_label = t!("common.cancel");
-        let save_label = t!("common.save");
         let none_label = t!("dialog.none");
         let icon_label = t!("dialog.icon");
         let icon_auto_detect_label = t!("dialog.iconAutoDetect");
@@ -1189,6 +1191,38 @@ impl NyaTermApp {
             forwarding_endpoint_selects,
             forwarding_endpoint_fields,
         );
+        let targets = self
+            .connection_state
+            .editor_fields()
+            .keys()
+            .chain(self.connection_state.editor_number_fields().keys())
+            .copied()
+            .map(ConnectionEditorFocusTarget::Field)
+            .chain(
+                connection_editor_select_keys()
+                    .into_iter()
+                    .map(ConnectionEditorFocusTarget::Select),
+            )
+            .chain(
+                self.connection_state
+                    .editor_forwarding_endpoint_fields()
+                    .keys()
+                    .map(
+                        |(index, field)| ConnectionEditorFocusTarget::ForwardingEndpoint {
+                            index: *index,
+                            field: *field,
+                        },
+                    ),
+            )
+            .collect::<Vec<_>>();
+        fields.anchors = targets
+            .into_iter()
+            .map(|target| (target, self.connection_state.editor_anchor(target)))
+            .collect();
+        let scroll = self.connection_state.editor_scroll();
+        let heading_anchor = self
+            .connection_state
+            .editor_anchor(ConnectionEditorFocusTarget::Heading);
         let account_id = if matches!(
             editor.kind,
             ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
@@ -1218,12 +1252,62 @@ impl NyaTermApp {
         let baud_popover_open = self.connection_state.editor_baud_popover_is_open();
         let validation_error = self.connection_editor_validation_error(&editor);
         let save_enabled = !self.connection_state.editor_save_in_flight();
-        let editor_focus = self.connection_state.editor_focus_handle();
+        let width = if native_window {
+            viewport.0
+        } else {
+            (viewport.0 - 26.).min(900.)
+        };
+        let height = if native_window {
+            viewport.1
+        } else {
+            (viewport.1 - 26.).min(680.)
+        };
+        let wide = width >= 760.;
+        let narrow = width - if wide { 180. } else { 0. } < 500.;
+        let sections = ConnectionEditorSection::for_kind(editor.kind);
+        let section_select = self.select_entity(
+            "connection-editor-section",
+            sections
+                .iter()
+                .map(|section| NyaSelectOption::new(section.id(), section.label()))
+                .collect(),
+            Some(editor.section.id().to_string()),
+            false,
+            cx,
+        );
+        let protocol_select = self.select_entity(
+            "connection-editor-kind",
+            [
+                ConnectionKindTab::Ssh,
+                ConnectionKindTab::Local,
+                ConnectionKindTab::Telnet,
+                ConnectionKindTab::Serial,
+                ConnectionKindTab::Rdp,
+                ConnectionKindTab::Vnc,
+            ]
+            .into_iter()
+            .map(|kind| {
+                NyaSelectOption::new(
+                    kind.label(),
+                    match kind {
+                        ConnectionKindTab::Local => t!("dialog.localTerminal"),
+                        ConnectionKindTab::Serial => t!("dialog.serial"),
+                        _ => Cow::Borrowed(kind.label()),
+                    },
+                )
+            })
+            .collect(),
+            Some(editor.kind.label().to_string()),
+            false,
+            cx,
+        );
+        let section_focus = self.connection_state.editor_section_focus();
         let section_context = ConnectionEditorSectionContext {
             palette,
             editor: &editor,
             fields: &fields,
             baud_popover_open,
+            narrow,
         };
         let custom_icons = self
             .connection_state
@@ -1475,224 +1559,140 @@ impl NyaTermApp {
                 })),
             );
 
-        let card = div()
-            .id(SharedString::from("connection-editor-panel"))
-            .debug_selector(|| "connection-editor-panel".to_string())
-            .w_full()
-            .when(native_window, |this| this.size_full())
-            .when(!native_window, |this| this.max_h(px(640.)))
-            .flex()
-            .flex_col()
-            // No blanket focus grab here: it existed to keep the old label-div
-            // inputs "focused", and would now steal focus back from whichever
-            // field the pointer just landed on, since click follows mouse-down.
-            .track_focus(&editor_focus)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key != "escape"
-                    && this.connection_editor_select_is_focused(window, cx)
-                {
-                    return;
-                }
-                if this.handle_connection_editor_key_down(event, window, cx) {
+        let content = div()
+            .id(SharedString::from(format!(
+                "connection-editor-scroll-{}",
+                editor.section.id()
+            )))
+            .debug_selector(|| "connection-editor-scroll".to_string())
+            .relative()
+            .min_w_0()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .on_scroll_wheel(cx.listener(|this, _: &gpui::ScrollWheelEvent, window, cx| {
+                if this.connection_editor_select_menu_is_focused(window, cx) {
                     cx.stop_propagation();
                 }
             }))
-            .when(!native_window, |this| {
+            .p(px(20.))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .id("connection-editor-section-heading")
+                    .anchor_scroll(Some(heading_anchor))
+                    .track_focus(&section_focus)
+                    .tab_index(-1)
+                    .debug_selector(|| "connection-editor-section-title".to_string())
+                    .text_size(px(15.))
+                    .font_weight(FontWeight(600.))
+                    .child(editor.section.label()),
+            )
+            .when(editor.section == ConnectionEditorSection::Basic, |this| {
                 this.child(
                     div()
-                        .px_4()
-                        .pt_4()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight(700.))
-                        .text_color(rgb(palette.text))
-                        .child(title),
+                        .flex()
+                        .when(!narrow, |this| this.flex_wrap())
+                        .when(narrow, |this| this.flex_col())
+                        .items_end()
+                        .when(narrow, |this| this.items_stretch())
+                        .gap_3()
+                        .child(icon_picker)
+                        .child(div().min_w(px(192.)).flex_1().child(editor_field(
+                            palette,
+                            name_label,
+                            ConnectionEditorField::Name,
+                            &fields,
+                            cx,
+                        )))
+                        .child(
+                            div()
+                                .min_w(px(192.))
+                                .when(!narrow, |this| this.max_w(px(288.)))
+                                .flex_1()
+                                .child(connection_editor_group_control(
+                                    ConnectionEditorGroupControlArgs {
+                                        palette,
+                                        label: group_title,
+                                        display_label: connection_editor_group_display_label(
+                                            self.connection_state.groups(),
+                                            &editor,
+                                            none_label,
+                                            t!("dialog.newGroup"),
+                                        ),
+                                        select_open: group_select_open,
+                                        trigger_bounds: self
+                                            .connection_state
+                                            .editor_group_select_trigger_bounds(),
+                                        parent_hint: group_parent_hint.clone(),
+                                        choices: &group_options,
+                                        fields: &fields,
+                                    },
+                                    cx,
+                                )),
+                        ),
                 )
             })
-            .child(
-                div()
-                    .flex_none()
-                    .px(px(20.))
-                    .pt(px(20.))
-                    .when(!native_window, |this| this.pt_3())
-                    .child(
-                        NyaTabs::new("connection-kind-tabs")
-                            .items([
-                                NyaTabItem::new("SSH"),
-                                NyaTabItem::new(local_label),
-                                NyaTabItem::new("Telnet"),
-                                NyaTabItem::new(serial_label),
-                                NyaTabItem::new("RDP"),
-                                NyaTabItem::new("VNC"),
-                            ])
-                            .selected_index(match editor.kind {
-                                ConnectionKindTab::Ssh => 0,
-                                ConnectionKindTab::Local => 1,
-                                ConnectionKindTab::Telnet => 2,
-                                ConnectionKindTab::Serial => 3,
-                                ConnectionKindTab::Rdp => 4,
-                                ConnectionKindTab::Vnc => 5,
-                            })
-                            .on_select(cx.listener(|this, index, _, cx| {
-                                let kind = match *index {
-                                    0 => ConnectionKindTab::Ssh,
-                                    1 => ConnectionKindTab::Local,
-                                    2 => ConnectionKindTab::Telnet,
-                                    3 => ConnectionKindTab::Serial,
-                                    4 => ConnectionKindTab::Rdp,
-                                    _ => ConnectionKindTab::Vnc,
-                                };
-                                this.set_connection_editor_kind(kind, cx);
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .id("connection-editor-scroll")
-                    .debug_selector(|| "connection-editor-scroll".to_string())
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .on_scroll_wheel(cx.listener(|this, _: &gpui::ScrollWheelEvent, window, cx| {
-                        if this.connection_editor_select_menu_is_focused(window, cx) {
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .p(px(20.))
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_end()
-                            .gap_3()
-                            .child(icon_picker)
-                            .child(div().min_w(px(192.)).flex_1().child(editor_field(
-                                palette,
-                                name_label,
-                                ConnectionEditorField::Name,
-                                &fields,
-                                cx,
-                            )))
-                            .child(
-                                div().min_w(px(192.)).max_w(px(288.)).flex_1().child(
-                                    connection_editor_group_control(
-                                        ConnectionEditorGroupControlArgs {
-                                            palette,
-                                            label: group_title,
-                                            display_label: connection_editor_group_display_label(
-                                                self.connection_state.groups(),
-                                                &editor,
-                                                none_label,
-                                                t!("dialog.newGroup"),
-                                            ),
-                                            select_open: group_select_open,
-                                            trigger_bounds: self
-                                                .connection_state
-                                                .editor_group_select_trigger_bounds(),
-                                            parent_hint: group_parent_hint.clone(),
-                                            choices: &group_options,
-                                            fields: &fields,
-                                        },
-                                        cx,
-                                    ),
-                                ),
-                            ),
-                    )
-                    .when(editor.kind == ConnectionKindTab::Ssh, |this| {
-                        this.child(connection_editor_ssh_section(
-                            section_context,
-                            SshConnectionSectionLabels {
-                                otp: otp_label.clone(),
-                                proxy: proxy_label.clone(),
-                                jump: jump_label.clone(),
-                            },
-                            SshConnectionSectionOptions { auth: auth_options },
-                            cx,
-                        ))
-                    })
-                    .when(editor.kind == ConnectionKindTab::Local, |this| {
-                        this.child(connection_editor_local_section(section_context, cx))
-                    })
-                    .when(editor.kind == ConnectionKindTab::Telnet, |this| {
-                        this.child(connection_editor_telnet_section(section_context, cx))
-                    })
-                    .when(editor.kind == ConnectionKindTab::Serial, |this| {
-                        this.child(connection_editor_serial_section(section_context, cx))
-                    })
-                    .when(editor.kind == ConnectionKindTab::Rdp, |this| {
-                        this.child(connection_editor_rdp_section(section_context, cx))
-                    })
-                    .when(editor.kind == ConnectionKindTab::Vnc, |this| {
-                        this.child(connection_editor_vnc_section(section_context, cx))
-                    })
-                    .child(tags::connection_tags_field(palette, &editor, &fields, cx))
-                    .child(connection_description_field(
-                        palette,
-                        description_label,
-                        &fields,
-                        cx,
-                    ))
-                    .when_some(editor.error.clone(), |this, error| {
-                        this.child(
-                            div()
-                                .id("connection-editor-error")
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(rgb(palette.danger))
-                                .bg(rgba((palette.danger << 8) | 0x18))
-                                .p_2()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.danger))
-                                .child(error),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .h(px(60.))
-                    .flex_none()
-                    .border_t_1()
-                    .border_color(rgb(palette.border))
-                    .bg(rgb(palette.section_header))
-                    .px_5()
-                    .py_3()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(connection_editor_footer_button(
-                                palette,
-                                "connection-editor-close",
-                                cancel_label,
-                                false,
-                                true,
-                                None,
-                                cx.listener(|this, _, _, cx| {
-                                    this.close_connection_editor(cx);
-                                }),
-                            ))
-                            .child(connection_editor_footer_button(
-                                palette,
-                                "connection-editor-save",
-                                save_label,
-                                true,
-                                save_enabled,
-                                validation_error.clone(),
-                                cx.listener(|this, _, window, cx| {
-                                    this.save_connection_editor(window, cx);
-                                }),
-                            )),
-                    ),
-            );
+            .when(editor.kind == ConnectionKindTab::Ssh, |this| {
+                this.child(connection_editor_ssh_section(
+                    section_context,
+                    SshConnectionSectionLabels {
+                        otp: otp_label.clone(),
+                        proxy: proxy_label.clone(),
+                        jump: jump_label.clone(),
+                    },
+                    SshConnectionSectionOptions { auth: auth_options },
+                    cx,
+                ))
+            })
+            .when(editor.kind == ConnectionKindTab::Local, |this| {
+                this.child(connection_editor_local_section(section_context, cx))
+            })
+            .when(editor.kind == ConnectionKindTab::Telnet, |this| {
+                this.child(connection_editor_telnet_section(section_context, cx))
+            })
+            .when(editor.kind == ConnectionKindTab::Serial, |this| {
+                this.child(connection_editor_serial_section(section_context, cx))
+            })
+            .when(editor.kind == ConnectionKindTab::Rdp, |this| {
+                this.child(connection_editor_rdp_section(section_context, cx))
+            })
+            .when(editor.kind == ConnectionKindTab::Vnc, |this| {
+                this.child(connection_editor_vnc_section(section_context, cx))
+            })
+            .when(editor.section == ConnectionEditorSection::Basic, |this| {
+                this.child(tags::connection_tags_field(palette, &editor, &fields, cx))
+            })
+            .when(editor.section == ConnectionEditorSection::Basic, |this| {
+                this.child(connection_description_field(
+                    palette,
+                    description_label,
+                    &fields,
+                    cx,
+                ))
+            });
+        let card = layout::connection_editor_frame(
+            layout::ConnectionEditorFrame {
+                palette,
+                editor: &editor,
+                title,
+                content: content.into_any_element(),
+                navigation_focus: self.connection_state.editor_navigation_focus(),
+                editor_focus: self.connection_state.editor_focus_handle(),
+                scroll,
+                native_window,
+                height,
+                wide,
+                protocol_select,
+                section_select,
+                validation_error,
+                save_enabled,
+            },
+            cx,
+        );
         let surface = div()
             .relative()
             .w_full()
@@ -1715,7 +1715,7 @@ impl NyaTermApp {
                 palette,
                 self.shell_surface_color(palette.bg),
                 "connection-editor-modal",
-                560.,
+                900.,
                 surface,
             )
             .into_any_element()
@@ -1943,10 +1943,16 @@ impl NyaTermApp {
         self.focus_select(connection_editor_select_id(select), window, cx)
     }
 
-    fn connection_editor_select_is_focused(&self, window: &gpui::Window, cx: &gpui::App) -> bool {
-        connection_editor_select_keys()
-            .into_iter()
-            .any(|select| self.select_is_focused(connection_editor_select_id(select), window, cx))
+    pub(super) fn connection_editor_select_is_focused(
+        &self,
+        window: &gpui::Window,
+        cx: &gpui::App,
+    ) -> bool {
+        (self.select_is_focused("connection-editor-section", window, cx)
+            || self.select_is_focused("connection-editor-kind", window, cx))
+            || connection_editor_select_keys().into_iter().any(|select| {
+                self.select_is_focused(connection_editor_select_id(select), window, cx)
+            })
             || self.select_with_prefix_is_focused(
                 "connection-editor-ssh-agent-forwarding-endpoint-",
                 window,
@@ -1954,18 +1960,21 @@ impl NyaTermApp {
             )
     }
 
-    fn connection_editor_select_menu_is_focused(
+    pub(super) fn connection_editor_select_menu_is_focused(
         &self,
         window: &gpui::Window,
         cx: &gpui::App,
     ) -> bool {
-        connection_editor_select_keys().into_iter().any(|select| {
-            self.select_menu_is_focused(connection_editor_select_id(select), window, cx)
-        }) || self.select_menu_with_prefix_is_focused(
-            "connection-editor-ssh-agent-forwarding-endpoint-",
-            window,
-            cx,
-        )
+        (self.select_menu_is_focused("connection-editor-section", window, cx)
+            || self.select_menu_is_focused("connection-editor-kind", window, cx))
+            || connection_editor_select_keys().into_iter().any(|select| {
+                self.select_menu_is_focused(connection_editor_select_id(select), window, cx)
+            })
+            || self.select_menu_with_prefix_is_focused(
+                "connection-editor-ssh-agent-forwarding-endpoint-",
+                window,
+                cx,
+            )
     }
 }
 
@@ -2923,9 +2932,8 @@ mod tests {
     use crate::features::NyaTermApp;
     use crate::features::selects::PENDING_CONNECTION_GROUP_VALUE;
     use crate::models::{
-        ConnectionEditorAdvancedTab, ConnectionEditorAdvancedVisibility,
-        ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorPasswordSource,
-        ConnectionEditorState, ConnectionEditorTelnetTab, ConnectionKindTab,
+        ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorForwardingTab,
+        ConnectionEditorPasswordSource, ConnectionEditorState, ConnectionKindTab,
     };
     use crate::test_support::TestConfigDir;
 
@@ -2934,6 +2942,7 @@ mod tests {
         width: f32,
         height: f32,
         font_size: f32,
+        native_window: bool,
     }
 
     struct AlgorithmListHost {
@@ -2980,7 +2989,13 @@ mod tests {
             let editor = self.app.read(cx).connection_state.active_editor_draft();
             let editor = self.app.update(cx, |app, cx| {
                 editor
-                    .map(|editor| app.connection_editor_panel(editor, cx).into_any_element())
+                    .map(|editor| {
+                        if self.native_window {
+                            app.connection_editor_window_view(editor, (self.width, self.height), cx)
+                        } else {
+                            app.connection_editor_panel(editor, (self.width, self.height), cx)
+                        }
+                    })
                     .unwrap_or_else(|| div().into_any_element())
             });
             div()
@@ -3028,6 +3043,7 @@ mod tests {
             width,
             height,
             font_size,
+            native_window: false,
         });
         let vcx: &mut VisualTestContext = vcx;
         vcx.run_until_parked();
@@ -3041,6 +3057,7 @@ mod tests {
         vcx.update(|window, cx| {
             app.update(cx, |_, cx| cx.notify());
             _ = window.draw(cx);
+            window.simulate_next_frame(cx);
         });
         vcx.run_until_parked();
     }
@@ -3161,7 +3178,7 @@ mod tests {
             rdp_display: Default::default(),
             rdp_clipboard: Default::default(),
             rdp_reconnect: Default::default(),
-            rdp_advanced_tab: crate::models::ConnectionEditorRdpTab::Security,
+
             vnc_security: Default::default(),
             vnc_display: Default::default(),
             vnc_clipboard: Default::default(),
@@ -3238,11 +3255,11 @@ mod tests {
             post_login_enabled: false,
             post_login_command: String::new(),
             post_login_delay_ms: "0".to_string(),
-            advanced: ConnectionEditorAdvancedVisibility::default(),
-            advanced_network_tab: ConnectionEditorAdvancedTab::Network,
-            advanced_behavior_tab: ConnectionEditorAdvancedTab::PostLogin,
-            telnet_advanced_tab: ConnectionEditorTelnetTab::Input,
+
+            forwarding_tab: ConnectionEditorForwardingTab::Agent,
+
             connect_after_save: false,
+            section: crate::models::ConnectionEditorSection::Basic,
             focused_field: ConnectionEditorField::Name,
             error: None,
         }
@@ -3405,6 +3422,10 @@ mod tests {
                     draft.baud_rate = seed.to_string();
                     app.connection_state.begin_editor(draft);
                     app.connection_state.build_editor_fields(cx);
+                    app.set_connection_editor_section(
+                        crate::models::ConnectionEditorSection::Serial,
+                        cx,
+                    );
                     app.set_connection_editor_baud_popover_open(true, cx);
                     cx.notify();
                 });
@@ -3575,6 +3596,10 @@ mod tests {
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 app.set_connection_editor_kind(ConnectionKindTab::Vnc, cx);
+                app.set_connection_editor_section(
+                    crate::models::ConnectionEditorSection::Authentication,
+                    cx,
+                );
                 app.set_connection_editor_password_source(
                     ConnectionEditorPasswordSource::Saved,
                     cx,
@@ -3641,6 +3666,10 @@ mod tests {
                 };
                 app.security
                     .replace_catalog(Vec::new(), Vec::new(), vec![account], Vec::new());
+                app.set_connection_editor_section(
+                    crate::models::ConnectionEditorSection::Authentication,
+                    cx,
+                );
                 app.set_connection_account_source(true, cx);
             })
         });
@@ -3683,6 +3712,10 @@ mod tests {
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 app.set_connection_editor_kind(ConnectionKindTab::Vnc, cx);
+                app.set_connection_editor_section(
+                    crate::models::ConnectionEditorSection::Authentication,
+                    cx,
+                );
                 app.set_connection_editor_password_source(
                     ConnectionEditorPasswordSource::Direct,
                     cx,
@@ -3736,6 +3769,10 @@ mod tests {
             draft.username = "root".into();
             app.connection_state.begin_editor(draft);
             app.connection_state.build_editor_fields(cx);
+            app.set_connection_editor_section(
+                crate::models::ConnectionEditorSection::Authentication,
+                cx,
+            );
         });
         let host_app = app.clone();
         let (_, vcx) = cx.add_window_view(move |window, cx| {
@@ -3744,6 +3781,7 @@ mod tests {
                 width: 640.,
                 height: 720.,
                 font_size: 12.,
+                native_window: false,
             });
             nyaterm_ui::nya_root(content, window, cx)
         });
@@ -3861,59 +3899,279 @@ mod tests {
     }
 
     #[test]
-    fn connection_editor_protocol_sections_fit_supported_viewports_with_advanced_collapsed() {
-        for (width, height, font_size) in [(520., 620., 12.), (420., 480., 24.)] {
-            let test_dir = TestConfigDir::new("nyaterm-connection-editor-layout");
-            let mut cx = TestAppContext::single();
-            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-            let (app, vcx) = hosted_editor(&mut cx, test_dir.path(), width, height, font_size);
-
-            for kind in [
-                ConnectionKindTab::Ssh,
-                ConnectionKindTab::Local,
-                ConnectionKindTab::Telnet,
-                ConnectionKindTab::Serial,
-                ConnectionKindTab::Rdp,
-                ConnectionKindTab::Vnc,
+    fn connection_editor_categories_fit_wide_and_compact_viewports() {
+        use crate::models::ConnectionEditorSection;
+        let mut field_selectors = std::collections::HashMap::<_, &'static str>::new();
+        for native_window in [false, true] {
+            for (width, height, font_size) in [
+                (900., 680., 12.),
+                (785., 680., 12.),
+                (784., 680., 12.),
+                (760., 680., 12.),
+                (759., 680., 12.),
+                (420., 480., 24.),
             ] {
-                vcx.update(|_, cx| {
-                    app.update(cx, |app, cx| {
-                        app.set_connection_editor_kind(kind, cx);
+                let test_dir = TestConfigDir::new("nyaterm-connection-editor-layout");
+                let mut cx = TestAppContext::single();
+                let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+                let (app, vcx) = hosted_editor(&mut cx, test_dir.path(), width, height, font_size);
+                vcx.update(|window, cx| {
+                    let host = window.root::<EditorHost>().unwrap().unwrap();
+                    host.update(cx, |host, cx| {
+                        host.native_window = native_window;
+                        cx.notify();
                     });
                 });
-                draw_editor(&app, vcx);
-
-                let host = vcx
-                    .debug_bounds("connection-editor-test-host")
-                    .expect("test host should render");
-                let panel = vcx
-                    .debug_bounds("connection-editor-panel")
-                    .expect("editor panel should render");
-                let scroll = vcx
-                    .debug_bounds("connection-editor-scroll")
-                    .expect("editor scroll viewport should render");
-                let (section_selector, advanced_selector) = protocol_selectors(kind);
-                let section = vcx
-                    .debug_bounds(section_selector)
-                    .expect("active protocol section should render");
-
-                assert!(
-                    panel.left() >= host.left() && panel.right() <= host.right(),
-                    "{kind:?} panel must fit width {width} at UI font size {font_size}"
-                );
-                assert!(
-                    panel.top() >= host.top() && panel.bottom() <= host.bottom(),
-                    "{kind:?} panel must fit height {height} at UI font size {font_size}"
-                );
-                assert!(
-                    section.left() >= scroll.left() && section.right() <= scroll.right(),
-                    "{kind:?} section must not overflow horizontally at width {width} and UI font size {font_size}"
-                );
-                assert!(
-                    vcx.debug_bounds(advanced_selector).is_none(),
-                    "{kind:?} Advanced content must be collapsed on first render"
-                );
+                for kind in [
+                    ConnectionKindTab::Ssh,
+                    ConnectionKindTab::Local,
+                    ConnectionKindTab::Telnet,
+                    ConnectionKindTab::Serial,
+                    ConnectionKindTab::Rdp,
+                    ConnectionKindTab::Vnc,
+                ] {
+                    vcx.update(|_, cx| {
+                        app.update(cx, |app, cx| app.set_connection_editor_kind(kind, cx))
+                    });
+                    vcx.update(|_, cx| {
+                        app.update(cx, |app, cx| {
+                            let mut draft = app.connection_state.active_editor_draft().unwrap();
+                            draft.auth_mode = "agent".into();
+                            draft.agent_forwarding_config.enabled = true;
+                            draft.agent_forwarding_config.sources.external_agent = true;
+                            draft.agent_forwarding_config.sources.stored_keys = true;
+                            draft
+                                .agent_forwarding_config
+                                .sources
+                                .external_agent_endpoints = vec![
+                                nyaterm_core::SshAgentEndpoint::Environment {
+                                    variable: "SSH_AUTH_SOCK".into(),
+                                },
+                                nyaterm_core::SshAgentEndpoint::UnixSocket {
+                                    path: "/tmp/agent.sock".into(),
+                                },
+                            ];
+                            draft.post_login_enabled = true;
+                            draft.ssh_algorithm_mode = "custom".into();
+                            draft.rdp_display.mode = "custom".into();
+                            app.connection_state.begin_editor(draft);
+                            app.connection_state.build_editor_fields(cx);
+                        })
+                    });
+                    for section in ConnectionEditorSection::for_kind(kind) {
+                        vcx.update(|_, cx| {
+                            app.update(cx, |app, cx| {
+                                app.set_connection_editor_section(*section, cx)
+                            })
+                        });
+                        draw_editor(&app, vcx);
+                        let host = vcx.debug_bounds("connection-editor-test-host").unwrap();
+                        let panel = vcx.debug_bounds("connection-editor-panel").unwrap();
+                        let scroll = vcx.debug_bounds("connection-editor-scroll").unwrap();
+                        let body = vcx.debug_bounds(protocol_selectors(kind).0).unwrap();
+                        assert!(
+                            panel.left() >= host.left() && panel.right() <= host.right(),
+                            "{kind:?}/{section:?}: {panel:?} in {host:?}"
+                        );
+                        assert!(panel.top() >= host.top() && panel.bottom() <= host.bottom());
+                        assert!(scroll.size.height > px(0.));
+                        assert!(
+                            body.left() >= scroll.left() && body.right() <= scroll.right(),
+                            "{kind:?}/{section:?}: {body:?} in {scroll:?}"
+                        );
+                        let field_keys = vcx.update(|_, cx| {
+                            let state = &app.read(cx).connection_state;
+                            state
+                                .editor_fields()
+                                .keys()
+                                .chain(state.editor_number_fields().keys())
+                                .copied()
+                                .collect::<Vec<_>>()
+                        });
+                        for field in field_keys {
+                            // GPUI's test selector API requires static strings. Intern each
+                            // field name once for this matrix rather than once per frame.
+                            let selector = field_selectors.entry(field).or_insert_with(|| {
+                                Box::leak(
+                                    format!("connection-editor-field-{field:?}").into_boxed_str(),
+                                )
+                            });
+                            if let Some(bounds) = vcx.debug_bounds(selector) {
+                                assert!(bounds.size.width > px(0.));
+                                assert!(
+                                    bounds.left() >= scroll.left()
+                                        && bounds.right() <= scroll.right(),
+                                    "{kind:?}/{section:?}/{field:?} at {width}: {bounds:?} in {scroll:?}"
+                                );
+                            }
+                        }
+                        assert_eq!(
+                            vcx.debug_bounds("connection-editor-navigation").is_some(),
+                            width - if native_window { 0. } else { 26. } >= 760.
+                        );
+                    }
+                }
             }
         }
+    }
+    #[gpui::test]
+    fn category_navigation_preserves_input_entities_and_keyboard_focus(cx: &mut TestAppContext) {
+        use crate::models::ConnectionEditorSection;
+        let test_dir = TestConfigDir::new("nyaterm-editor-navigation-entities");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 680., 12.);
+        let original = vcx.update(|_, cx| {
+            app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::Name].clone()
+        });
+        let component = original.read_with(vcx, |input, _| input.component_state().unwrap());
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.connection_state
+                    .set_editor_field_error(ConnectionEditorField::Name, "retained error".into());
+                window.focus(&app.connection_state.editor_navigation_focus(), cx);
+            });
+        });
+        vcx.simulate_keystrokes("down");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|window, cx| {
+            let state = &app.read(cx).connection_state;
+            assert_eq!(
+                state.active_editor_draft().unwrap().section,
+                ConnectionEditorSection::Authentication
+            );
+            state.editor_navigation_focus().is_focused(window)
+        }));
+        vcx.simulate_keystrokes("tab");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|window, cx| {
+            !app.read(cx)
+                .connection_state
+                .editor_navigation_focus()
+                .is_focused(window)
+        }));
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.set_connection_editor_section(ConnectionEditorSection::Basic, cx)
+            })
+        });
+        draw_editor(&app, vcx);
+        vcx.update(|_, cx| {
+            let state = &app.read(cx).connection_state;
+            let current = &state.editor_fields()[&ConnectionEditorField::Name];
+            assert_eq!(current.entity_id(), original.entity_id());
+            assert_eq!(
+                current.read(cx).component_state().unwrap().entity_id(),
+                component.entity_id()
+            );
+            assert_eq!(
+                state.active_editor_draft().unwrap().error.as_deref(),
+                Some("retained error")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn save_reveals_focuses_and_scrolls_to_an_invalid_hidden_field(cx: &mut TestAppContext) {
+        use crate::models::ConnectionEditorSection;
+        let test_dir = TestConfigDir::new("nyaterm-editor-validation-navigation");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 420., 480., 24.);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.connection_state
+                    .set_editor_field_text(ConnectionEditorField::Host, "example.test".into());
+                app.connection_state
+                    .set_editor_field_text(ConnectionEditorField::Username, "root".into());
+                app.connection_state.set_editor_field_text(
+                    ConnectionEditorField::SftpShellDetectionTimeout,
+                    "invalid".into(),
+                );
+                app.save_connection_editor(window, cx);
+            })
+        });
+        for _ in 0..6 {
+            draw_editor(&app, vcx);
+        }
+        vcx.update(|window, cx| {
+            let state = &app.read(cx).connection_state;
+            let draft = state.active_editor_draft().unwrap();
+            assert_eq!(draft.section, ConnectionEditorSection::Sftp);
+            assert!(
+                draft
+                    .field_errors
+                    .contains_key(&ConnectionEditorField::SftpShellDetectionTimeout)
+            );
+            let focus = state
+                .editor_fields()
+                .get(&ConnectionEditorField::SftpShellDetectionTimeout)
+                .map(|input| input.read(cx).component_focus_handle(cx))
+                .or_else(|| {
+                    state
+                        .editor_number_fields()
+                        .get(&ConnectionEditorField::SftpShellDetectionTimeout)
+                        .map(|input| input.read(cx).component_focus_handle(cx))
+                })
+                .unwrap();
+            assert!(focus.is_focused(window));
+        });
+        let field = vcx
+            .debug_bounds("connection-editor-field-SftpShellDetectionTimeout")
+            .unwrap();
+        let viewport = vcx.debug_bounds("connection-editor-scroll").unwrap();
+        assert!(
+            field.top() >= viewport.top() && field.top() < viewport.bottom(),
+            "{field:?} in {viewport:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn agent_identity_picker_escape_preserves_the_connection_editor(cx: &mut TestAppContext) {
+        let test_dir = TestConfigDir::new("nyaterm-editor-agent-picker-escape");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 680., 12.);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let input = &app.connection_state.editor_fields()[&ConnectionEditorField::Name];
+                window.focus(&input.read(cx).component_focus_handle(cx), cx);
+                app.set_connection_editor_agent_identity_picker_open(true, cx);
+            });
+        });
+        draw_editor(&app, vcx);
+        vcx.simulate_keystrokes("escape");
+        draw_editor(&app, vcx);
+        vcx.update(|_, cx| {
+            let state = &app.read(cx).connection_state;
+            assert!(!state.editor_agent_identity_picker_is_open());
+            assert!(state.editor_has_draft());
+        });
+    }
+
+    #[gpui::test]
+    fn invalid_hidden_baud_rate_opens_its_picker_and_focuses_the_custom_input(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::models::ConnectionEditorSection;
+        let test_dir = TestConfigDir::new("nyaterm-editor-baud-validation");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 420., 480., 24.);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.set_connection_editor_kind(ConnectionKindTab::Serial, cx);
+                app.connection_state
+                    .set_editor_field_text(ConnectionEditorField::SerialPort, "COM1".into());
+                app.connection_state
+                    .set_editor_field_text(ConnectionEditorField::BaudRate, "0".into());
+                app.save_connection_editor(window, cx);
+            });
+        });
+        for _ in 0..6 {
+            draw_editor(&app, vcx);
+        }
+        vcx.update(|window, cx| {
+            let state = &app.read(cx).connection_state;
+            assert_eq!(
+                state.active_editor_draft().unwrap().section,
+                ConnectionEditorSection::Serial
+            );
+            assert!(state.editor_baud_popover_is_open());
+            let input = &state.editor_number_fields()[&ConnectionEditorField::BaudRate];
+            assert!(input.read(cx).component_focus_handle(cx).is_focused(window));
+        });
     }
 }

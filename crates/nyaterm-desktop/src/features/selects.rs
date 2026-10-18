@@ -64,6 +64,23 @@ impl SelectRegistry {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn dismiss_connection_editor_menus(&mut self, cx: &mut Context<Self>) {
+        let fields = self
+            .selects
+            .fields
+            .iter()
+            .filter(|(id, _)| {
+                id.starts_with("connection-editor-")
+                    && id.as_ref() != "connection-editor-section"
+                    && id.as_ref() != "connection-editor-kind"
+            })
+            .map(|(_, field)| field.clone())
+            .collect::<Vec<_>>();
+        for field in fields {
+            field.update(cx, |field, cx| field.dismiss_menu(cx));
+        }
+    }
+
     pub(in crate::features) fn select_entity<I>(
         &mut self,
         id: I,
@@ -196,6 +213,39 @@ impl NyaTermApp {
         let Some(value) = value else {
             return;
         };
+
+        if id == "connection-editor-kind" {
+            if let Some(kind) = [
+                crate::models::ConnectionKindTab::Ssh,
+                crate::models::ConnectionKindTab::Local,
+                crate::models::ConnectionKindTab::Telnet,
+                crate::models::ConnectionKindTab::Serial,
+                crate::models::ConnectionKindTab::Rdp,
+                crate::models::ConnectionKindTab::Vnc,
+            ]
+            .into_iter()
+            .find(|kind| kind.label() == value)
+            {
+                self.set_connection_editor_kind(kind, cx);
+            }
+            return;
+        }
+
+        if id == "connection-editor-section" {
+            if let Some(section) = self
+                .connection_state
+                .active_editor_draft()
+                .and_then(|editor| {
+                    crate::models::ConnectionEditorSection::for_kind(editor.kind)
+                        .iter()
+                        .copied()
+                        .find(|section| section.id() == value)
+                })
+            {
+                self.set_connection_editor_section(section, cx);
+            }
+            return;
+        }
 
         if let Some(index) = id
             .strip_prefix("connection-editor-ssh-agent-forwarding-endpoint-")

@@ -13,10 +13,9 @@ use super::helpers::{
 };
 use crate::features::NyaTermApp;
 use crate::models::{
-    ConnectionEditorAdvancedTab, ConnectionEditorAdvancedVisibility,
-    ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorPasswordSource,
-    ConnectionEditorRdpTab, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
-    ConnectionEditorState, ConnectionEditorTelnetTab, ConnectionKindTab,
+    ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorForwardingTab,
+    ConnectionEditorPasswordSource, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
+    ConnectionEditorState, ConnectionKindTab,
 };
 
 impl NyaTermApp {
@@ -99,7 +98,8 @@ impl NyaTermApp {
                 max = "60000"
             )
             .into(),
-            ConnectionEditorValidationError::SshAgentEndpoint(error) => match error {
+            ConnectionEditorValidationError::SshAgentEndpoint(error)
+            | ConnectionEditorValidationError::SshAgentForwarding { error, .. } => match error {
                 nyaterm_core::SshAgentEndpointValidationError::Empty => {
                     t!("dialog.sshAgentEndpointEmpty").into()
                 }
@@ -185,7 +185,7 @@ impl NyaTermApp {
                 rdp_display: RdpDisplaySettings::default(),
                 rdp_clipboard: RdpClipboardSettings::default(),
                 rdp_reconnect: RdpReconnectSettings::default(),
-                rdp_advanced_tab: ConnectionEditorRdpTab::Security,
+
                 vnc_security: VncSecuritySettings::default(),
                 vnc_display: VncDisplaySettings::default(),
                 vnc_clipboard: VncClipboardSettings::default(),
@@ -268,11 +268,11 @@ impl NyaTermApp {
                 post_login_command: String::new(),
                 post_login_delay_ms: "1000".to_string(),
                 recording: None,
-                advanced: ConnectionEditorAdvancedVisibility::default(),
-                advanced_network_tab: ConnectionEditorAdvancedTab::Network,
-                advanced_behavior_tab: ConnectionEditorAdvancedTab::PostLogin,
-                telnet_advanced_tab: ConnectionEditorTelnetTab::Input,
+
+                forwarding_tab: ConnectionEditorForwardingTab::Agent,
+
                 connect_after_save,
+                section: crate::models::ConnectionEditorSection::Basic,
                 focused_field: ConnectionEditorField::Name,
                 error: None,
             }
@@ -519,15 +519,6 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn set_connection_editor_advanced_tab(
-        &mut self,
-        tab: ConnectionEditorAdvancedTab,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.set_editor_advanced_tab(tab);
-        cx.notify();
-    }
-
     pub(in crate::features) fn set_connection_editor_ssh_algorithm_tab(
         &mut self,
         tab: ConnectionEditorSshAlgorithmTab,
@@ -660,24 +651,6 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn set_connection_editor_telnet_tab(
-        &mut self,
-        tab: ConnectionEditorTelnetTab,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.set_editor_telnet_tab(tab);
-        cx.notify();
-    }
-
-    pub(in crate::features) fn set_connection_editor_rdp_tab(
-        &mut self,
-        tab: ConnectionEditorRdpTab,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.set_editor_rdp_tab(tab);
-        cx.notify();
-    }
-
     /// Take an edit from a field widget into the draft.
     pub(in crate::features) fn apply_connection_editor_field_text(
         &mut self,
@@ -712,6 +685,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.connection_state.set_editor_kind(kind) {
+            self.connection_state
+                .select_editor_section(crate::models::ConnectionEditorSection::Basic);
+            self.dismiss_connection_editor_menus(cx);
             // Switching kind rewrites the default port on the draft; the box has
             // to be told, or it keeps showing the other protocol's.
             self.connection_state.sync_editor_fields_from_draft(cx);
@@ -824,6 +800,26 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    pub(in crate::features) fn set_connection_editor_section(
+        &mut self,
+        section: crate::models::ConnectionEditorSection,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connection_state.select_editor_section(section) {
+            self.dismiss_connection_editor_menus(cx);
+            cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn set_connection_editor_forwarding_tab(
+        &mut self,
+        x11: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection_state.select_editor_forwarding_tab(x11);
+        cx.notify();
+    }
+
     pub(in crate::features) fn handle_connection_editor_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -838,6 +834,10 @@ impl NyaTermApp {
 
         match keystroke.key.as_str() {
             "escape" => {
+                if self.connection_state.editor_agent_identity_picker_is_open() {
+                    self.set_connection_editor_agent_identity_picker_open(false, cx);
+                    return true;
+                }
                 if let Some(overlay) = self.connection_state.editor_credential_overlay() {
                     self.connection_state.set_editor_credential_overlay(None);
                     self.refresh_connection_auth_catalog(cx);
@@ -870,7 +870,9 @@ impl NyaTermApp {
                 return true;
             }
             "enter" => {
-                if self.connection_state.editor_credential_overlay().is_some() {
+                if self.connection_state.editor_credential_overlay().is_some()
+                    || self.connection_state.editor_agent_identity_picker_is_open()
+                {
                     return true;
                 }
                 if !keystroke.modifiers.platform
@@ -927,6 +929,67 @@ impl NyaTermApp {
         false
     }
 
+    pub(super) fn reveal_connection_editor_validation(
+        &mut self,
+        location: super::validation::ConnectionEditorValidationLocation,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::models::ConnectionEditorFocusTarget;
+        self.set_connection_editor_section(location.section, cx);
+        self.connection_state
+            .set_editor_validation_location(location, message);
+        let token = self.connection_state.editor_token();
+        let app = cx.weak_entity();
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |window, cx| {
+                let _ = app.update(cx, |this, cx| {
+                    if this.connection_state.editor_token() != token
+                        || !this
+                            .connection_state
+                            .active_editor_draft()
+                            .is_some_and(|editor| editor.section == location.section)
+                    {
+                        return;
+                    }
+                    let focus = match location.target {
+                        ConnectionEditorFocusTarget::Field(field) => this
+                            .connection_state
+                            .editor_fields()
+                            .get(&field)
+                            .map(|input| input.read(cx).component_focus_handle(cx))
+                            .or_else(|| {
+                                this.connection_state
+                                    .editor_number_fields()
+                                    .get(&field)
+                                    .map(|input| input.read(cx).component_focus_handle(cx))
+                            }),
+                        ConnectionEditorFocusTarget::Select(select) => {
+                            this.focus_connection_editor_select(select, window, cx);
+                            None
+                        }
+                        ConnectionEditorFocusTarget::ForwardingEndpoint { index, field } => this
+                            .connection_state
+                            .editor_forwarding_endpoint_fields()
+                            .get(&(index, field))
+                            .map(|input| input.read(cx).component_focus_handle(cx)),
+                        ConnectionEditorFocusTarget::Heading => {
+                            Some(this.connection_state.editor_section_focus())
+                        }
+                    };
+                    if let Some(focus) = focus {
+                        window.focus(&focus, cx);
+                    }
+                    this.connection_state
+                        .editor_anchor(location.target)
+                        .scroll_to(window, cx);
+                    cx.notify();
+                });
+            });
+        });
+    }
+
     pub(in crate::features) fn save_connection_editor(
         &mut self,
         window: &mut Window,
@@ -978,81 +1041,8 @@ impl NyaTermApp {
             Ok(connection) => connection,
             Err(error) => {
                 let message = self.connection_editor_validation_message(&error);
-                let field = match error {
-                    ConnectionEditorValidationError::HostRequired => ConnectionEditorField::Host,
-                    ConnectionEditorValidationError::PortInvalid => ConnectionEditorField::Port,
-                    ConnectionEditorValidationError::UsernameRequired
-                    | ConnectionEditorValidationError::MissingAccount => {
-                        ConnectionEditorField::Username
-                    }
-                    ConnectionEditorValidationError::AccountPasswordMissing
-                    | ConnectionEditorValidationError::PasswordReplacementRequired
-                    | ConnectionEditorValidationError::VncPasswordTooLong => {
-                        ConnectionEditorField::Password
-                    }
-                    ConnectionEditorValidationError::ShellPathRequired => {
-                        ConnectionEditorField::ShellPath
-                    }
-                    ConnectionEditorValidationError::SerialPortRequired => {
-                        ConnectionEditorField::SerialPort
-                    }
-                    ConnectionEditorValidationError::BaudRateInvalid => {
-                        ConnectionEditorField::BaudRate
-                    }
-                    ConnectionEditorValidationError::VncUsernameTooLong => {
-                        ConnectionEditorField::Username
-                    }
-                    ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
-                        ConnectionEditorField::TelnetKeepAliveInterval
-                    }
-                    ConnectionEditorValidationError::RdpDisplayWidthInvalid => {
-                        ConnectionEditorField::RdpDisplayWidth
-                    }
-                    ConnectionEditorValidationError::RdpDisplayHeightInvalid => {
-                        ConnectionEditorField::RdpDisplayHeight
-                    }
-                    ConnectionEditorValidationError::RdpReconnectAttemptsInvalid => {
-                        ConnectionEditorField::RdpReconnectAttempts
-                    }
-                    ConnectionEditorValidationError::VncReconnectAttemptsInvalid => {
-                        ConnectionEditorField::VncReconnectAttempts
-                    }
-                    ConnectionEditorValidationError::PostLoginCommandRequired => {
-                        ConnectionEditorField::PostLoginCommand
-                    }
-                    ConnectionEditorValidationError::PostLoginDelayInvalid => {
-                        ConnectionEditorField::PostLoginDelay
-                    }
-                    ConnectionEditorValidationError::SftpShellDetectionTimeoutInvalid => {
-                        ConnectionEditorField::SftpShellDetectionTimeout
-                    }
-                    ConnectionEditorValidationError::SshAgentEndpoint(_)
-                    | ConnectionEditorValidationError::SshAlgorithms(_) => editor.focused_field,
-                };
-                self.connection_state.set_editor_field_error(field, message);
-                if matches!(
-                    error,
-                    ConnectionEditorValidationError::MissingAccount
-                        | ConnectionEditorValidationError::AccountPasswordMissing
-                ) {
-                    self.focus_connection_editor_select(
-                        if matches!(
-                            editor.kind,
-                            ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
-                        ) {
-                            ConnectionEditorSelect::Account
-                        } else {
-                            ConnectionEditorSelect::SavedPassword
-                        },
-                        window,
-                        cx,
-                    );
-                } else if let Some(input) = self.connection_state.editor_fields().get(&field) {
-                    window.focus(&input.read(cx).component_focus_handle(cx), cx);
-                } else if let Some(input) = self.connection_state.editor_number_fields().get(&field)
-                {
-                    window.focus(&input.read(cx).component_focus_handle(cx), cx);
-                }
+                let location = error.location(&editor);
+                self.reveal_connection_editor_validation(location, message, window, cx);
                 cx.notify();
                 return;
             }
@@ -1133,12 +1123,11 @@ impl NyaTermApp {
                 store.load_sessions().map(Ok)
             }),
             move |this, event, cx| match event.outcome {
-                Ok(Err((field, message))) => {
+                Ok(Err((_field, message))) => {
                     if this
                         .connection_state
                         .finish_editor_save_request(save_generation)
                     {
-                        this.connection_state.set_editor_field_error(field, message);
                         let app = cx.weak_entity();
                         cx.defer(move |cx| {
                             let _ = origin_window.update(cx, |_, window, cx| {
@@ -1160,7 +1149,12 @@ impl NyaTermApp {
                                     } else {
                                         ConnectionEditorSelect::SavedPassword
                                     };
-                                    this.focus_connection_editor_select(select, window, cx);
+                                    this.reveal_connection_editor_validation(
+                                        super::validation::ConnectionEditorValidationLocation {
+                                            section: crate::models::ConnectionEditorSection::Authentication,
+                                            target: crate::models::ConnectionEditorFocusTarget::Select(select),
+                                            algorithm_tab: None,
+                                        }, message, window, cx);
                                 });
                             });
                         });

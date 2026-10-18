@@ -46,6 +46,100 @@ impl ConnectionKindTab {
     }
 }
 
+/// Navigation state belongs only to the editor draft, never to saved connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ConnectionEditorSection {
+    Basic,
+    Authentication,
+    Network,
+    Terminal,
+    Sftp,
+    Forwarding,
+    PostLogin,
+    Algorithms,
+    AutoLogin,
+    Compatibility,
+    Security,
+    Display,
+    Session,
+    Serial,
+    Startup,
+}
+
+impl ConnectionEditorSection {
+    pub(crate) fn for_kind(kind: ConnectionKindTab) -> &'static [Self] {
+        match kind {
+            ConnectionKindTab::Ssh => &[
+                Self::Basic,
+                Self::Authentication,
+                Self::Network,
+                Self::Terminal,
+                Self::Sftp,
+                Self::Forwarding,
+                Self::PostLogin,
+                Self::Algorithms,
+            ],
+            ConnectionKindTab::Telnet => &[
+                Self::Basic,
+                Self::Authentication,
+                Self::AutoLogin,
+                Self::Terminal,
+                Self::Compatibility,
+            ],
+            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => &[
+                Self::Basic,
+                Self::Authentication,
+                Self::Network,
+                Self::Security,
+                Self::Display,
+                Self::Session,
+            ],
+            ConnectionKindTab::Serial => &[Self::Basic, Self::Serial, Self::Terminal],
+            ConnectionKindTab::Local => &[Self::Basic, Self::Startup, Self::Terminal],
+        }
+    }
+
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Authentication => "authentication",
+            Self::Network => "network",
+            Self::Terminal => "terminal",
+            Self::Sftp => "sftp",
+            Self::Forwarding => "forwarding",
+            Self::PostLogin => "postLogin",
+            Self::Algorithms => "algorithms",
+            Self::AutoLogin => "autoLogin",
+            Self::Compatibility => "compatibility",
+            Self::Security => "security",
+            Self::Display => "display",
+            Self::Session => "session",
+            Self::Serial => "serial",
+            Self::Startup => "startup",
+        }
+    }
+
+    pub(crate) fn label(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Basic => t!("dialog.editorSections.basic"),
+            Self::Authentication => t!("dialog.editorSections.authentication"),
+            Self::Network => t!("dialog.editorSections.network"),
+            Self::Terminal => t!("dialog.editorSections.terminal"),
+            Self::Sftp => t!("dialog.editorSections.sftp"),
+            Self::Forwarding => t!("dialog.editorSections.forwarding"),
+            Self::PostLogin => t!("dialog.editorSections.postLogin"),
+            Self::Algorithms => t!("dialog.editorSections.algorithms"),
+            Self::AutoLogin => t!("dialog.editorSections.autoLogin"),
+            Self::Compatibility => t!("dialog.editorSections.compatibility"),
+            Self::Security => t!("dialog.editorSections.security"),
+            Self::Display => t!("dialog.editorSections.display"),
+            Self::Session => t!("dialog.editorSections.session"),
+            Self::Serial => t!("dialog.editorSections.serial"),
+            Self::Startup => t!("dialog.editorSections.startup"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionEditorSelect {
     Authentication,
@@ -97,15 +191,9 @@ pub(crate) enum ConnectionPasswordEdit {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ConnectionEditorAdvancedTab {
-    Network,
-    TwoFactor,
-    AgentForwarding,
-    PostLogin,
-    Terminal,
-    Sftp,
+pub(crate) enum ConnectionEditorForwardingTab {
+    Agent,
     X11,
-    Backspace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,47 +202,6 @@ pub(crate) enum ConnectionEditorSshAlgorithmTab {
     Ciphers,
     Macs,
     HostKeys,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ConnectionEditorTelnetTab {
-    Input,
-    Terminal,
-    Compatibility,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ConnectionEditorRdpTab {
-    Security,
-    Network,
-    Display,
-    Clipboard,
-    Reconnect,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct ConnectionEditorAdvancedVisibility {
-    pub(crate) ssh: bool,
-    pub(crate) local: bool,
-    pub(crate) telnet: bool,
-    pub(crate) serial: bool,
-    pub(crate) rdp: bool,
-    pub(crate) vnc: bool,
-}
-
-impl ConnectionEditorAdvancedVisibility {
-    pub(crate) fn toggle(&mut self, kind: ConnectionKindTab) -> bool {
-        let open = match kind {
-            ConnectionKindTab::Ssh => &mut self.ssh,
-            ConnectionKindTab::Local => &mut self.local,
-            ConnectionKindTab::Telnet => &mut self.telnet,
-            ConnectionKindTab::Serial => &mut self.serial,
-            ConnectionKindTab::Rdp => &mut self.rdp,
-            ConnectionKindTab::Vnc => &mut self.vnc,
-        };
-        *open = !*open;
-        *open
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,10 +246,60 @@ pub(crate) enum ConnectionEditorField {
     VncReconnectAttempts,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ConnectionEditorFocusTarget {
+    Field(ConnectionEditorField),
+    Select(ConnectionEditorSelect),
+    ForwardingEndpoint {
+        index: usize,
+        field: ConnectionEditorField,
+    },
+    Heading,
+}
+
+impl ConnectionEditorField {
+    pub(crate) fn section(self) -> ConnectionEditorSection {
+        match self {
+            Self::Name
+            | Self::NewTag
+            | Self::NewGroupName
+            | Self::Description
+            | Self::Host
+            | Self::Port => ConnectionEditorSection::Basic,
+            Self::Username
+            | Self::Domain
+            | Self::Password
+            | Self::AgentEnvironmentVariable
+            | Self::AgentUnixSocket => ConnectionEditorSection::Authentication,
+            Self::AgentForwardingEnvironmentVariable | Self::AgentForwardingSocketPath => {
+                ConnectionEditorSection::Forwarding
+            }
+            Self::ShellPath | Self::ShellArgs | Self::WorkingDir => {
+                ConnectionEditorSection::Startup
+            }
+            Self::SerialPort | Self::BaudRate => ConnectionEditorSection::Serial,
+            Self::PostLoginCommand | Self::PostLoginDelay => ConnectionEditorSection::PostLogin,
+            Self::SftpShellDetectionTimeout => ConnectionEditorSection::Sftp,
+            Self::TelnetKeepAliveInterval => ConnectionEditorSection::Compatibility,
+            Self::TelnetAutoLoginTimeout
+            | Self::TelnetAutoLoginUsernamePrompt
+            | Self::TelnetAutoLoginPasswordPrompt
+            | Self::TelnetAutoLoginSuccessPrompt
+            | Self::TelnetAutoLoginFailurePrompt
+            | Self::TelnetAutoLoginMaxRetries => ConnectionEditorSection::AutoLogin,
+            Self::RdpDisplayWidth | Self::RdpDisplayHeight => ConnectionEditorSection::Display,
+            Self::RdpReconnectAttempts | Self::VncReconnectAttempts => {
+                ConnectionEditorSection::Session
+            }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConnectionEditorState {
     pub(crate) id: Option<String>,
     pub(crate) kind: ConnectionKindTab,
+    pub(crate) section: ConnectionEditorSection,
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) tags: Vec<String>,
@@ -223,7 +320,7 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) rdp_display: nyaterm_core::RdpDisplaySettings,
     pub(crate) rdp_clipboard: nyaterm_core::RdpClipboardSettings,
     pub(crate) rdp_reconnect: nyaterm_core::RdpReconnectSettings,
-    pub(crate) rdp_advanced_tab: ConnectionEditorRdpTab,
+
     pub(crate) vnc_security: nyaterm_core::VncSecuritySettings,
     pub(crate) vnc_display: nyaterm_core::VncDisplaySettings,
     pub(crate) vnc_clipboard: nyaterm_core::VncClipboardSettings,
@@ -300,16 +397,23 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) post_login_command: String,
     pub(crate) post_login_delay_ms: String,
     pub(crate) recording: Option<nyaterm_core::ConnectionRecordingSettings>,
-    pub(crate) advanced: ConnectionEditorAdvancedVisibility,
-    pub(crate) advanced_network_tab: ConnectionEditorAdvancedTab,
-    pub(crate) advanced_behavior_tab: ConnectionEditorAdvancedTab,
-    pub(crate) telnet_advanced_tab: ConnectionEditorTelnetTab,
+
+    pub(crate) forwarding_tab: ConnectionEditorForwardingTab,
+
     pub(crate) connect_after_save: bool,
     pub(crate) focused_field: ConnectionEditorField,
     pub(crate) error: Option<String>,
 }
 
 impl ConnectionEditorState {
+    pub(crate) fn select_section(&mut self, section: ConnectionEditorSection) -> bool {
+        if !ConnectionEditorSection::for_kind(self.kind).contains(&section) {
+            return false;
+        }
+        self.section = section;
+        true
+    }
+
     pub(crate) fn add_tag(&mut self) -> bool {
         let tag = self.new_tag.trim();
         if tag.is_empty() || self.tags.iter().any(|existing| existing == tag) {

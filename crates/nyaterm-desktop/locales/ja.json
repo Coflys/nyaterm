@@ -601,6 +601,23 @@
     "usernameRegexPlaceholder": "ユーザー名プロンプト用の正規表現"
   },
   "dialog": {
+    "editorSections": {
+      "basic": "基本情報",
+      "authentication": "認証",
+      "network": "ネットワークとプロキシ",
+      "terminal": "ターミナル設定",
+      "sftp": "SFTP",
+      "forwarding": "転送",
+      "postLogin": "ログイン後のコマンド",
+      "algorithms": "セキュリティとアルゴリズム",
+      "autoLogin": "自動ログイン",
+      "compatibility": "プロトコルと互換性",
+      "security": "セキュリティ",
+      "display": "表示",
+      "session": "セッション",
+      "serial": "シリアルポート設定",
+      "startup": "起動設定"
+    },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
     "serialFlowControl": "Flow control",
     "serialFlowControlNone": "None",

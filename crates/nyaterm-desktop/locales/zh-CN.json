@@ -601,6 +601,23 @@
     "usernameRegexPlaceholder": "匹配用户名提示的正则表达式"
   },
   "dialog": {
+    "editorSections": {
+      "basic": "基本信息",
+      "authentication": "身份认证",
+      "network": "网络与代理",
+      "terminal": "终端设置",
+      "sftp": "SFTP",
+      "forwarding": "转发",
+      "postLogin": "登录后命令",
+      "algorithms": "安全与算法",
+      "autoLogin": "自动登录",
+      "compatibility": "协议与兼容",
+      "security": "安全",
+      "display": "显示",
+      "session": "会话",
+      "serial": "串口设置",
+      "startup": "启动设置"
+    },
     "serialSoftwareFlowControlModemDisabled": "软件流控下禁用 XMODEM/YMODEM/ZMODEM 文件传输，因为 XON/XOFF 可能吞掉二进制数据。",
     "serialFlowControl": "流控制",
     "serialFlowControlNone": "无",

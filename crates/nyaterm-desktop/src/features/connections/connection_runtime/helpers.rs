@@ -11,9 +11,8 @@ use nyaterm_store::{StoreDomain, store_request};
 
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
 use crate::models::{
-    ConnectionEditorAdvancedTab, ConnectionEditorAdvancedVisibility, ConnectionEditorField,
-    ConnectionEditorPasswordSource, ConnectionEditorRdpTab, ConnectionEditorSshAlgorithmTab,
-    ConnectionEditorState, ConnectionEditorTelnetTab, ConnectionKindTab,
+    ConnectionEditorField, ConnectionEditorForwardingTab, ConnectionEditorPasswordSource,
+    ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionKindTab,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +37,10 @@ pub(super) enum ConnectionEditorValidationError {
     PostLoginDelayInvalid,
     SftpShellDetectionTimeoutInvalid,
     SshAgentEndpoint(SshAgentEndpointValidationError),
+    SshAgentForwarding {
+        error: SshAgentEndpointValidationError,
+        endpoint_index: Option<usize>,
+    },
     SshAlgorithms(nyaterm_transport::SshAlgorithmValidationError),
 }
 
@@ -167,7 +170,7 @@ pub(super) fn connection_editor_from_saved(
         rdp_display: RdpDisplaySettings::default(),
         rdp_clipboard: RdpClipboardSettings::default(),
         rdp_reconnect: RdpReconnectSettings::default(),
-        rdp_advanced_tab: ConnectionEditorRdpTab::Security,
+
         vnc_security: VncSecuritySettings::default(),
         vnc_display: VncDisplaySettings::default(),
         vnc_clipboard: VncClipboardSettings::default(),
@@ -257,11 +260,11 @@ pub(super) fn connection_editor_from_saved(
         post_login_command: post_login.command,
         post_login_delay_ms: post_login.delay_ms.to_string(),
         recording: connection.recording.clone(),
-        advanced: ConnectionEditorAdvancedVisibility::default(),
-        advanced_network_tab: ConnectionEditorAdvancedTab::Network,
-        advanced_behavior_tab: ConnectionEditorAdvancedTab::PostLogin,
-        telnet_advanced_tab: ConnectionEditorTelnetTab::Input,
+
+        forwarding_tab: ConnectionEditorForwardingTab::Agent,
+
         connect_after_save,
+        section: crate::models::ConnectionEditorSection::Basic,
         focused_field: ConnectionEditorField::Name,
         error: None,
     };
@@ -658,12 +661,32 @@ pub(super) fn build_saved_connection_from_editor(
     if editor.kind == ConnectionKindTab::Ssh {
         // Endpoint drafts are used only by Agent authentication or forwarding.
         // Hidden values left after changing auth mode must not block saving.
-        if editor.auth_mode == "agent" || editor.agent_forwarding_config.enabled {
+        if editor.auth_mode == "agent" {
             validate_ssh_agent_endpoint(&editor.agent_endpoint)
                 .map_err(ConnectionEditorValidationError::SshAgentEndpoint)?;
         }
-        validate_ssh_agent_forwarding_config(&editor.agent_forwarding_config)
-            .map_err(ConnectionEditorValidationError::SshAgentEndpoint)?;
+        validate_ssh_agent_forwarding_config(&editor.agent_forwarding_config).map_err(|error| {
+            let mut seen = std::collections::HashSet::new();
+            let endpoint_index = match error {
+                SshAgentEndpointValidationError::Empty
+                | SshAgentEndpointValidationError::Invalid
+                | SshAgentEndpointValidationError::TooLong
+                | SshAgentEndpointValidationError::DuplicateEndpoint => editor
+                    .agent_forwarding_config
+                    .sources
+                    .external_agent_endpoints
+                    .iter()
+                    .position(|endpoint| {
+                        validate_ssh_agent_endpoint(endpoint).is_err()
+                            || !seen.insert(nyaterm_core::ssh_agent_endpoint_key(endpoint))
+                    }),
+                _ => None,
+            };
+            ConnectionEditorValidationError::SshAgentForwarding {
+                error,
+                endpoint_index,
+            }
+        })?;
         if editor.post_login_enabled && editor.post_login_command.trim().is_empty() {
             return Err(ConnectionEditorValidationError::PostLoginCommandRequired);
         }
@@ -1872,7 +1895,6 @@ pub(in crate::features) enum ConnectionEditorToggle {
     VncViewOnly,
     RecordingUseGlobal,
     RecordingAutoStart,
-    Advanced,
 }
 
 #[cfg(test)]
