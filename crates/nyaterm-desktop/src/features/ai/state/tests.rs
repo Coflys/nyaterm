@@ -1036,12 +1036,8 @@ fn background_completion_distinguishes_foreign_and_matched_stale_jobs() {
         background_job_id: Some(launch.job_id),
         step_index: 0,
         max_steps: 3,
-        output_start_len: 0,
         started_at: now,
-        min_wait_until: now,
         timeout_at: now + Duration::from_secs(1),
-        last_seen_len: 0,
-        stable_since: now,
     };
 
     assert!(matches!(
@@ -1079,16 +1075,18 @@ fn agent_step_limit_and_observation_poll_stay_on_the_owner() {
         background_job_id: None,
         step_index: 0,
         max_steps: 3,
-        output_start_len: 4,
         started_at: now - Duration::from_secs(2),
-        min_wait_until: now - Duration::from_secs(1),
         timeout_at: now + Duration::from_secs(10),
-        last_seen_len: 8,
-        stable_since: now - Duration::from_secs(1),
     });
 
-    let poll = state.poll_agent_observation(now, 8, Duration::from_millis(100));
-    assert!(matches!(poll, super::AiAgentObservationPoll::Target(_)));
+    state.register_raw_capture("Router#", now);
+    let visible = state.process_agent_output("terminal-a", "result\r\nRouter#");
+    assert_eq!(visible.visible_text, "result\r\nRouter#");
+    let poll = state.poll_agent_observation(now + Duration::from_secs(2));
+    assert!(matches!(
+        poll,
+        super::AiAgentObservationPoll::Raw(_, _, nyaterm_core::raw_cli_capture::RawCliEnd::Prompt)
+    ));
     assert!(state.agent_loop_snapshot().is_none());
 }
 
@@ -1597,12 +1595,8 @@ fn consecutive_agent_commands_and_full_final_answer_own_distinct_assistant_messa
                 background_job_id: None,
                 step_index,
                 max_steps: 4,
-                output_start_len: 0,
                 started_at: now,
-                min_wait_until: now,
                 timeout_at: now,
-                last_seen_len: 0,
-                stable_since: now,
             };
             state.set_agent_loop(execution.clone());
             state.record_agent_observation(
@@ -1680,12 +1674,8 @@ fn foreign_agent_continuation_cannot_claim_the_active_response() {
         background_job_id: None,
         step_index: 0,
         max_steps: 4,
-        output_start_len: 0,
         started_at: now,
-        min_wait_until: now,
         timeout_at: now,
-        last_seen_len: 0,
-        stable_since: now,
     };
     assert!(
         state
@@ -1860,12 +1850,8 @@ fn mismatched_background_card_does_not_clear_current_cancellation_or_update_outp
         background_job_id: Some(launch.job_id),
         step_index: 0,
         max_steps: 3,
-        output_start_len: 0,
         started_at: now,
-        min_wait_until: now,
         timeout_at: now,
-        last_seen_len: 0,
-        stable_since: now,
     };
     state.set_agent_loop(active.clone());
     let mut foreign = active;
@@ -1933,4 +1919,172 @@ fn native_run_freezes_only_its_session_history_before_the_current_task() {
     assert_eq!(state.native_initial_history().unwrap(), initial);
     state.switch_scope("terminal:other");
     assert!(state.native_initial_history().is_none());
+}
+
+fn raw_observation_fixture(state: &mut AiFeatureState, now: Instant) {
+    state.set_agent_loop(AiAgentLoopState {
+        command_card_id: None,
+        ai_session_id: state.chat_session_id().to_string(),
+        terminal_session_id: "raw-terminal".into(),
+        available_targets: Vec::new(),
+        default_target_session_id: None,
+        command: "show version".into(),
+        marker_id: None,
+        background_job_id: None,
+        step_index: 0,
+        max_steps: 5,
+        started_at: now,
+        timeout_at: now + Duration::from_secs(30),
+    });
+    state.register_raw_capture("Router#", now);
+}
+
+#[test]
+fn raw_capture_uses_session_events_and_releases_between_commands() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let now = Instant::now();
+    for answer in ["first", "second"] {
+        raw_observation_fixture(&mut state, now);
+        assert!(state.agent_capture_is_active_for("raw-terminal"));
+        state.process_agent_output("other-terminal", "wrong output");
+        state.process_agent_output("raw-terminal", &format!("{answer}\r\nRouter#"));
+        match state.poll_agent_observation(now + Duration::from_secs(2)) {
+            super::AiAgentObservationPoll::Raw(_, output, end) => {
+                assert_eq!(output, format!("{answer}\r\nRouter#"));
+                assert_eq!(end, nyaterm_core::raw_cli_capture::RawCliEnd::Prompt);
+            }
+            _ => panic!("expected raw prompt completion"),
+        }
+        assert!(!state.agent_capture_is_active_for("raw-terminal"));
+        assert!(state.agent.raw_capture.is_none());
+    }
+}
+
+#[test]
+fn raw_capture_is_bound_to_scope_and_cancel_disconnect_and_gap() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let now = Instant::now();
+    state.switch_scope("terminal:owner");
+    raw_observation_fixture(&mut state, now);
+    state.switch_scope("terminal:other");
+    state.process_agent_output("raw-terminal", "echo\r\n");
+    assert!(state.agent_capture_is_active_for("raw-terminal"));
+    state.switch_scope("terminal:owner");
+    assert!(matches!(
+        state.poll_agent_observation(now + Duration::from_secs(2)),
+        super::AiAgentObservationPoll::Waiting
+    ));
+    state.cancel_chat_and_agent();
+    assert!(!state.agent_capture_is_active_for("raw-terminal"));
+    assert!(state.agent.raw_capture.is_none());
+
+    raw_observation_fixture(&mut state, now);
+    state.stop_agent_for_closed_target();
+    assert!(!state.agent_capture_is_active_for("raw-terminal"));
+    assert!(state.agent.raw_capture.is_none());
+
+    raw_observation_fixture(&mut state, now);
+    state.process_agent_output("raw-terminal", "partial output before gap");
+    let (_, partial) = state.take_agent_loop_for_session("raw-terminal").unwrap();
+    assert_eq!(partial.as_deref(), Some("partial output before gap"));
+    assert!(state.agent.raw_capture.is_none());
+}
+
+#[test]
+fn raw_and_marker_deadlines_are_not_extended_by_output_activity() {
+    let cx = TestAppContext::single();
+    let mut state = state(&cx);
+    let now = Instant::now();
+    raw_observation_fixture(&mut state, now);
+    state.process_agent_output("raw-terminal", "ongoing output");
+    assert!(matches!(
+        state.poll_agent_observation(now + Duration::from_secs(31)),
+        super::AiAgentObservationPoll::Raw(
+            _,
+            _,
+            nyaterm_core::raw_cli_capture::RawCliEnd::TimedOut
+        )
+    ));
+    assert!(!state.agent_capture_is_active_for("raw-terminal"));
+    raw_observation_fixture(&mut state, now);
+    state.agent.raw_capture = None;
+    state.agent.loop_state.as_mut().unwrap().marker_id = Some("marker".into());
+    state.register_agent_capture("marker".into());
+    state.process_agent_output("raw-terminal", "__DF_CMD_START_marker__\r\nongoing");
+    assert!(matches!(
+        state.poll_agent_observation(now + Duration::from_secs(31)),
+        super::AiAgentObservationPoll::TimedOut(_)
+    ));
+    assert!(!state.agent.capture.has_active());
+}
+
+#[test]
+fn raw_session_events_are_captured_even_with_a_full_degraded_ui_tail() {
+    use gpui::AppContext as _;
+    use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
+    use nyaterm_transport::{LocalSessionConfig, SessionEvent};
+
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata, TERMINAL_UI_OUTPUT_TAIL_CAP};
+
+    let mut cx = TestAppContext::single();
+    let root = std::env::temp_dir().join(format!("nyaterm-raw-capture-{}", uuid()));
+    let runtime = AppRuntime::from_parts_for_test(
+        RuntimeMode::Portable,
+        root.clone(),
+        root.join("config"),
+        root.join("logs"),
+        root.join("cache"),
+        None,
+    );
+    let stores = UiStoreHandles {
+        startup_restore: cx.new(|_| StartupRestoreStore::default()),
+        overlays: cx.new(|_| OverlayStore::default()),
+    };
+    let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+    cx.update_entity(&app, |app, cx| {
+        app.session.register_session_metadata(
+            "raw-terminal",
+            SessionRuntimeMetadata {
+                ssh_config: None,
+                ssh_multiplex_key: None,
+                source_connection_id: None,
+                ai_execution_profile: AiExecutionProfile::SendOnly,
+                launch_config: SessionLaunchConfig::Local(LocalSessionConfig::default()),
+                disconnected: false,
+            },
+        );
+        app.session.select_active_session("raw-terminal");
+        app.terminal.seed_session_view(
+            "raw-terminal".into(),
+            "x".repeat(TERMINAL_UI_OUTPUT_TAIL_CAP),
+            "UTF-8",
+        );
+        app.terminal.enter_session_render_degraded("raw-terminal");
+        app.terminal.complete_terminal_windows_restore();
+        raw_observation_fixture(&mut app.ai, Instant::now());
+        app.sync_session_event_bridge_policy();
+        app.start_runtime_data_plane_drain(cx);
+        app.session
+            .push_event_bridge_ui_event_for_test(SessionEvent::Output {
+                session_id: "raw-terminal".into(),
+                data: b"command-result\r\nRouter#".to_vec(),
+            });
+    });
+    cx.run_until_parked();
+    cx.update_entity(&app, |app, _| {
+        match app
+            .ai
+            .poll_agent_observation(Instant::now() + Duration::from_secs(1))
+        {
+            super::AiAgentObservationPoll::Raw(_, output, end) => {
+                assert_eq!(output, "command-result\r\nRouter#");
+                assert_eq!(end, nyaterm_core::raw_cli_capture::RawCliEnd::Prompt);
+            }
+            _ => panic!("session output must reach raw capture independently of the UI tail"),
+        }
+    });
 }

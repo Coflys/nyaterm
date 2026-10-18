@@ -1,3 +1,8 @@
+use nyaterm_core::network_cli_prompt::{
+    resolve_ssh_execution_profile, ssh_allows_background_execution,
+};
+use nyaterm_core::raw_cli_capture::RawCliEnd;
+
 use std::time::{Duration, Instant};
 
 use gpui::Context;
@@ -22,10 +27,7 @@ use super::ai_jobs::{
 };
 use super::presentation::AiAgentStepKind;
 use super::state::AiAgentObservationPoll;
-use super::{
-    AGENT_DEFAULT_STEP_TIMEOUT, AGENT_OBSERVATION_MIN_WAIT, AGENT_OBSERVATION_POLL_INTERVAL,
-    AGENT_OBSERVATION_QUIET,
-};
+use super::{AGENT_DEFAULT_STEP_TIMEOUT, AGENT_OBSERVATION_POLL_INTERVAL};
 
 impl NyaTermApp {
     pub(in crate::features) fn upsert_ai_agent_step(
@@ -172,9 +174,6 @@ impl NyaTermApp {
                 }
                 None => (None, None),
             };
-        let output_start_len = self
-            .terminal_buffer_text_for_session(&terminal_session_id)
-            .len();
         let available_target_ids = self.ai_effective_target_session_ids();
         let available_targets = self.ai_terminal_targets_for_sessions(&available_target_ids);
         self.ai.set_agent_loop(AiAgentLoopState {
@@ -182,19 +181,25 @@ impl NyaTermApp {
             ai_session_id: self.ai.chat_session_id().to_string(),
             terminal_session_id: terminal_session_id.clone(),
             available_targets,
-            default_target_session_id: Some(terminal_session_id),
+            default_target_session_id: Some(terminal_session_id.clone()),
             command: command.trim().to_string(),
             marker_id,
             background_job_id: None,
             step_index,
             max_steps,
-            output_start_len,
             started_at: now,
-            min_wait_until: now + AGENT_OBSERVATION_MIN_WAIT,
             timeout_at: now + timeout,
-            last_seen_len: output_start_len,
-            stable_since: now,
         });
+        if profile == AiExecutionProfile::SendOnly {
+            // Only a small initial hint is copied; command data comes from session events.
+            let tail = self.terminal_buffer_tail_for_session(&terminal_session_id);
+            let mut start = tail.len().saturating_sub(4096);
+            while !tail.is_char_boundary(start) {
+                start += 1;
+            }
+            let initial = tail[start..].to_string();
+            self.ai.register_raw_capture(&initial, now);
+        }
         self.ensure_ai_agent_loop_clock(cx);
         self.sync_session_event_bridge_policy();
         self.ai.set_panel_status(format!(
@@ -213,6 +218,33 @@ impl NyaTermApp {
         Ok(wrapped_command)
     }
 
+    /// Shared by native/legacy Agent and external MCP execution. All of these
+    /// paths open an exec channel rather than use the interactive terminal.
+    pub(in crate::features) fn validate_ai_background_execution(
+        &self,
+        terminal_session_id: &str,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .session_info(terminal_session_id)
+            .ok_or_else(|| "Target terminal session is unavailable".to_string())?;
+        let profile = self.ai_execution_profile_for_session(terminal_session_id);
+        if profile == AiExecutionProfile::Disabled {
+            return Err("AI Agent command execution is disabled for this session".to_string());
+        }
+        if profile == AiExecutionProfile::SendOnly
+            || (session.kind == SessionKind::Ssh
+                && !ssh_allows_background_execution(
+                    profile,
+                    self.ssh_session_is_configured_network_device(terminal_session_id),
+                    self.terminal_buffer_tail_for_session(terminal_session_id),
+                ))
+        {
+            return Err("AI Agent background execution is unavailable for raw CLI sessions; disable Background Execution to use the existing terminal".to_string());
+        }
+        Ok(())
+    }
+
     pub(in crate::features) fn begin_ai_agent_background_execution(
         &mut self,
         card: &AiCommandCard,
@@ -227,6 +259,7 @@ impl NyaTermApp {
             .session_info(&terminal_session_id)
             .filter(|_| !self.session.is_disconnected(&terminal_session_id))
             .ok_or_else(|| "Active terminal session was not found".to_string())?;
+        self.validate_ai_background_execution(&terminal_session_id)?;
         let (target, target_label) = match session.kind {
             SessionKind::Ssh => {
                 let config = self
@@ -275,9 +308,6 @@ impl NyaTermApp {
         let launch = self.ai.begin_chat_job();
         let job_id = launch.job_id;
         let cancel = launch.cancel;
-        let output_start_len = self
-            .terminal_buffer_text_for_session(&terminal_session_id)
-            .len();
         let available_target_ids = self.ai_effective_target_session_ids();
         let available_targets = self.ai_terminal_targets_for_sessions(&available_target_ids);
         let state = AiAgentLoopState {
@@ -291,12 +321,8 @@ impl NyaTermApp {
             background_job_id: Some(job_id),
             step_index,
             max_steps,
-            output_start_len,
             started_at: now,
-            min_wait_until: now,
             timeout_at: now + timeout,
-            last_seen_len: output_start_len,
-            stable_since: now,
         };
         self.ai.set_agent_loop(state.clone());
         self.ensure_ai_agent_loop_clock(cx);
@@ -355,16 +381,8 @@ impl NyaTermApp {
         Ok(())
     }
 
-    /// Watch for the terminal to fall quiet while an agent loop is running.
-    ///
-    /// This one stays a poll on purpose, and the honest reason is that it is watching
-    /// for the *absence* of output: `poll_agent_observation` waits for the output
-    /// length to hold still for `AGENT_OBSERVATION_QUIET`, and nothing emits an event
-    /// when output stops. What changes is the scope -- it polls only while an agent
-    /// loop exists, at its own cadence, instead of riding a global tick that also had
-    /// to name `ai.has_background_work()` in its quiet gate to stay responsive.
-    ///
-    /// Idempotent, and retires itself when the loop ends.
+    /// Poll only while observing a command: prompt settlement and deadlines
+    /// require a clock even when no further session event arrives.
     pub(in crate::features) fn ensure_ai_agent_loop_clock(&mut self, cx: &mut Context<Self>) {
         if self.ai.agent_loop_clock_is_armed() || self.ai.agent_loop_snapshot().is_none() {
             return;
@@ -417,14 +435,53 @@ impl NyaTermApp {
             return true;
         }
         let now = Instant::now();
-        let current_len = self
-            .terminal
-            .session_output_len_or_default(&terminal_session_id);
-        match self
-            .ai
-            .poll_agent_observation(now, current_len, AGENT_OBSERVATION_QUIET)
-        {
+        match self.ai.poll_agent_observation(now) {
             AiAgentObservationPoll::Waiting => false,
+            AiAgentObservationPoll::Raw(state, mut output, end) => {
+                self.sync_session_event_bridge_policy();
+                output.push_str("\n(");
+                output.push_str(end.description());
+                output.push(')');
+                let observation = CommandObservation {
+                    output,
+                    exit_code: None,
+                    duration_ms: now
+                        .duration_since(state.started_at)
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                };
+                if end != RawCliEnd::Prompt {
+                    // Do not automatically send another command into a pager,
+                    // confirmation prompt or a command that may still be running.
+                    self.ai
+                        .complete_native_terminal(Err(nyaterm_mcp_protocol::RpcError {
+                            code: "completion_unconfirmed".into(),
+                            message: observation.output.clone(),
+                        }));
+                    self.cancel_ai_chat(cx);
+                    self.ai.set_panel_status(end.description());
+                }
+                self.ai.record_agent_observation(
+                    state.step_index,
+                    &observation,
+                    observation_summary(&observation),
+                );
+                if end == RawCliEnd::Prompt {
+                    if !self.complete_native_terminal_observation(&observation, false, false) {
+                        self.start_ai_agent_continuation(state, observation, cx);
+                    }
+                } else {
+                    self.upsert_ai_agent_step(
+                        state.step_index,
+                        AiAgentStepStatus::Failed,
+                        AiAgentStepKind::Diagnostic,
+                        "Completion unconfirmed",
+                        end.description(),
+                    );
+                }
+                true
+            }
             AiAgentObservationPoll::TimedOut(state) => {
                 self.sync_session_event_bridge_policy();
                 let duration_ms = now
@@ -447,33 +504,6 @@ impl NyaTermApp {
                     observation_summary(&observation),
                 );
                 if !self.complete_native_terminal_observation(&observation, true, false) {
-                    self.start_ai_agent_continuation(state, observation, cx);
-                }
-                true
-            }
-            AiAgentObservationPoll::Target(state) => {
-                let terminal_output =
-                    self.terminal_buffer_text_for_session(&state.terminal_session_id);
-                let captured = terminal_output.get(state.output_start_len..);
-                let source_truncated = captured.is_none();
-                let output = captured.unwrap_or_default().to_string();
-                let duration_ms = now
-                    .duration_since(state.started_at)
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX);
-                let observation = CommandObservation {
-                    output,
-                    exit_code: None,
-                    duration_ms,
-                };
-                self.ai.record_agent_observation(
-                    state.step_index,
-                    &observation,
-                    observation_summary(&observation),
-                );
-                if !self.complete_native_terminal_observation(&observation, false, source_truncated)
-                {
                     self.start_ai_agent_continuation(state, observation, cx);
                 }
                 true
@@ -527,23 +557,23 @@ impl NyaTermApp {
         };
         let visible_scope = self.ai.active_scope_key().to_string();
         self.ai.switch_scope(&scope);
-        let Some(state) = self.ai.take_agent_loop_for_session(session_id) else {
+        let Some((state, raw_output)) = self.ai.take_agent_loop_for_session(session_id) else {
             self.ai.switch_scope(&visible_scope);
             return false;
         };
-        if state.marker_id.is_some() {
-            self.sync_session_event_bridge_policy();
-        }
+        self.sync_session_event_bridge_policy();
         let duration_ms = state
             .started_at
             .elapsed()
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
+        let mut output = raw_output.unwrap_or_default();
+        output.push_str(&format!(
+            "\n(terminal output dropped {dropped_bytes} byte(s); command output is incomplete)"
+        ));
         let observation = CommandObservation {
-            output: format!(
-                "(terminal output dropped {dropped_bytes} byte(s); command output is incomplete)"
-            ),
+            output,
             exit_code: None,
             duration_ms,
         };
@@ -557,7 +587,24 @@ impl NyaTermApp {
             "Output dropped",
             observation_summary(&observation),
         );
-        if !self.complete_native_terminal_observation(&observation, false, true) {
+        if state.marker_id.is_none() {
+            self.ai
+                .complete_native_terminal(Err(nyaterm_mcp_protocol::RpcError {
+                    code: "output_incomplete".into(),
+                    message: observation.output.clone(),
+                }));
+            self.cancel_ai_chat(cx);
+            self.ai.set_panel_status(
+                "AI Agent stopped because command output was lost; review the terminal",
+            );
+            self.upsert_ai_agent_step(
+                state.step_index,
+                AiAgentStepStatus::Failed,
+                AiAgentStepKind::Diagnostic,
+                "Output dropped",
+                observation_summary(&observation),
+            );
+        } else if !self.complete_native_terminal_observation(&observation, false, true) {
             self.start_ai_agent_continuation(state, observation, cx);
         }
         self.defer_ai_panel_snapshot_flush(cx);
@@ -581,18 +628,14 @@ impl NyaTermApp {
             .session_info(session_id)
             .filter(|_| !self.session.is_disconnected(session_id))
             .map(|session| match session.kind {
-                // An SSH session can land on a network-device CLI instead of a
-                // shell. Those devices do not run the marker wrapper, so the
-                // agent must send the bare command and fall back to quiet-output
-                // completion; otherwise every command times out waiting for
-                // markers that never appear (issue #910).
-                SessionKind::Ssh if self.ssh_session_looks_like_network_cli(session_id) => {
-                    AiExecutionProfile::SendOnly
+                SessionKind::Ssh => resolve_ssh_execution_profile(
+                    configured,
+                    self.ssh_session_is_configured_network_device(session_id),
+                    self.terminal_buffer_tail_for_session(session_id),
+                ),
+                SessionKind::LocalPty | SessionKind::Telnet | SessionKind::RawTcp => {
+                    AiExecutionProfile::Posix
                 }
-                SessionKind::LocalPty
-                | SessionKind::Ssh
-                | SessionKind::Telnet
-                | SessionKind::RawTcp => AiExecutionProfile::Posix,
                 SessionKind::Serial | SessionKind::Rdp | SessionKind::Vnc => {
                     AiExecutionProfile::SendOnly
                 }
@@ -600,17 +643,11 @@ impl NyaTermApp {
             .unwrap_or(AiExecutionProfile::SendOnly)
     }
 
-    /// Whether the most recent output of an SSH session ends in a network
-    /// device CLI prompt. Anything unrecognised keeps the shell profile.
-    ///
-    /// `allow(dead_code)`: the lib-test build only reaches this through the
-    /// agent entry point, and the lint job compiles that target with
-    /// `-D warnings`.
-    #[allow(dead_code)]
-    fn ssh_session_looks_like_network_cli(&self, session_id: &str) -> bool {
-        nyaterm_core::network_cli_prompt::looks_like_network_cli_prompt(
-            &self.terminal_buffer_text_for_session(session_id),
-        )
+    fn ssh_session_is_configured_network_device(&self, session_id: &str) -> bool {
+        self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(&metadata.launch_config, SessionLaunchConfig::Ssh(config) if config.is_network_device())
+        }) || (self.session.active_id() == Some(session_id)
+            && self.session.active_ssh_config().is_some_and(|config| config.is_network_device()))
     }
 
     pub(in crate::features) fn start_ai_agent_continuation(
@@ -834,12 +871,8 @@ impl NyaTermApp {
             background_job_id: None,
             step_index,
             max_steps,
-            output_start_len: 0,
             started_at: now,
-            min_wait_until: now,
             timeout_at: now,
-            last_seen_len: 0,
-            stable_since: now,
         };
         self.start_ai_agent_continuation_with_message(
             state,

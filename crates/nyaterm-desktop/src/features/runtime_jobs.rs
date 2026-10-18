@@ -271,12 +271,8 @@ pub(in crate::features) struct AiAgentLoopState {
     pub(in crate::features) background_job_id: Option<u64>,
     pub(in crate::features) step_index: u16,
     pub(in crate::features) max_steps: u16,
-    pub(in crate::features) output_start_len: usize,
     pub(in crate::features) started_at: Instant,
-    pub(in crate::features) min_wait_until: Instant,
     pub(in crate::features) timeout_at: Instant,
-    pub(in crate::features) last_seen_len: usize,
-    pub(in crate::features) stable_since: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

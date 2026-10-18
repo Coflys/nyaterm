@@ -5,6 +5,8 @@
 //! agent loop. They were seventy `ai_*` fields on `NyaTermApp`, which made it
 //! impossible to see which ones move together.
 
+use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
+
 pub(in crate::features) mod harness;
 mod presentation;
 mod providers;
@@ -16,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui::FocusHandle;
 use nyaterm_core::{
@@ -222,6 +224,7 @@ struct AiAgentState {
     /// True while the agent-loop observation clock task is alive.
     loop_clock_armed: bool,
     capture: AgentOutputCaptureProcessor,
+    raw_capture: Option<RawCliCapture>,
     steps: Vec<AiAgentStepView>,
     thought_expanded: HashSet<u16>,
     output_expanded: HashSet<u16>,
@@ -238,6 +241,7 @@ impl AiAgentState {
             loop_state: None,
             loop_clock_armed: false,
             capture: AgentOutputCaptureProcessor::new(),
+            raw_capture: None,
             steps: Vec::new(),
             thought_expanded: HashSet::new(),
             output_expanded: HashSet::new(),
@@ -269,8 +273,8 @@ pub(in crate::features) enum AiAgentBackgroundEffect {
 
 pub(in crate::features) enum AiAgentObservationPoll {
     Waiting,
-    Target(AiAgentLoopState),
     TimedOut(AiAgentLoopState),
+    Raw(AiAgentLoopState, String, RawCliEnd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -958,6 +962,7 @@ impl AiFeatureState {
             self.agent.capture.cancel(marker_id);
         }
         self.agent.capture = AgentOutputCaptureProcessor::new();
+        self.agent.raw_capture = None;
         self.agent.task_prompt = None;
         self.agent.conversation.clear();
         self.agent.json_protocol = false;
@@ -1923,7 +1928,12 @@ impl AiFeatureState {
         self.agent.capture.register(marker_id);
     }
 
+    pub(in crate::features) fn register_raw_capture(&mut self, initial_output: &str, now: Instant) {
+        self.agent.raw_capture = Some(RawCliCapture::new(initial_output, now));
+    }
+
     pub(in crate::features) fn set_agent_loop(&mut self, state: AiAgentLoopState) {
+        self.agent.raw_capture = None;
         if let Some(card_id) = state.command_card_id.as_deref() {
             self.associate_agent_command(state.step_index, card_id);
         }
@@ -1932,6 +1942,10 @@ impl AiFeatureState {
 
     pub(in crate::features) fn stop_agent_for_closed_target(&mut self) -> Option<u16> {
         let state = self.agent.loop_state.take()?;
+        self.agent.raw_capture = None;
+        if let Some(marker_id) = state.marker_id.as_deref() {
+            self.agent.capture.cancel(marker_id);
+        }
         if self.ai_native_terminal_closed() {
             return Some(state.step_index);
         }
@@ -1952,8 +1966,6 @@ impl AiFeatureState {
     pub(in crate::features) fn poll_agent_observation(
         &mut self,
         now: Instant,
-        current_len: usize,
-        quiet: Duration,
     ) -> AiAgentObservationPoll {
         if self.chat.pending {
             return AiAgentObservationPoll::Waiting;
@@ -1964,32 +1976,29 @@ impl AiFeatureState {
         if state.background_job_id.is_some() {
             return AiAgentObservationPoll::Waiting;
         }
-        if current_len != state.last_seen_len {
-            state.last_seen_len = current_len;
-            state.stable_since = now;
-            return AiAgentObservationPoll::Waiting;
+        if let Some(capture) = self.agent.raw_capture.as_ref() {
+            let Some(end) = capture.poll(now, state.timeout_at) else {
+                return AiAgentObservationPoll::Waiting;
+            };
+            let state = self.agent.loop_state.take().expect("agent loop is present");
+            let output = self
+                .agent
+                .raw_capture
+                .take()
+                .expect("raw capture is present")
+                .into_output();
+            return AiAgentObservationPoll::Raw(state, output, end);
         }
-        if now < state.min_wait_until {
-            return AiAgentObservationPoll::Waiting;
-        }
-        let has_observed_output = current_len > state.output_start_len;
-        let output_is_quiet = now.duration_since(state.stable_since) >= quiet;
-        let timed_out = now >= state.timeout_at;
-        if timed_out && state.marker_id.is_some() {
+        // Marker completion is event-driven. Always enforce its deadline before
+        // activity checks, including when terminal output never stops.
+        if now >= state.timeout_at && state.marker_id.is_some() {
             let state = self.agent.loop_state.take().expect("agent loop is present");
             if let Some(marker_id) = state.marker_id.as_deref() {
                 self.agent.capture.cancel(marker_id);
             }
-            self.panel.status = format!("AI Agent command capture timed out: {}", state.command);
             return AiAgentObservationPoll::TimedOut(state);
         }
-        if !timed_out && (!has_observed_output || !output_is_quiet) {
-            return AiAgentObservationPoll::Waiting;
-        }
-        if state.marker_id.is_some() {
-            return AiAgentObservationPoll::Waiting;
-        }
-        AiAgentObservationPoll::Target(self.agent.loop_state.take().expect("agent loop is present"))
+        AiAgentObservationPoll::Waiting
     }
 
     pub(in crate::features) fn take_agent_loop_for_marker(
@@ -2010,7 +2019,7 @@ impl AiFeatureState {
     pub(in crate::features) fn take_agent_loop_for_session(
         &mut self,
         session_id: &str,
-    ) -> Option<AiAgentLoopState> {
+    ) -> Option<(AiAgentLoopState, Option<String>)> {
         if !self
             .agent
             .loop_state
@@ -2020,10 +2029,15 @@ impl AiFeatureState {
             return None;
         }
         let state = self.agent.loop_state.take()?;
+        let raw_output = self
+            .agent
+            .raw_capture
+            .take()
+            .map(RawCliCapture::into_output);
         if let Some(marker_id) = state.marker_id.as_deref() {
             self.agent.capture.cancel(marker_id);
         }
-        Some(state)
+        Some((state, raw_output))
     }
 
     pub(in crate::features) fn begin_agent_continuation(
@@ -2175,7 +2189,15 @@ impl AiFeatureState {
         };
         let previous_scope = self.active_scope_key.clone();
         self.switch_scope(&scope);
-        let result = self.agent.capture.process(text);
+        let result = if let Some(capture) = self.agent.raw_capture.as_mut() {
+            capture.feed(text, Instant::now());
+            AgentCaptureProcessResult {
+                visible_text: text.to_string(),
+                completed: Vec::new(),
+            }
+        } else {
+            self.agent.capture.process(text)
+        };
         self.switch_scope(&previous_scope);
         result
     }
@@ -2183,17 +2205,18 @@ impl AiFeatureState {
     pub(in crate::features) fn reset_agent_runtime(&mut self) {
         self.agent.loop_state = None;
         self.agent.capture = AgentOutputCaptureProcessor::new();
+        self.agent.raw_capture = None;
     }
 
     pub(in crate::features) fn agent_capture_is_active_for(&self, session_id: &str) -> bool {
-        (self.agent.capture.has_active()
+        ((self.agent.capture.has_active() || self.agent.raw_capture.is_some())
             && self
                 .agent
                 .loop_state
                 .as_ref()
                 .is_some_and(|state| state.terminal_session_id == session_id))
             || self.inactive_scopes.values().any(|scope| {
-                scope.agent.capture.has_active()
+                (scope.agent.capture.has_active() || scope.agent.raw_capture.is_some())
                     && scope
                         .agent
                         .loop_state
@@ -2432,6 +2455,7 @@ impl AiFeatureState {
         self.agent.step_index = 0;
         self.agent.loop_state = None;
         self.agent.capture = AgentOutputCaptureProcessor::new();
+        self.agent.raw_capture = None;
         self.agent.steps.clear();
         self.agent.thought_expanded.clear();
         self.agent.output_expanded.clear();

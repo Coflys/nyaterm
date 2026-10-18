@@ -23,11 +23,7 @@ pub(in crate::features) use state::{
     ConnectionStatus, ProviderSettingsView,
 };
 
-const AGENT_OBSERVATION_MIN_WAIT: Duration = Duration::from_millis(700);
-const AGENT_OBSERVATION_QUIET: Duration = Duration::from_millis(900);
-/// How often to look for the terminal having fallen quiet, while an agent loop is
-/// running. Comfortably finer than `AGENT_OBSERVATION_QUIET`, so the 900ms threshold
-/// is what decides when the loop advances rather than this interval.
+/// Observation clock for deadlines and prompt settlement, armed only during a command.
 const AGENT_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const AGENT_DEFAULT_STEP_TIMEOUT: Duration = Duration::from_millis(30_000);
 

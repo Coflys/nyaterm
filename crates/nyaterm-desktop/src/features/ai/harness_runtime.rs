@@ -493,10 +493,11 @@ impl NyaTermApp {
                     self.send_terminal_input_to_session(session_id, input.into_bytes(), cx);
                 })
         };
-        if result.is_err() {
+        if let Err(error) = result {
+            self.ai.set_panel_status(error.clone());
             self.ai.complete_native_terminal(Err(RpcError {
                 code: "execution_failed".into(),
-                message: "Cannot start terminal execution.".into(),
+                message: error,
             }));
         }
     }

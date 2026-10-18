@@ -379,13 +379,6 @@ impl TerminalFeatureState {
             .map(|view| view.output.as_str())
     }
 
-    pub(in crate::features) fn session_output_len_or_default(&self, session_id: &str) -> usize {
-        self.view
-            .views
-            .get(session_id)
-            .map_or(self.view.output.len(), |view| view.output.len())
-    }
-
     pub(in crate::features) fn session_has_unread(&self, session_id: &str) -> bool {
         self.view
             .views

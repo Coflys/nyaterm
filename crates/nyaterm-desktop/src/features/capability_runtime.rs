@@ -1257,6 +1257,12 @@ impl NyaTermApp {
             )));
             return;
         };
+        if let Err(error) = self.validate_ai_background_execution(&session_id) {
+            let _ = request
+                .reply
+                .send(Err(rpc_failure("permission_denied", &error)));
+            return;
+        }
         let target = match session.kind {
             SessionKind::Ssh => self.session.metadata(&session_id).and_then(|metadata| {
                 match &metadata.launch_config {

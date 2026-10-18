@@ -22,6 +22,7 @@ pub mod network_cli_prompt;
 pub mod note_export;
 pub mod plugins;
 pub mod portable_snapshot;
+pub mod raw_cli_capture;
 pub mod remote_preview;
 pub mod runtime;
 pub mod secret;
