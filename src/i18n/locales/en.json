@@ -3138,6 +3138,7 @@
     "dropPathsRequired": "No local paths from this drag source.",
     "dropUploadFailed": "File upload failed.",
     "hiddenSessions": "Hidden Sessions",
+    "imagePathPreviewHint": "{{modifier}}+Click to preview image",
     "largeOutputProtectionActive": "Large-output protection active",
     "largeOutputProtectionActiveDetail": "Terminal output is being throttled to keep the interface responsive.",
     "largeOutputProtectionRecovered": "Large-output protection recovered",

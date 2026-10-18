@@ -1,7 +1,12 @@
 import { openUrl } from "@/lib/backend/platform/opener";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import type { ILinkHandler, Terminal } from "@xterm/xterm";
+import type { ILinkHandler, ILinkProvider, Terminal } from "@xterm/xterm";
 import { logger } from "@/lib/logger";
+import {
+  createTerminalImagePathLinkProvider,
+  imagePathFromFileUri,
+  type TerminalImagePathMatchOptions,
+} from "./terminalImagePathLinks";
 
 type TranslationFn = (key: string, opts?: Record<string, unknown>) => string;
 
@@ -12,12 +17,20 @@ function isMacPlatform() {
   );
 }
 
+export interface TerminalImageLinkOptions {
+  isEnabled: () => boolean;
+  getMatchOptions: () => TerminalImagePathMatchOptions;
+  open: (path: string) => void;
+}
+
 export function createTerminalLinkHandlers(
   terminal: Terminal,
   tRef: { current: TranslationFn },
+  imageLinks: TerminalImageLinkOptions,
 ): {
   oscLinkHandler: ILinkHandler;
   webLinksAddon: WebLinksAddon;
+  imagePathLinkProvider: ILinkProvider;
   removePopup: () => void;
 } {
   const modifierLabel = isMacPlatform() ? "Cmd" : "Ctrl";
@@ -66,7 +79,12 @@ export function createTerminalLinkHandlers(
     popup.style.top = `${Math.max(margin, top)}px`;
   };
 
-  const showLinkPopup = (text: string, clientX: number, clientY: number) => {
+  const showLinkPopup = (
+    text: string,
+    hint: string,
+    clientX: number,
+    clientY: number,
+  ) => {
     const terminalEl = terminal.element;
     if (!terminalEl) return;
 
@@ -82,7 +100,7 @@ export function createTerminalLinkHandlers(
 
     const hintLine = document.createElement("div");
     hintLine.className = "xterm-link-popup__hint";
-    hintLine.textContent = tRef.current("terminal.linkOpenHint", { modifier: modifierLabel });
+    hintLine.textContent = hint;
     popup.appendChild(hintLine);
 
     terminalEl.appendChild(popup);
@@ -90,13 +108,22 @@ export function createTerminalLinkHandlers(
     linkPopup = popup;
   };
 
-  const scheduleLinkPopup = (event: MouseEvent, text: string) => {
+  const scheduleLinkPopup = (
+    event: MouseEvent,
+    text: string,
+    hintKey = "terminal.linkOpenHint",
+  ) => {
     clearLinkPopupTimer();
     destroyLinkPopup();
 
     const { clientX, clientY } = event;
     linkPopupTimer = window.setTimeout(() => {
-      showLinkPopup(text, clientX, clientY);
+      showLinkPopup(
+        text,
+        tRef.current(hintKey, { modifier: modifierLabel }),
+        clientX,
+        clientY,
+      );
       linkPopupTimer = null;
     }, linkPopupDelayMs);
   };
@@ -112,8 +139,22 @@ export function createTerminalLinkHandlers(
     }
   };
 
+  const getOscImagePath = (uri: string) =>
+    imageLinks.isEnabled() ? imagePathFromFileUri(uri) : null;
+
+  const handleImagePathActivation = (event: MouseEvent, path: string) => {
+    if (!hasRequiredModifier(event)) return;
+    removePopup();
+    imageLinks.open(path);
+  };
+
   const handleLinkActivation = (event: MouseEvent, uri: string) => {
     if (!hasRequiredModifier(event)) return;
+    const imagePath = getOscImagePath(uri);
+    if (imagePath) {
+      handleImagePathActivation(event, imagePath);
+      return;
+    }
     if (!isAllowedLinkUri(uri)) return;
 
     removePopup();
@@ -129,7 +170,14 @@ export function createTerminalLinkHandlers(
 
   const oscLinkHandler: ILinkHandler = {
     activate: handleLinkActivation,
-    hover: (event, text) => scheduleLinkPopup(event, text),
+    hover: (event, text) => {
+      const imagePath = getOscImagePath(text);
+      if (imagePath) {
+        scheduleLinkPopup(event, imagePath, "terminal.imagePathPreviewHint");
+        return;
+      }
+      scheduleLinkPopup(event, text);
+    },
     leave: () => removePopup(),
     allowNonHttpProtocols: true,
   };
@@ -139,5 +187,14 @@ export function createTerminalLinkHandlers(
     leave: () => removePopup(),
   });
 
-  return { oscLinkHandler, webLinksAddon, removePopup };
+  const imagePathLinkProvider = createTerminalImagePathLinkProvider(terminal, {
+    isEnabled: imageLinks.isEnabled,
+    getMatchOptions: imageLinks.getMatchOptions,
+    activate: handleImagePathActivation,
+    hover: (event, path) =>
+      scheduleLinkPopup(event, path, "terminal.imagePathPreviewHint"),
+    leave: () => removePopup(),
+  });
+
+  return { oscLinkHandler, webLinksAddon, imagePathLinkProvider, removePopup };
 }

@@ -3136,6 +3136,7 @@
     "dropPathsRequired": "系統未提供拖曳項目的本機路徑。",
     "dropUploadFailed": "檔案上傳失敗。",
     "hiddenSessions": "被隱藏的工作階段",
+    "imagePathPreviewHint": "按住 {{modifier}} 並點選以預覽圖片",
     "largeOutputProtectionActive": "大流量輸出保護已啟用",
     "largeOutputProtectionActiveDetail": "終端輸出正在被限速，以保持介面回應。",
     "largeOutputProtectionRecovered": "大流量輸出保護已恢復正常",
