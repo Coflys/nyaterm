@@ -8,7 +8,6 @@ import {
 } from "@/lib/terminalControlInput";
 import type { SessionType } from "@/types/global";
 import type { TerminalFitScheduler } from "./terminalFitScheduler";
-import type { PerformanceMode } from "./xterminalTypes";
 
 interface UseTerminalRefreshEffectsParams {
   terminalRef: RefObject<Terminal | null>;
@@ -17,7 +16,6 @@ interface UseTerminalRefreshEffectsParams {
   visible: boolean;
   appLocked: boolean;
   terminalReady: boolean;
-  performanceMode: PerformanceMode;
   sessionId: string;
   sessionType: SessionType;
   showGutter: boolean;
@@ -33,7 +31,6 @@ export function useTerminalRefreshEffects({
   visible,
   appLocked,
   terminalReady,
-  performanceMode,
   sessionId,
   sessionType,
   showGutter,
@@ -52,7 +49,7 @@ export function useTerminalRefreshEffects({
         refresh: true,
         onComplete: () => {
           if (!terminalRef.current) return;
-          if (showGutter && performanceMode === "normal") {
+          if (showGutter) {
             window.dispatchEvent(
               new CustomEvent("nyaterm:refresh-gutter", {
                 detail: { sessionId },
@@ -62,7 +59,7 @@ export function useTerminalRefreshEffects({
         },
       });
     }
-  }, [fitSchedulerRef, performanceMode, sessionId, showGutter, terminalReady, terminalRef]);
+  }, [fitSchedulerRef, sessionId, showGutter, terminalReady, terminalRef]);
 
   useEffect(() => {
     const paddingEnabled = showContentPadding;
@@ -76,7 +73,7 @@ export function useTerminalRefreshEffects({
         if (paddingEnabled !== (workspacePaddingSetting ?? false)) {
           return;
         }
-        if (showGutter && performanceMode === "normal") {
+        if (showGutter) {
           window.dispatchEvent(
             new CustomEvent("nyaterm:refresh-gutter", {
               detail: { sessionId },
@@ -87,7 +84,6 @@ export function useTerminalRefreshEffects({
     });
   }, [
     fitSchedulerRef,
-    performanceMode,
     sessionId,
     showContentPadding,
     showGutter,

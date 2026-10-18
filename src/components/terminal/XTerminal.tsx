@@ -2913,7 +2913,6 @@ export default function XTerminal({
     visible,
     appLocked,
     terminalReady,
-    performanceMode,
     sessionId,
     sessionType,
     showGutter,

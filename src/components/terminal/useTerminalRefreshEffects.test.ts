@@ -47,6 +47,83 @@ describe("useTerminalRefreshEffects", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not schedule fits for unrelated rerenders but still fits readiness and padding changes", () => {
+    const schedule = vi.fn();
+    const { terminal } = createTerminal();
+    const params = {
+      terminalRef: { current: terminal },
+      fitSchedulerRef: {
+        current: { schedule } as unknown as TerminalFitScheduler,
+      },
+      active: false,
+      visible: true,
+      appLocked: false,
+      terminalReady: false,
+      sessionId: "session-1",
+      sessionType: "SSH" as const,
+      showGutter: true,
+      showContentPadding: false,
+      workspacePaddingSetting: false,
+    };
+    const { rerender } = renderHook(
+      (props) => useTerminalRefreshEffects(props),
+      { initialProps: params },
+    );
+    expect(schedule).not.toHaveBeenCalled();
+
+    const readyParams = { ...params, terminalReady: true };
+    rerender(readyParams);
+    expect(schedule.mock.calls.map(([request]) => request.reason)).toEqual(["ready", "padding"]);
+    for (const [request] of schedule.mock.calls) {
+      expect(request).toEqual(expect.objectContaining({ force: true, refresh: true }));
+    }
+    schedule.mockClear();
+
+    // XTerminal can rerender on output pressure changes without a layout change.
+    for (let i = 0; i < 4; i += 1) rerender({ ...readyParams });
+    expect(schedule).not.toHaveBeenCalled();
+
+    rerender({ ...readyParams, showContentPadding: true, workspacePaddingSetting: true });
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "padding", force: true, refresh: true }),
+    );
+  });
+
+  it.each([false, true])("refreshes the enabled gutter after layout fits (showGutter=%s)", (showGutter) => {
+    const schedule = vi.fn();
+    const dispatch = vi.spyOn(window, "dispatchEvent");
+    const { terminal } = createTerminal();
+    const params = {
+      terminalRef: { current: terminal },
+      fitSchedulerRef: {
+        current: { schedule } as unknown as TerminalFitScheduler,
+      },
+      active: false,
+      visible: true,
+      appLocked: false,
+      terminalReady: true,
+      sessionId: "session-1",
+      sessionType: "SSH" as const,
+      showGutter,
+      showContentPadding: false,
+    };
+    renderHook(() => useTerminalRefreshEffects(params));
+
+    const requests = schedule.mock.calls.map(([request]) => request);
+    expect(requests.map((request) => request.reason)).toEqual(["ready", "padding"]);
+    for (const request of requests) request.onComplete({ applied: true });
+
+    if (showGutter) {
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      for (const [event] of dispatch.mock.calls) {
+        expect(event.type).toBe("nyaterm:refresh-gutter");
+        expect((event as CustomEvent).detail).toEqual({ sessionId: "session-1" });
+      }
+    } else {
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  });
+
   it("restores the bottom viewport after an active terminal fit", () => {
     const schedule = vi.fn();
     const { terminal, scrollToBottom } = createTerminal(12, 12);
@@ -60,7 +137,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -92,7 +168,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -120,7 +195,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -153,7 +227,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -205,7 +278,6 @@ describe("useTerminalRefreshEffects", () => {
           visible: true,
           appLocked,
           terminalReady: true,
-          performanceMode: "normal",
           sessionId: "session-1",
           sessionType: "SSH",
           showGutter: false,
@@ -249,7 +321,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -293,7 +364,6 @@ describe("useTerminalRefreshEffects", () => {
           visible,
           appLocked: false,
           terminalReady: true,
-          performanceMode: "normal",
           sessionId: "session-1",
           sessionType: "SSH",
           showGutter: false,
@@ -328,7 +398,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -364,7 +433,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "SSH",
         showGutter: false,
@@ -401,7 +469,6 @@ describe("useTerminalRefreshEffects", () => {
           visible: true,
           appLocked: false,
           terminalReady: true,
-          performanceMode: "normal",
           sessionId: "session-1",
           sessionType,
           showGutter: false,
@@ -440,7 +507,6 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
         sessionType: "Serial",
         showGutter: false,

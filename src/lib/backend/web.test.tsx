@@ -248,7 +248,6 @@ describe("browser backend boundary", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "web-ssh",
         sessionType: "SSH",
         showGutter: false,
