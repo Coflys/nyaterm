@@ -3172,6 +3172,7 @@
     "tabDockSplitLeft": "向左拆分",
     "tabDockSplitRight": "向右拆分",
     "tabDockSplitTop": "向上拆分",
+    "vncDisplayRecoveryFailed": "VNC 畫面恢復失敗，請重新連線工作階段後重試。",
     "xmodemSingleFileOnly": "XMODEM 每次只能上傳一個檔案。"
   },
   "terminalCtx": {
