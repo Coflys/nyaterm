@@ -2212,7 +2212,7 @@ mod tests {
         draw(&app, vcx);
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
-                assert!(!app.settings.theme_designer().editing);
+                assert!(!app.settings.theme_designer().editable());
                 app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
             })
         });

@@ -1,7 +1,7 @@
 //! Theme drafts are local; confirmed theme operations persist independently of settings.
 use gpui::{Context, PathPromptOptions};
 use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
-use nyaterm_core::themes::{COLOR_FIELDS, ThemeConfig, contrast_ratio, resolve_theme};
+use nyaterm_core::themes::{COLOR_FIELDS, ThemeConfig, contrast_ratio, is_builtin, resolve_theme};
 use nyaterm_store::{StoreDomain, ThemeCommitOutcome, store_mutation};
 use nyaterm_ui::ThemePalette;
 use rust_i18n::t;
@@ -18,14 +18,15 @@ pub(in crate::features) enum ThemeIntent {
     Apply(bool),
     CloseSettings,
     Quit(usize),
-    Edit,
     Reload,
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
+/// Text contrast below this ratio is reported next to the preview.
+pub(in crate::features) const MIN_TEXT_CONTRAST: f32 = 4.5;
+
+#[derive(Clone, Default, PartialEq)]
 pub(in crate::features) struct ThemeDesignerState {
     pub open: bool,
-    pub editing: bool,
     pub submitting: bool,
     pub delete_confirmation: bool,
     pub close_confirmation: bool,
@@ -36,7 +37,9 @@ pub(in crate::features) struct ThemeDesignerState {
     pub terminal_tab: bool,
     pub errors: Vec<String>,
     pub preview: Option<ThemePalette>,
-    pub low_contrast: bool,
+    /// Set only when the ratio is below [`MIN_TEXT_CONTRAST`].
+    pub ui_contrast: Option<f32>,
+    pub terminal_contrast: Option<f32>,
     pub pending: Option<ThemeIntent>,
     pub message: String,
     pub generation: u64,
@@ -46,11 +49,26 @@ impl ThemeDesignerState {
     pub fn dirty(&self) -> bool {
         self.draft != self.baseline
     }
+    /// Built-in themes are read-only; every custom draft is directly editable.
+    pub fn editable(&self) -> bool {
+        self.draft
+            .as_ref()
+            .is_some_and(|theme| !is_builtin(&theme.id))
+    }
+    /// A copy or import that has never been saved to the catalog.
+    pub fn unsaved_new(&self) -> bool {
+        self.draft.is_some() && self.baseline.is_none()
+    }
+    pub fn blocked(&self) -> bool {
+        self.submitting
+            || self.pending.is_some()
+            || self.close_confirmation
+            || self.delete_confirmation
+    }
     pub fn load(&mut self, theme: ThemeConfig) {
         self.generation += 1;
         self.open = true;
         self.restore_focus = false;
-        self.editing = false;
         self.delete_confirmation = false;
         self.baseline = Some(theme.clone());
         self.draft = Some(theme);
@@ -66,14 +84,7 @@ impl ThemeDesignerState {
         };
     }
     pub fn edit(&mut self, field: &str, value: String) {
-        if self.submitting || !self.editing {
-            return;
-        }
-        if self
-            .draft
-            .as_ref()
-            .is_some_and(|theme| nyaterm_core::themes::is_builtin(&theme.id))
-        {
+        if self.submitting || !self.editable() {
             return;
         }
         let Some(theme) = self.draft.as_mut() else {
@@ -97,13 +108,12 @@ impl ThemeDesignerState {
             return;
         };
         self.errors = theme.validate();
-        self.low_contrast = contrast_ratio(&theme.colors.text, &theme.colors.bg)
-            .is_some_and(|r| r < 4.5)
-            || contrast_ratio(
-                &theme.colors.terminal.foreground,
-                &theme.colors.terminal.background,
-            )
-            .is_some_and(|r| r < 4.5);
+        let low = |ratio: Option<f32>| ratio.filter(|ratio| *ratio < MIN_TEXT_CONTRAST);
+        self.ui_contrast = low(contrast_ratio(&theme.colors.text, &theme.colors.bg));
+        self.terminal_contrast = low(contrast_ratio(
+            &theme.colors.terminal.foreground,
+            &theme.colors.terminal.background,
+        ));
         if self.errors.is_empty() {
             self.preview = Some(nyaterm_ui::palette_from_theme(theme));
         }
@@ -189,7 +199,6 @@ impl NyaTermApp {
                     resolve_theme(&id, &self.settings.summary().custom_themes).copy_as_custom();
                 self.settings.theme_designer_mut().load(theme);
                 self.settings.theme_designer_mut().baseline = None;
-                self.settings.theme_designer_mut().editing = true;
             }
             ThemeIntent::Import => {
                 self.prompt_theme_import(cx);
@@ -198,7 +207,6 @@ impl NyaTermApp {
                 self.settings.theme_designer_mut().delete_confirmation = true;
             }
             ThemeIntent::Apply(close) => self.apply_settings_draft(close, cx),
-            ThemeIntent::Edit => self.settings.theme_designer_mut().editing = true,
             ThemeIntent::Reload => {
                 self.reload_theme_manager(cx);
             }
@@ -238,8 +246,23 @@ impl NyaTermApp {
         self.request_settings_panel_refresh(cx);
     }
 
+    /// Reverts to the saved theme, or abandons a never-saved copy for the active UI theme.
+    pub(in crate::features) fn discard_theme_designer(&mut self, cx: &mut Context<Self>) {
+        let state = self.settings.theme_designer();
+        if state.blocked() || !state.dirty() {
+            return;
+        }
+        let theme = state.baseline.clone().unwrap_or_else(|| {
+            let summary = self.settings.summary();
+            resolve_theme(&summary.theme, &summary.custom_themes)
+        });
+        self.settings.theme_designer_mut().load(theme);
+        self.ensure_theme_designer_inputs(cx);
+        self.request_settings_panel_refresh(cx);
+    }
+
     pub(in crate::features) fn ensure_theme_designer_inputs(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.theme_designer().open || !self.settings.theme_designer().editing {
+        if !self.settings.theme_designer().open || !self.settings.theme_designer().editable() {
             return;
         }
         let Some(theme) = self.settings.theme_designer().draft.clone() else {
@@ -380,6 +403,7 @@ impl NyaTermApp {
                             let summary = this.settings.summary();
                             let theme = resolve_theme(&summary.theme, &summary.custom_themes);
                             this.settings.theme_designer_mut().load(theme);
+                            this.ensure_theme_designer_inputs(cx);
                         }
                         this.custom_themes_changed(cx);
                         // Publishing is deferred to avoid updating a shell already on the stack.
@@ -483,6 +507,7 @@ impl NyaTermApp {
                         let theme = resolve_theme(&saved.theme, &saved.custom_themes);
                         this.settings.theme_designer_mut().expected = Some(commit.settings);
                         this.settings.theme_designer_mut().load(theme);
+                        this.ensure_theme_designer_inputs(cx);
                         this.custom_themes_changed(cx);
                     }
                     Err(error) => this.settings.theme_designer_mut().message = error.to_string(),
@@ -554,7 +579,6 @@ impl NyaTermApp {
                 if theme.validate().is_empty() {
                     self.settings.theme_designer_mut().load(theme);
                     self.settings.theme_designer_mut().baseline = None;
-                    self.settings.theme_designer_mut().editing = true;
                     self.ensure_theme_designer_inputs(cx);
                 } else {
                     self.settings.theme_designer_mut().message =
@@ -646,7 +670,6 @@ mod tests {
     fn invalid_edits_keep_the_last_valid_preview_and_never_mark_saved() {
         let mut state = ThemeDesignerState::default();
         state.load(builtins()[0].copy_as_custom());
-        state.editing = true;
         let preview = state.preview;
         let generation = state.generation;
         state.edit("primary", "broken".into());

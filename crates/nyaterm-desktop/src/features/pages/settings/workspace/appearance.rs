@@ -40,16 +40,16 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
+        let manage_themes = self.theme_designer_entry_button(cx);
         div()
             .flex()
             .flex_col()
             .gap_5()
-            .child(self.theme_designer_section(cx))
-            .child(self.window_background_section(cx))
-            .child(settings_form_section(
+            .child(appearance_form_section_with_action(
                 palette,
-                None,
-                None,
+                t!("themeDesigner.sectionTitle"),
+                t!("themeDesigner.sectionDesc"),
+                manage_themes,
                 div()
                     .flex()
                     .flex_col()
@@ -88,7 +88,17 @@ impl SettingsPanel {
                                 this.toggle_bold_default_foreground(cx);
                             }),
                         ),
-                    ))
+                    )),
+            ))
+            .child(self.window_background_section(cx))
+            .child(settings_form_section(
+                palette,
+                None,
+                None,
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
                     .child(settings_form_row(
                         palette,
                         t!("settings.panelMultiOpen"),
