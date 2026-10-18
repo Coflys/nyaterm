@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use gpui::Context;
+use nyaterm_core::network_cli_prompt::{
+    resolve_ssh_execution_profile, ssh_allows_background_execution,
+};
 use nyaterm_core::{
     AgentApprovalOutcome, AiAction, AiChatRequest, AiCommandCard, AiExecutionProfile, AiMode,
     AppendAiAuditRequest, CommandObservation, build_observation_message, uuid,
@@ -159,7 +162,9 @@ impl NyaTermApp {
             max_steps: self.ai.settings_max_agent_steps(),
         };
         self.ai.set_agent_loop(state);
-        let (reply, result) = tokio::sync::oneshot::channel();
+        let (reply, result) = tokio::sync::oneshot::channel::<
+            Result<serde_json::Value, nyaterm_mcp_protocol::RpcError>,
+        >();
         let policy = TerminalExecutionPolicy {
             background: self.ai.settings_config().agent_background_execution_enabled,
             max_lines: self.ai.settings_config().terminal_output_lines,
@@ -175,13 +180,17 @@ impl NyaTermApp {
                 if this.ai.agent_loop_snapshot().is_some_and(|state| state.execution_id == callback_id)
                     && let Some(state) = this.ai.take_agent_loop_for_session(&session_id) {
                     match result {
-                        Ok(Ok(value)) => {
+                        Ok(Ok(value)) if value["timedOut"] != true && value["sourceTruncated"] != true => {
                             let value: nyaterm_mcp_protocol::TerminalExecuteResult = serde_json::from_value(value).expect("terminal execution result");
                             let observation = CommandObservation { output: value.output, exit_code: value.exit_code, duration_ms: value.duration_ms };
                             this.ai.record_agent_observation(state.step_index, &observation, observation_summary(&observation));
                             this.start_ai_agent_continuation(state, observation, cx);
                         }
-                        _ => this.start_ai_agent_continuation_with_message(state, "Terminal execution failed or was cancelled; do not assume the command completed.".into(), cx),
+                        _ => {
+                            this.ai.upsert_agent_step(state.step_index, AiAgentStepStatus::Failed,
+                                AiAgentStepKind::Diagnostic, "Execution stopped", "Terminal execution is incomplete; review the terminal before starting another command.");
+                            this.ai.set_panel_status("Terminal execution is incomplete; automatic execution stopped. Review the terminal.");
+                        }
                     }
                 }
                 this.ai.switch_scope(&visible);
@@ -229,15 +238,52 @@ impl NyaTermApp {
             .session_info(session_id)
             .filter(|_| !self.session.is_disconnected(session_id))
             .map(|session| match session.kind {
-                SessionKind::LocalPty
-                | SessionKind::Ssh
-                | SessionKind::Telnet
-                | SessionKind::RawTcp => AiExecutionProfile::Posix,
+                SessionKind::Ssh => resolve_ssh_execution_profile(
+                    configured,
+                    self.ssh_session_is_configured_network_device(session_id),
+                    self.terminal_buffer_tail_for_session(session_id),
+                ),
+                SessionKind::LocalPty | SessionKind::Telnet | SessionKind::RawTcp => {
+                    AiExecutionProfile::Posix
+                }
                 SessionKind::Serial | SessionKind::Rdp | SessionKind::Vnc => {
                     AiExecutionProfile::SendOnly
                 }
             })
             .unwrap_or(AiExecutionProfile::SendOnly)
+    }
+
+    fn ssh_session_is_configured_network_device(&self, session_id: &str) -> bool {
+        self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(&metadata.launch_config,
+                crate::models::SessionLaunchConfig::Ssh(config)
+                if config.profile == nyaterm_transport::SshSessionProfile::NetworkDevice)
+        })
+    }
+
+    pub(in crate::features) fn validate_ai_background_execution(
+        &self,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let profile = self.ai_execution_profile_for_session(session_id);
+        if matches!(
+            profile,
+            AiExecutionProfile::Disabled | AiExecutionProfile::SendOnly
+        ) || self
+            .session
+            .session_info(session_id)
+            .is_some_and(|session| {
+                session.kind == SessionKind::Ssh
+                    && !ssh_allows_background_execution(
+                        profile,
+                        self.ssh_session_is_configured_network_device(session_id),
+                        self.terminal_buffer_tail_for_session(session_id),
+                    )
+            })
+        {
+            return Err("Background execution is unavailable for raw CLI or disabled sessions; disable Background Execution to use the existing terminal.".into());
+        }
+        Ok(())
     }
 
     pub(in crate::features) fn start_ai_agent_continuation(
