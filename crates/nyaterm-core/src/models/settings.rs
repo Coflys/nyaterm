@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::default_true;
+use super::window_material::{WindowMaterial, default_window_background_opacity};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -179,13 +180,20 @@ pub enum RecordingRotationPolicy {
 pub struct AppSettingsSummary {
     pub theme: String,
     #[serde(default)]
+    pub custom_themes: crate::themes::ThemeCatalog,
+    #[serde(default)]
     pub background_image_path: Option<String>,
     #[serde(default = "default_background_image_fit")]
     pub background_image_fit: String,
     /// Wallpaper opacity percent (0..=100).
     #[serde(default = "default_background_image_opacity")]
     pub background_image_opacity: u8,
-    /// Shell chrome opacity percent when wallpaper is active (0..=100).
+    #[serde(default)]
+    pub window_material: WindowMaterial,
+    /// Theme tint below wallpaper and content surfaces, in percent (0..=100).
+    #[serde(default = "default_window_background_opacity")]
+    pub window_background_opacity: u8,
+    /// Shell chrome opacity percent when wallpaper or native transparency is active (0..=100).
     #[serde(default = "default_background_content_opacity")]
     pub background_content_opacity: u8,
     pub language: String,
@@ -494,11 +502,14 @@ impl Default for AppSettingsSummary {
             background_image_fit: default_background_image_fit(),
             background_image_opacity: default_background_image_opacity(),
             background_content_opacity: default_background_content_opacity(),
+            window_material: WindowMaterial::default(),
+            window_background_opacity: default_window_background_opacity(),
             language: "zh-CN".to_string(),
             terminal_font_family: "JetBrains Mono".to_string(),
             terminal_font_size: 16,
             cursor_style: default_cursor_style(),
             cursor_blink: default_cursor_blink(),
+            custom_themes: crate::themes::ThemeCatalog::default(),
             terminal_theme: None,
             minimum_contrast_ratio: default_minimum_contrast_ratio(),
             ui_font_family: default_ui_font_family(),

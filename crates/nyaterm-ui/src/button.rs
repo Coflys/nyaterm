@@ -5,6 +5,8 @@ use gpui::{
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Disableable, Icon, Selectable, Sizable};
 
+use crate::sizing::{form_control_height, form_control_size};
+
 type NyaButtonClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +30,9 @@ pub struct NyaButton {
     font_weight: Option<FontWeight>,
     small: bool,
     compact: bool,
+    form_control: bool,
     full_width: bool,
+    label_left: bool,
     selected: bool,
     disabled: bool,
     loading: bool,
@@ -51,7 +55,9 @@ impl NyaButton {
             font_weight: None,
             small: false,
             compact: false,
+            form_control: false,
             full_width: false,
+            label_left: false,
             selected: false,
             disabled: false,
             loading: false,
@@ -106,8 +112,20 @@ impl NyaButton {
         self
     }
 
+    /// Matches ordinary single-line inputs, with room for a readable action label.
+    pub fn form_control(mut self) -> Self {
+        self.form_control = true;
+        self
+    }
+
     pub fn full_width(mut self) -> Self {
         self.full_width = true;
+        self
+    }
+
+    /// Align the single button label to the start of the available content width.
+    pub fn label_left(mut self) -> Self {
+        self.label_left = true;
         self
     }
 
@@ -148,6 +166,7 @@ impl NyaButton {
 
 impl RenderOnce for NyaButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let icon_only = self.label.is_empty() && self.icon_path.is_some() && self.content.is_none();
         if self.autofocus && !self.disabled && !self.loading {
             // Initialize the same keyed focus state used by gpui-kit's Button.
             // Render it in this scope below so its focus ring and keyboard clicks
@@ -159,7 +178,16 @@ impl RenderOnce for NyaButton {
             });
         }
         let mut button = Button::new(self.id).loading(self.loading);
-        if self.text_color.is_some() || self.text_size.is_some() || self.font_weight.is_some() {
+        if icon_only {
+            // An empty label would create a second content slot and offset the icon.
+            if let Some(tooltip) = &self.tooltip {
+                button = button.accessibility_label(tooltip.clone());
+            }
+        } else if self.text_color.is_some()
+            || self.text_size.is_some()
+            || self.font_weight.is_some()
+            || self.label_left
+        {
             // Kit's label container sets its own size. Style the label itself,
             // retaining one visible label and its accessible name.
             button = button.accessibility_label(self.label.clone()).child(
@@ -167,6 +195,7 @@ impl RenderOnce for NyaButton {
                     .min_w_0()
                     .whitespace_nowrap()
                     .text_ellipsis()
+                    .when(self.label_left, |this| this.flex_1().text_left())
                     .when_some(self.text_color, |this, color| this.text_color(color))
                     .when_some(self.text_size, |this, size| this.text_size(size))
                     .when_some(self.font_weight, |this, weight| this.font_weight(weight))
@@ -186,6 +215,15 @@ impl RenderOnce for NyaButton {
         }
         if self.compact {
             button = button.compact();
+        }
+        if self.form_control {
+            button = button
+                .with_size(form_control_size())
+                .h(form_control_height())
+                .min_w(form_control_height())
+                .px_3()
+                .flex_none()
+                .when(icon_only, |this| this.w(form_control_height()).px_0());
         }
         if self.full_width {
             button = button.w_full();
@@ -249,6 +287,11 @@ impl NyaIconButton {
         self
     }
 
+    /// Gives a trailing input action the same height and a square hit target.
+    pub fn form_control(self) -> Self {
+        self.size(form_control_height())
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -275,7 +318,7 @@ impl RenderOnce for NyaIconButton {
             .when_some(self.icon_size, |icon, size| icon.with_size(size));
         let mut button = Button::new(self.id).icon(icon).ghost().small();
         if let Some(size) = self.size {
-            button = button.size(size);
+            button = button.size(size).flex_none();
         }
         if let Some(tooltip) = self.tooltip {
             button = button.tooltip(tooltip);

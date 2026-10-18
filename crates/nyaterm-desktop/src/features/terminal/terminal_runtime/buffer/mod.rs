@@ -73,18 +73,27 @@ fn terminal_view_has_cached_scrollback_snapshot_covering_offset(
     if offset == 0 {
         return view.frame_snapshot.is_some();
     }
-    if view.scrollback_snapshots.contains_key(&offset) {
+    if view
+        .scrollback_snapshots
+        .get(&offset)
+        .is_some_and(|snapshot| {
+            view.history_state()
+                .preserves_coordinates_from(snapshot.history)
+        })
+    {
         return true;
     }
     let viewport_rows = view.viewport_rows_for_ui();
     let scrollback_len = view.scrollback_len_for_ui();
     view.scrollback_snapshots.values().any(|snapshot| {
-        terminal_snapshot_covers_display_offset(
-            snapshot.as_ref(),
-            offset,
-            viewport_rows,
-            scrollback_len,
-        )
+        view.history_state()
+            .preserves_coordinates_from(snapshot.history)
+            && terminal_snapshot_covers_display_offset(
+                snapshot.as_ref(),
+                offset,
+                viewport_rows,
+                scrollback_len,
+            )
     })
 }
 
@@ -145,13 +154,15 @@ fn terminal_view_has_cached_scroll_snapshot_ready_for_user_scroll(
     let scrollback_len = view.scrollback_len_for_ui();
     let margin_rows = terminal_scroll_snapshot_ready_margin_rows(viewport_rows);
     view.scrollback_snapshots.values().any(|snapshot| {
-        terminal_snapshot_covers_display_offset_with_margin(
-            snapshot.as_ref(),
-            offset,
-            viewport_rows,
-            scrollback_len,
-            margin_rows,
-        )
+        view.history_state()
+            .preserves_coordinates_from(snapshot.history)
+            && terminal_snapshot_covers_display_offset_with_margin(
+                snapshot.as_ref(),
+                offset,
+                viewport_rows,
+                scrollback_len,
+                margin_rows,
+            )
     })
 }
 
@@ -1229,6 +1240,12 @@ impl NyaTermApp {
             );
             view.frame_input_highlights = frame.input_highlights;
         } else {
+            if !view
+                .history_state()
+                .preserves_coordinates_from(frame.snapshot.history)
+            {
+                return TerminalFrameApplyResult::default();
+            }
             view.remember_scrollback_snapshot(frame.offset, frame.snapshot.clone());
             if let Some(action_links) = frame.action_links {
                 view.scrollback_action_links

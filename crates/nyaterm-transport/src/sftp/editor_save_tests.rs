@@ -13,8 +13,8 @@ use super::{
 use crate::session_config::{SftpSettings, SshSessionConfig};
 
 #[derive(Default)]
-struct MockFiles {
-    files: HashMap<String, Vec<u8>>,
+pub(super) struct MockFiles {
+    pub(super) files: HashMap<String, Vec<u8>>,
     attributes: HashMap<String, FileAttributes>,
     temporary_owner: Option<(u32, u32)>,
     deny_chown: bool,
@@ -260,7 +260,7 @@ impl russh_sftp::server::Handler for Peer {
     }
 }
 
-fn seeded_service(supports_posix_rename: bool) -> (SftpService, Arc<Mutex<MockFiles>>) {
+pub(super) fn seeded_service(supports_posix_rename: bool) -> (SftpService, Arc<Mutex<MockFiles>>) {
     let service = SftpService::new(SshSessionConfig {
         sftp: SftpSettings {
             compatibility_mode: true,

@@ -787,6 +787,7 @@ mod tests {
         {
             let root = TestTempDir::new("nyaterm-plugin-panel-management");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = app_with_visible_local_session(&mut cx, root.path(), "management-session");
             let runtime = AppRuntime::from_parts_for_test(
                 RuntimeMode::Portable,
@@ -974,6 +975,7 @@ mod tests {
         let root = TestTempDir::new("nyaterm-plugin-manager-view");
         let app_root = TestTempDir::new("nyaterm-plugin-manager-app");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, app_root.path(), "draft-session");
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);

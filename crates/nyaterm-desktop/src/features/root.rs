@@ -179,6 +179,10 @@ impl NyaTermApp {
     }
 
     pub(crate) fn start_after_window_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = window.window_handle().downcast::<nyaterm_ui::NyaRoot>() {
+            self.shell.remember_main_window(handle);
+        }
+        self.sync_native_window_material(cx);
         self.sync_component_theme(cx);
         // The connections panel renders from a snapshot, so it needs one before its
         // first paint. Later ones come from store replies and panel interactions.
@@ -242,13 +246,13 @@ impl NyaTermApp {
             .key_context(crate::shortcuts::WORKSPACE_KEY_CONTEXT)
             .size_full()
             .relative()
-            .bg(self.shell_transparent_color(palette.bg))
+            .bg(self.shell_background().root_color(palette.bg))
             .text_color(rgb(palette.text))
             .font(self.gpui_ui_font().font())
             .text_size(px(self.settings.summary().ui_font_size.clamp(12, 24) as f32))
             .child(self.session_tab_drag_listener_layer(cx))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.cancel_session_tab_drag_on_escape(event, window, cx);
+                this.cancel_internal_drag_on_escape(event, window, cx);
             }))
             .on_click(cx.listener(|this, _, _, _| {
                 this.mark_user_activity();
@@ -858,7 +862,14 @@ impl NyaTermApp {
                 |this, editor| {
                     this.child(full_window_overlay_layer(
                         "connection-editor-input-layer",
-                        self.connection_editor_panel(editor, cx),
+                        self.connection_editor_panel(
+                            editor,
+                            (
+                                f32::from(window.viewport_size().width),
+                                f32::from(window.viewport_size().height),
+                            ),
+                            cx,
+                        ),
                     ))
                 },
             )
@@ -1141,6 +1152,7 @@ impl NyaTermApp {
             return;
         }
         self.finish_transfer_browser_column_resize(cx);
+        self.finish_asset_column_resize(cx);
         self.finish_panel_resize(cx);
         self.finish_transfer_height_resize(cx);
         self.finish_bottom_panel_resize(cx);
@@ -1150,6 +1162,33 @@ impl NyaTermApp {
         self.finish_terminal_scrollbar_drag(cx);
         self.clear_terminal_window_drop(cx);
         self.clear_session_tab_drag(cx);
+    }
+
+    pub(in crate::features) fn cancel_pointer_interactions(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(controller) = &self.desktop_controller {
+            let _ = controller.update(cx, |controller, _| {
+                controller.update_tab_drag(|drag| drag.cancel());
+            });
+        }
+        self.finish_transfer_browser_column_resize(cx);
+        self.finish_asset_column_resize(cx);
+        self.finish_panel_resize(cx);
+        self.finish_transfer_height_resize(cx);
+        self.finish_bottom_panel_resize(cx);
+        self.finish_panel_stack_resize(cx);
+        self.finish_workspace_split_resize(cx);
+        self.cancel_terminal_mouse_report(window.modifiers(), cx);
+        self.cancel_terminal_selection_drag(cx);
+        self.finish_terminal_scrollbar_drag(cx);
+        self.clear_terminal_window_drop(cx);
+        self.clear_drop_hover(cx);
+        if self.transfer.finish_browser_drag_selection() {
+            cx.notify();
+        }
     }
 
     /// Whether the main window should be held back for a modal child window.
@@ -1605,6 +1644,7 @@ mod tests {
             .stack_size(16 * 1024 * 1024)
             .spawn(|| {
                 let mut cx = TestAppContext::single();
+                let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
                 run_root_render_benchmark(&mut cx);
             })
             .expect("spawn root render benchmark thread")

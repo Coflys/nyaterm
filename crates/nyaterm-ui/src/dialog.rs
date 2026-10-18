@@ -1,6 +1,6 @@
 use gpui::{
     App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Window, px,
+    Styled as _, Window, px,
 };
 use gpui_kit::component::{
     Disableable as _, WindowExt as _,
@@ -270,7 +270,9 @@ impl NyaDialogWindowExt for Window {
         F: Fn(NyaDialog, &mut Window, &mut App) -> NyaDialog + 'static,
     {
         self.open_dialog(cx, move |dialog, window, cx| {
-            build(NyaDialog::from_component(dialog), window, cx).into_component()
+            build(NyaDialog::from_component(dialog), window, cx)
+                .into_component()
+                .shadow(gpui_base::Theme::global(cx).tokens.shadow.lg)
         });
     }
 

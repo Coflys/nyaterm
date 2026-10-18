@@ -391,6 +391,7 @@ impl AppShell {
                         }
                     }
                     AppLifecycleEvent::NewWindowRequested => this.request_new_window(cx),
+                    AppLifecycleEvent::ShutdownCancelled => this.quit_requested = false,
                 });
             });
         });

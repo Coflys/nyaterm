@@ -1105,6 +1105,7 @@ mod tests {
     fn context_menu_items_match_blank_folder_and_note_targets() {
         let test_dir = TestConfigDir::new("nyaterm-notes-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, _| {
             let generation = app.notes.begin_load().expect("begin notes load");
@@ -1210,6 +1211,7 @@ mod tests {
     fn loaded_tauri_note_tree_builds_visible_rows() {
         let test_dir = TestConfigDir::new("nyaterm-notes-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);
@@ -1262,6 +1264,7 @@ mod tests {
     fn note_delete_dialog_controls_remain_clickable_after_context_menu() {
         let test_dir = TestConfigDir::new("nyaterm-notes-panel");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = test_app(&mut cx, test_dir.path());
         cx.update_entity(&app, |app, cx| {
             app.sync_component_theme(cx);

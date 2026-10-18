@@ -377,12 +377,14 @@ impl NyaTermApp {
 
     fn title_theme_menu_items(&self, _cx: &App) -> Vec<TitleMenuDefinition> {
         let current = self.settings.summary().theme.as_str();
-        crate::theme::APPEARANCE_THEME_IDS
+        self.settings
+            .theme_options()
             .iter()
-            .map(|&theme| {
+            .cloned()
+            .map(|(theme, name)| {
                 let selected =
                     current == theme || (current == "catppuccin" && theme == "catppuccin-mocha");
-                TitleMenuDefinition::action(crate::theme::appearance_theme_label(theme))
+                TitleMenuDefinition::action(name)
                     .checked(selected)
                     .command(TitleMenuCommand::SetTheme(theme.to_string()))
             })
@@ -399,14 +401,20 @@ impl NyaTermApp {
                 .checked(current_theme.trim().is_empty())
                 .command(TitleMenuCommand::SetTerminalTheme(None)),
         ];
-        items.extend(crate::theme::APPEARANCE_THEME_IDS.iter().map(|&theme| {
-            TitleMenuDefinition::action(crate::theme::appearance_theme_label(theme))
-                .checked(
-                    current_theme == theme
-                        || (current_theme == "catppuccin" && theme == "catppuccin-mocha"),
-                )
-                .command(TitleMenuCommand::SetTerminalTheme(Some(theme.to_string())))
-        }));
+        items.extend(
+            self.settings
+                .theme_options()
+                .iter()
+                .cloned()
+                .map(|(theme, name)| {
+                    TitleMenuDefinition::action(name)
+                        .checked(
+                            current_theme == theme
+                                || (current_theme == "catppuccin" && theme == "catppuccin-mocha"),
+                        )
+                        .command(TitleMenuCommand::SetTerminalTheme(Some(theme.to_string())))
+                }),
+        );
         items
     }
 
@@ -609,6 +617,7 @@ mod tests {
     #[test]
     fn custom_menu_shortcut_and_native_semantic_action_each_execute_once() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let before = cx.read_entity(&app, |app, _| app.settings.summary().terminal_font_size);
         cx.update(|cx| {
@@ -648,8 +657,50 @@ mod tests {
     }
 
     #[test]
+    fn disabled_terminal_zoom_blocks_menu_commands_and_shortcut_actions() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = menu_app(&mut cx);
+        cx.update_entity(&app, |app, _| {
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_font_size = 20;
+            settings.interaction_terminal_zoom_enabled = false;
+            app.settings.replace_summary(settings);
+        });
+        let window = cx.add_window(|window, cx| {
+            let focus = cx.focus_handle();
+            window.focus(&focus, cx);
+            ShortcutCommandWindow {
+                app: app.clone(),
+                focus,
+            }
+        });
+        for command in [
+            TitleMenuCommand::ZoomIn,
+            TitleMenuCommand::ZoomOut,
+            TitleMenuCommand::ResetZoom,
+        ] {
+            window
+                .update(&mut cx, |_, window, cx| {
+                    app.update(cx, |app, cx| {
+                        app.execute_title_menu_command(&command, window, cx)
+                    });
+                })
+                .unwrap();
+        }
+        cx.dispatch_action(window.into(), crate::shortcuts::ZoomIn);
+        cx.dispatch_action(window.into(), crate::shortcuts::ZoomOut);
+        cx.dispatch_action(window.into(), crate::shortcuts::ResetZoom);
+        assert_eq!(
+            cx.read_entity(&app, |app, _| app.settings.summary().terminal_font_size),
+            20
+        );
+    }
+
+    #[test]
     fn commands_recheck_lock_state_instead_of_executing_a_stale_enabled_menu() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         assert!(cx.read_entity(&app, |app, cx| {
             app.title_menu_command_enabled(&TitleMenuCommand::ToggleLineNumbers, cx)
@@ -719,6 +770,7 @@ mod tests {
     #[test]
     fn help_menu_keeps_check_command_and_shows_available_status() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let update = cx.read_entity(&app, |app, _| app.update.clone());
         cx.update_entity(&update, |update, _| {
@@ -764,6 +816,7 @@ mod tests {
     #[test]
     fn title_view_menu_matches_tauri_structure() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::View, cx)
@@ -786,6 +839,7 @@ mod tests {
     #[test]
     fn title_terminal_menu_matches_tauri_structure_and_default_state() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::Terminal, cx)
@@ -827,6 +881,7 @@ mod tests {
     #[test]
     fn terminal_display_submenu_has_expected_checks() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::Terminal, cx)
@@ -849,6 +904,7 @@ mod tests {
     #[test]
     fn panels_submenu_exposes_independent_modes_and_dynamic_sides() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let items = cx.update_entity(&app, |app, cx| {
             app.title_menu_items_for_test(TitleMenu::View, cx)

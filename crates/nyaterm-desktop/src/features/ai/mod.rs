@@ -1,7 +1,5 @@
 //! AI chat, agent loop, background jobs and AI settings runtime.
 
-use std::time::Duration;
-
 pub(in crate::features) mod agent_management;
 mod ai_agent_runtime;
 mod ai_jobs;
@@ -22,10 +20,6 @@ pub(in crate::features) use state::{
     AiFeatureFocus, AiFeatureInit, AiFeatureState, AiFullAccessSetting, AiSettingsMutation,
     ConnectionStatus, ProviderSettingsView,
 };
-
-/// Observation clock for deadlines and prompt settlement, armed only during a command.
-const AGENT_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(150);
-const AGENT_DEFAULT_STEP_TIMEOUT: Duration = Duration::from_millis(30_000);
 
 pub(in crate::features) fn reasoning_effort_label(
     effort: &nyaterm_core::AiReasoningEffort,

@@ -18,6 +18,12 @@ pub type NyaRoot = gpui_kit::component::Root;
 
 pub type NyaWindowHandle = WindowHandle<NyaRoot>;
 
+/// Override only this window's component root; restoring removes the override so
+/// subsequent theme changes continue to supply the background normally.
+pub fn set_nya_root_transparent(root: &mut NyaRoot, transparent: bool) {
+    root.style().background = transparent.then(|| gpui::rgba(0).into());
+}
+
 struct NyaRootContent {
     view: AnyView,
 }
@@ -89,6 +95,30 @@ mod tests {
     };
 
     struct RootContentFixture;
+
+    #[gpui::test]
+    fn native_window_background_override_is_local_and_restores_theme_defaults(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (main, _) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| RootContentFixture);
+            nya_root(content, window, cx)
+        });
+        let (child, _) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| RootContentFixture);
+            nya_root(content, window, cx)
+        });
+        main.update(cx, |root, _| {
+            super::set_nya_root_transparent(root, true);
+            assert_eq!(root.style().background, Some(gpui::rgba(0).into()));
+        });
+        child.update(cx, |root, _| assert!(root.style().background.is_none()));
+        main.update(cx, |root, _| {
+            super::set_nya_root_transparent(root, false);
+            assert!(root.style().background.is_none());
+        });
+    }
 
     #[derive(IntoElement)]
     struct TypographyCapture {

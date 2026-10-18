@@ -293,6 +293,7 @@ impl NyaTermApp {
         if update.already_disconnected {
             return;
         }
+        self.close_terminal_executions_for_session(session_id, cx);
         let banner = "\r\n\x1b[31m[Session disconnected]\x1b[0m\r\n\x1b[33m[Press Enter to reconnect]\x1b[0m\r\n";
         let encoding = self
             .session
@@ -379,6 +380,7 @@ impl NyaTermApp {
             return;
         };
         self.session.mark_session_disconnected(&old_id);
+        self.close_terminal_executions_for_session(&old_id, cx);
         let launch_config = metadata.launch_config;
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
@@ -519,6 +521,7 @@ mod tests {
     fn duplicate_session_focus_handoff_survives_menu_dismissal() {
         let root = TestConfigDir::new("nyaterm-duplicate-focus");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "source");
         let cx = session_focus_test_window(&mut cx, &app);
 
@@ -556,6 +559,7 @@ mod tests {
         for missing_source in [true, false] {
             let root = TestConfigDir::new("nyaterm-duplicate-invalid-start-focus");
             let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
             let app = app_with_visible_local_session(&mut cx, root.path(), "source");
             let cx = session_focus_test_window(&mut cx, &app);
             cx.update(|window, cx| {

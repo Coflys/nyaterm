@@ -14,8 +14,16 @@ use super::{
     KeyboardInteractivePromptState, unix_seconds_now,
 };
 use crate::features::{
-    NyaTermApp, text_inputs::TextInputSetup, transfers::duplicate_decision_label,
+    NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup,
+    transfers::duplicate_decision_label,
 };
+
+#[derive(Clone, Copy)]
+enum KeyboardInteractiveOtpPreview {
+    Initial,
+    Generate,
+    Refresh,
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn resolve_agent_prompt(
@@ -192,19 +200,64 @@ impl NyaTermApp {
         let Some(otp_id) = self.session.prompts.keyboard_interactive_otp_id() else {
             return;
         };
-        let result = self
+        self.request_keyboard_interactive_otp_preview(
+            otp_id,
+            KeyboardInteractiveOtpPreview::Generate,
+            cx,
+        );
+    }
+
+    /// Store reads behind an OTP preview wait on the store worker, so they run on the
+    /// blocking pool; the result applies only while the same prompt is still active.
+    fn request_keyboard_interactive_otp_preview(
+        &mut self,
+        otp_id: String,
+        purpose: KeyboardInteractiveOtpPreview,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(prompt_id) = self
             .session
-            .prompts
-            .otp_provider()
-            .preview_otp_code(&otp_id);
-        if self
-            .session
-            .prompts
-            .apply_keyboard_interactive_otp_result(result, false)
-        {
-            self.shell.set_status("OTP code ready".to_string());
-        }
-        cx.notify();
+            .prompt_active_keyboard_interactive()
+            .map(|state| state.id.clone())
+        else {
+            return;
+        };
+        let provider = self.session.prompts.otp_provider();
+        let task = self
+            .blocking_jobs
+            .submit_task("ssh-prompt-otp-preview", move |_| {
+                provider.preview_otp_code(&otp_id)
+            });
+        cx.spawn(async move |this, cx| {
+            let result = await_blocking_job(task).await.and_then(|result| result);
+            let _ = this.update(cx, |this, cx| {
+                if !this
+                    .session
+                    .prompt_active_keyboard_interactive()
+                    .is_some_and(|state| state.id == prompt_id)
+                {
+                    return;
+                }
+                let result = match (purpose, result) {
+                    (KeyboardInteractiveOtpPreview::Initial, Ok(Some(preview))) => {
+                        Ok(Some(preview))
+                    }
+                    // An initial preview is best effort; the user can still generate one.
+                    (KeyboardInteractiveOtpPreview::Initial, _) => return,
+                    (_, result) => result,
+                };
+                let ready = this.session.prompts.apply_keyboard_interactive_otp_result(
+                    result,
+                    matches!(purpose, KeyboardInteractiveOtpPreview::Refresh),
+                );
+                if ready && matches!(purpose, KeyboardInteractiveOtpPreview::Generate) {
+                    this.shell.set_status("OTP code ready".to_string());
+                }
+                this.ensure_keyboard_interactive_totp_clock(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(in crate::features) fn send_keyboard_interactive_otp_to_input(
@@ -387,7 +440,7 @@ impl NyaTermApp {
                         let dirty = this.session.prompts.clear_cancelled_attempt_prompts()
                             | this.drain_host_key_prompts()
                             | this.drain_agent_prompts()
-                            | this.drain_credential_prompts();
+                            | this.drain_credential_prompts(cx);
                         let duplicate_activated = this.drain_duplicate_prompts();
                         if duplicate_activated
                             && let Some(prompt) = this.session.prompt_active_duplicate().cloned()
@@ -442,7 +495,7 @@ impl NyaTermApp {
         true
     }
 
-    pub(in crate::features) fn drain_credential_prompts(&mut self) -> bool {
+    pub(in crate::features) fn drain_credential_prompts(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(request) = self.session.prompts.take_next_credential_request() {
             match request {
                 CredentialPromptRequest::Secret {
@@ -482,27 +535,10 @@ impl NyaTermApp {
                             .find(|entry| entry.id == otp_id)
                             .map(|entry| entry.otp_type.to_ascii_lowercase())
                     });
-                    let otp_preview = if otp_type.as_deref() == Some("totp") {
-                        request
-                            .otp_id
-                            .as_deref()
-                            .and_then(|otp_id| {
-                                self.session
-                                    .prompts
-                                    .otp_provider()
-                                    .preview_otp_code(otp_id)
-                                    .ok()
-                            })
-                            .flatten()
-                    } else {
-                        None
-                    };
-                    let otp_code = otp_preview.as_ref().map(|preview| preview.code.clone());
-                    let otp_period = otp_preview
-                        .as_ref()
-                        .map(|preview| preview.period)
-                        .unwrap_or(0);
-                    let otp_time_step = otp_preview.as_ref().and_then(|preview| preview.time_step);
+                    let initial_preview_otp_id = request
+                        .otp_id
+                        .clone()
+                        .filter(|_| otp_type.as_deref() == Some("totp"));
                     self.session.prompts.activate_keyboard_interactive(
                         KeyboardInteractivePromptState {
                             id,
@@ -510,13 +546,20 @@ impl NyaTermApp {
                             response_tx,
                             responses,
                             focused_index: 0,
-                            otp_code,
+                            otp_code: None,
                             otp_type,
-                            otp_period,
-                            otp_time_step,
+                            otp_period: 0,
+                            otp_time_step: None,
                             otp_error: None,
                         },
                     );
+                    if let Some(otp_id) = initial_preview_otp_id {
+                        self.request_keyboard_interactive_otp_preview(
+                            otp_id,
+                            KeyboardInteractiveOtpPreview::Initial,
+                            cx,
+                        );
+                    }
                 }
             }
             return true;
@@ -558,9 +601,7 @@ impl NyaTermApp {
                 };
                 cx.background_executor().timer(delay).await;
                 let Ok(still_showing) = this.update(cx, |this, cx| {
-                    if this.refresh_keyboard_interactive_totp() {
-                        cx.notify();
-                    }
+                    this.refresh_keyboard_interactive_totp(cx);
                     let showing = this
                         .session
                         .prompt_keyboard_totp_seconds_to_next_step(unix_seconds_now())
@@ -580,23 +621,22 @@ impl NyaTermApp {
         .detach();
     }
 
-    pub(in crate::features) fn refresh_keyboard_interactive_totp(&mut self) -> bool {
+    pub(in crate::features) fn refresh_keyboard_interactive_totp(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
         let Some(otp_id) = self
             .session
             .prompts
             .keyboard_totp_refresh_otp_id(unix_seconds_now())
         else {
-            return false;
+            return;
         };
-        let result = self
-            .session
-            .prompts
-            .otp_provider()
-            .preview_otp_code(&otp_id);
-        self.session
-            .prompts
-            .apply_keyboard_interactive_otp_result(result, true);
-        true
+        self.request_keyboard_interactive_otp_preview(
+            otp_id,
+            KeyboardInteractiveOtpPreview::Refresh,
+            cx,
+        );
     }
 
     pub(in crate::features) fn drain_duplicate_prompts(&mut self) -> bool {

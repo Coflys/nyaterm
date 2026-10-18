@@ -1552,6 +1552,7 @@ mod tests {
     fn user_started_session_focus_handoff_targets_the_requested_surface() {
         let dir = unique_temp_dir("session-start-focus");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let runtime = AppRuntime::from_parts_for_test(
             RuntimeMode::Portable,
             dir.path().to_path_buf(),

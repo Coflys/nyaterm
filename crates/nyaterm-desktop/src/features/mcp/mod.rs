@@ -7,11 +7,12 @@ use super::ai::{McpHelperStatus, mcp_helper_status};
 use futures::StreamExt;
 use gpui::Context;
 use nyaterm_core::{CapabilityScope, ExternalMcpSessionScope, ExternalMcpSettings};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(in crate::features) use nyaterm_core::capabilities::AgentApprovalDecision as McpApprovalDecision;
 
 use super::capability_runtime::CapabilityRuntimeState;
+use super::capability_runtime::terminal_execution::TerminalExecutionPolicy;
 pub(in crate::features) use super::capability_runtime::{
     CapabilityApprovalOutcome as McpApprovalOutcome,
     CapabilityApprovalRequest as McpApprovalRequest,
@@ -26,7 +27,8 @@ pub(in crate::features) struct McpHostFeatureState {
     request_sender: futures::channel::mpsc::UnboundedSender<McpHostEvent>,
     pub(in crate::features) owner_window_label: String,
     generation: Option<String>,
-    ephemeral_generations: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
+    ephemeral_generations:
+        std::sync::Arc<std::sync::Mutex<HashMap<String, TerminalExecutionPolicy>>>,
     pub(in crate::features) capabilities: CapabilityRuntimeState,
 }
 
@@ -40,7 +42,7 @@ pub(in crate::features) enum McpHostStatus {
 pub(in crate::features) struct McpEphemeralCredential {
     runtime: McpHostRuntime,
     generation: String,
-    generation_registry: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
+    generation_registry: std::sync::Arc<std::sync::Mutex<HashMap<String, TerminalExecutionPolicy>>>,
     events: futures::channel::mpsc::UnboundedSender<McpHostEvent>,
 }
 
@@ -147,6 +149,7 @@ impl McpHostFeatureState {
         session_ids: Vec<String>,
         default_session_id: Option<String>,
         permission_mode: nyaterm_core::AiPermissionMode,
+        policy: TerminalExecutionPolicy,
     ) -> Result<McpEphemeralCredential, String> {
         let sender = self.request_sender.clone();
         let runtime = McpHostRuntime::start(
@@ -160,13 +163,24 @@ impl McpHostFeatureState {
         self.ephemeral_generations
             .lock()
             .map_err(|_| "MCP ephemeral generation registry is unavailable".to_string())?
-            .insert(generation.clone());
+            .insert(generation.clone(), policy);
         Ok(McpEphemeralCredential {
             runtime,
             generation,
             generation_registry: self.ephemeral_generations.clone(),
             events: self.request_sender.clone(),
         })
+    }
+
+    pub(in crate::features) fn terminal_policy(
+        &self,
+        generation: &str,
+    ) -> Option<TerminalExecutionPolicy> {
+        self.ephemeral_generations
+            .lock()
+            .ok()?
+            .get(generation)
+            .copied()
     }
 
     fn take_request_receiver(
@@ -180,7 +194,7 @@ impl McpHostFeatureState {
             || self
                 .ephemeral_generations
                 .lock()
-                .is_ok_and(|generations| generations.contains(generation))
+                .is_ok_and(|generations| generations.contains_key(generation))
     }
 
     #[cfg(test)]
@@ -251,7 +265,12 @@ impl NyaTermApp {
                             this.handle_mcp_disconnect(&connection_id, cx)
                         }
                         McpHostEvent::GenerationExpired { generation } => {
+                            this.mcp
+                                .capabilities
+                                .terminal_executions
+                                .forget_owner(&generation);
                             this.mcp.capabilities.revoke_generation(&generation);
+                            this.poll_terminal_executions(cx);
                             cx.notify();
                         }
                     })
@@ -320,10 +339,15 @@ impl NyaTermApp {
                 "The MCP request was cancelled.",
             )));
         }
+        self.poll_terminal_executions(cx);
         cx.notify();
     }
 
     fn handle_mcp_disconnect(&mut self, connection_id: &str, cx: &mut Context<Self>) {
+        self.mcp
+            .capabilities
+            .terminal_executions
+            .forget_owner(connection_id);
         self.mcp.capabilities.outputs.remove(connection_id);
         for request in self.mcp.capabilities.connection_disconnected(connection_id) {
             let assessment =
@@ -343,6 +367,7 @@ impl NyaTermApp {
                 "The MCP client disconnected.",
             )));
         }
+        self.poll_terminal_executions(cx);
         cx.notify();
     }
 
@@ -371,9 +396,10 @@ impl NyaTermApp {
         session_ids: Vec<String>,
         default_session_id: Option<String>,
         permission_mode: nyaterm_core::AiPermissionMode,
+        policy: TerminalExecutionPolicy,
     ) -> Result<McpEphemeralCredential, String> {
         self.mcp
-            .create_ephemeral(session_ids, default_session_id, permission_mode)
+            .create_ephemeral(session_ids, default_session_id, permission_mode, policy)
     }
 
     pub(in crate::features) fn mcp_host_status(&self) -> McpHostStatus {
@@ -404,6 +430,50 @@ mod tests {
     use crate::features::capability_runtime::{
         connection_group_path, connection_type_name, mcp_grant_key,
     };
+
+    #[test]
+    fn integrated_generations_keep_policies_until_their_own_credential_expires() {
+        use crate::features::capability_runtime::terminal_execution::TerminalExecutionPolicy;
+        let state = McpHostFeatureState::disabled_for_test();
+        let foreground = TerminalExecutionPolicy {
+            background: false,
+            max_lines: 5,
+        };
+        let background = TerminalExecutionPolicy {
+            background: true,
+            max_lines: 0,
+        };
+        let codex = state
+            .create_ephemeral(
+                vec!["a".into()],
+                Some("a".into()),
+                AiPermissionMode::FullAccess,
+                foreground,
+            )
+            .unwrap();
+        let claude = state
+            .create_ephemeral(
+                vec!["b".into()],
+                Some("b".into()),
+                AiPermissionMode::FullAccess,
+                background,
+            )
+            .unwrap();
+        let codex_generation = codex
+            .environment()
+            .remove("NYATERM_MCP_GENERATION")
+            .unwrap();
+        let claude_generation = claude
+            .environment()
+            .remove("NYATERM_MCP_GENERATION")
+            .unwrap();
+        assert_eq!(state.terminal_policy(&codex_generation), Some(foreground));
+        assert_eq!(state.terminal_policy(&claude_generation), Some(background));
+        assert_eq!(state.terminal_policy("external"), None);
+        drop(codex);
+        assert!(!state.generation_matches(&codex_generation));
+        assert_eq!(state.terminal_policy(&claude_generation), Some(background));
+    }
 
     #[test]
     fn connection_group_paths_are_cycle_safe_and_graphical_connections_are_excluded() {

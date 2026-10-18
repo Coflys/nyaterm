@@ -6,6 +6,7 @@ use nyaterm_core::{
 };
 use nyaterm_store::{StoreDomain, store_request};
 use nyaterm_transport::SessionKind;
+use nyaterm_ui::NyaDialogWindowExt as _;
 
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job, text_inputs::TextInputSetup};
 use crate::models::DiagnosticsPathPromptResult;
@@ -39,6 +40,9 @@ impl NyaTermApp {
         }
         self.security.remember_screen_lock_focus(window.focused(cx));
         self.security.activate_screen_lock(String::new());
+        self.forget_text_inputs("security.editor.");
+        self.connection_state.clear_editor_secrets(cx);
+        window.close_all_nya_dialogs(cx);
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status("screen locked".to_string());
         if self.settings.summary().has_master_password {
@@ -186,20 +190,31 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn reveal_log_dir(&mut self, cx: &mut Context<Self>) {
-        match std::fs::create_dir_all(self.runtime.log_dir()) {
-            Ok(()) => {
-                cx.reveal_path(self.runtime.log_dir());
-                self.shell.set_status(format!(
-                    "opened log directory {}",
-                    self.runtime.log_dir().display()
-                ));
-            }
-            Err(error) => {
-                self.shell
-                    .set_status(format!("failed to prepare log directory: {error}"));
-            }
-        }
-        cx.notify();
+        let log_dir = self.runtime.log_dir().to_path_buf();
+        let job_dir = log_dir.clone();
+        let task = self
+            .blocking_jobs
+            .submit_task("reveal-log-dir", move |_| std::fs::create_dir_all(&job_dir));
+        cx.spawn(async move |this, cx| {
+            let result = await_blocking_job(task)
+                .await
+                .and_then(|result| result.map_err(|error| error.to_string()));
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        cx.reveal_path(&log_dir);
+                        this.shell
+                            .set_status(format!("opened log directory {}", log_dir.display()));
+                    }
+                    Err(error) => {
+                        this.shell
+                            .set_status(format!("failed to prepare log directory: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(in crate::features) fn prompt_diagnostics_export(&mut self, cx: &mut Context<Self>) {

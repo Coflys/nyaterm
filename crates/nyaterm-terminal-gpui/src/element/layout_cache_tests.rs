@@ -693,7 +693,7 @@ fn zebra_stripes_merge_input_rows_and_target_row_takes_priority() {
     assert_eq!(stripes.len(), 3);
     assert_eq!(
         stripes[1].background,
-        gpui::rgba((palette.accent << 8) | 0x24).into()
+        gpui::rgb(palette.terminal_line_highlight).into()
     );
 }
 
@@ -809,16 +809,128 @@ fn cell_backgrounds_cover_trailing_blanks_wide_spacers_and_reverse_video() {
     let snapshot = screen.snapshot();
     let row = snapshot.row(0).unwrap();
     assert_eq!(row.text, "中TEXT");
-    let ranges = terminal_background_ranges_for_cells(&row.cells, palette);
+    let ranges = terminal_background_ranges_for_cells(&row.cells, palette, false);
     assert_eq!(ranges.len(), 2);
     assert_eq!((ranges[0].start, ranges[0].end), (0, 6));
     assert_eq!((ranges[1].start, ranges[1].end), (6, 14));
     assert_eq!(ranges[1].bg, palette.terminal_ansi_color(4));
-    let ranges = terminal_background_ranges_for_cells(&snapshot.row(1).unwrap().cells, palette);
+    let ranges =
+        terminal_background_ranges_for_cells(&snapshot.row(1).unwrap().cells, palette, false);
     assert_eq!(
         (ranges[0].start, ranges[0].end, ranges[0].bg),
         (0, 4, palette.terminal_fg)
     );
+}
+
+#[test]
+fn reverse_backgrounds_cover_spaces_wide_spacers_and_adjacent_color_ranges() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    for alternate in [false, true] {
+        let mut screen = TerminalScreen::new(16, 2);
+        if alternate {
+            screen.advance(b"\x1b[?1049h");
+        }
+        screen.advance("\x1b[31;44mN\x1b[7m  中  \x1b[32m  \x1b[27mN\x1b[0m".as_bytes());
+        let snapshot = screen.snapshot();
+        let row = snapshot.row(0).unwrap();
+        assert_eq!(row.cells[4].width, 0);
+        let ranges = terminal_background_ranges_for_cells(&row.cells, palette, false);
+        let actual: Vec<_> = ranges.iter().map(|r| (r.start, r.end, r.bg)).collect();
+        assert_eq!(
+            actual,
+            vec![
+                (0, 1, palette.terminal_ansi_color(4)),
+                (1, 7, palette.terminal_ansi_color(1)),
+                (7, 9, palette.terminal_ansi_color(2)),
+                (9, 10, palette.terminal_ansi_color(4)),
+            ]
+        );
+        let spans =
+            crate::ansi::ansi_to_highlight_spans_compiled(&row.styled_spans, palette, &[], false);
+        let span_ranges = terminal_background_ranges_for_spans(&spans);
+        let from_spans: Vec<_> = span_ranges.iter().map(|r| (r.start, r.end, r.bg)).collect();
+        assert_eq!(from_spans, actual);
+
+        screen.advance(b"\r\x1b[0;31;44;7m                \x1b[0m");
+        let snapshot = screen.snapshot();
+        let row = snapshot.row(0).unwrap();
+        assert!(row.text.is_empty());
+        let ranges = terminal_background_ranges_for_cells(&row.cells, palette, false);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(
+            (ranges[0].start, ranges[0].end, ranges[0].bg),
+            (0, 16, palette.terminal_ansi_color(1))
+        );
+    }
+}
+
+#[test]
+fn reverse_button_updates_invalidate_snapshot_and_layout_cache() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let mut screen = TerminalScreen::new(16, 2);
+    let mut cache = NyaTerminalLayoutCache::default();
+    let mut previous: Option<TerminalSnapshot> = None;
+    let decorations = TerminalLineDecorations::default();
+    for reverse in [false, true, false, true, false] {
+        screen.advance(if reverse {
+            b"\r\x1b[0;31;44;7mSELECTED"
+        } else {
+            b"\r\x1b[0;31;44mSELECTED"
+        });
+        let snapshot = screen.snapshot();
+        let row = snapshot.row(0).unwrap();
+        let key = terminal_row_layout_key(
+            Some(row.revision),
+            &row.text,
+            Some(&row.styled_spans),
+            &decorations,
+            &[],
+            false,
+            0,
+        );
+        if let Some(before) = &previous {
+            let before = before.row(0).unwrap();
+            assert_eq!(before.text, row.text);
+            assert_ne!(before.revision, row.revision);
+            assert_ne!(before.signature, row.signature);
+            assert_ne!(
+                terminal_row_layout_key(
+                    None,
+                    &before.text,
+                    Some(&before.styled_spans),
+                    &decorations,
+                    &[],
+                    false,
+                    0
+                ),
+                terminal_row_layout_key(
+                    None,
+                    &row.text,
+                    Some(&row.styled_spans),
+                    &decorations,
+                    &[],
+                    false,
+                    0
+                ),
+            );
+        }
+        let (painted, _, _) = cache.paint_row(0, key, || {
+            (
+                Arc::new(ShapedLine::default()),
+                std::time::Duration::ZERO,
+                1,
+                terminal_background_ranges_for_cells(&row.cells, palette, false),
+                TerminalRowTextDecorations::default(),
+                Vec::new(),
+            )
+        });
+        assert_eq!(
+            painted.background_ranges[0].bg,
+            palette.terminal_ansi_color(if reverse { 1 } else { 4 })
+        );
+        assert_eq!(row.cells[0].style.reverse, reverse);
+        previous = Some(snapshot);
+    }
 }
 
 #[test]
@@ -1833,13 +1945,22 @@ fn dynamic_decoration_backgrounds_include_occurrence_and_search() {
         &mut out,
     );
 
-    assert_eq!(out.len(), 3);
+    assert_eq!(out.len(), 4);
     assert!(out.iter().all(|quad| quad.bounds.origin.y == px(-8.0)));
     assert_eq!(
         out[0].background,
         gpui::rgba((palette.text_muted << 8) | 0x58).into()
     );
-    assert_eq!(out[2].background, gpui::rgb(palette.warning).into());
+    assert_eq!(
+        out[2].background,
+        gpui::rgb(palette.terminal_find_bg).into()
+    );
+    assert_eq!(
+        out[3].border_color,
+        gpui::rgb(palette.terminal_find_border).into()
+    );
+    assert_eq!(out[3].bounds, out[2].bounds);
+    assert_eq!(out[3].border_widths.top, px(1.));
 }
 
 #[test]

@@ -1,12 +1,12 @@
 use gpui::{
-    Action as _, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _,
-    Render, RenderOnce, SharedString, Styled as _, Subscription, Window, div,
-    prelude::FluentBuilder as _, px,
+    Action as _, AnyElement, App, AppContext, Context, Entity, EntityInputHandler as _,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, ParentElement as _, Render, RenderOnce, SharedString, Styled as _, Subscription,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_base::input::InputContextMenuCapabilities;
 use gpui_kit::component::input::{
-    Copy, Cut, Editor, EditorState, Enter, Input, InputEvent, InputState, Paste, SelectAll,
+    Copy, Cut, Editor, EditorState, Enter, Escape, Input, InputEvent, InputState, Paste, SelectAll,
     Textarea, TextareaState,
 };
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable, Size};
@@ -74,6 +74,28 @@ impl ComponentState {
             Self::Input(state) => state.update(cx, |state, cx| state.focus(window, cx)),
             Self::Textarea(state) => state.update(cx, |state, cx| state.focus(window, cx)),
             Self::Editor(state) => state.update(cx, |state, cx| state.focus(window, cx)),
+        }
+    }
+
+    fn is_composing(&self, window: &mut Window, cx: &mut App) -> bool {
+        match self {
+            Self::Input(state) => state.update(cx, |state, cx| {
+                state.marked_text_range(window, cx).is_some()
+            }),
+            Self::Textarea(state) => state.update(cx, |state, cx| {
+                state.marked_text_range(window, cx).is_some()
+            }),
+            Self::Editor(state) => state.update(cx, |state, cx| {
+                state.marked_text_range(window, cx).is_some()
+            }),
+        }
+    }
+
+    fn finish_composition(&self, window: &mut Window, cx: &mut App) {
+        match self {
+            Self::Input(state) => state.update(cx, |state, cx| state.unmark_text(window, cx)),
+            Self::Textarea(state) => state.update(cx, |state, cx| state.unmark_text(window, cx)),
+            Self::Editor(state) => state.update(cx, |state, cx| state.unmark_text(window, cx)),
         }
     }
 
@@ -517,6 +539,9 @@ impl RenderOnce for NyaInput {
         let (state, disabled, readonly, multi_line) =
             prepare_input_component(&self.state, window, cx);
         let focus_state = state.clone();
+        let composition_state = state.clone();
+        let enter_composition_state = state.clone();
+        let escape_composition_state = state.clone();
         let input = match state {
             ComponentState::Input(state) => Input::new(&state)
                 .xsmall()
@@ -555,6 +580,26 @@ impl RenderOnce for NyaInput {
             .when(!multi_line, |this| this.flex().items_center())
             .capture_any_mouse_down(|_, _, cx| {
                 preserve_nya_input_focus_on_pointer_down(cx);
+            })
+            .capture_action(move |_: &Enter, window, cx| {
+                if enter_composition_state.is_composing(window, cx) {
+                    enter_composition_state.finish_composition(window, cx);
+                    cx.stop_propagation();
+                }
+            })
+            .capture_action(move |_: &Escape, window, cx| {
+                if escape_composition_state.is_composing(window, cx) {
+                    escape_composition_state.finish_composition(window, cx);
+                    cx.stop_propagation();
+                }
+            })
+            .capture_key_down(move |event, window, cx| {
+                // Form shortcuts must not submit or dismiss while the IME owns Enter/Escape.
+                if matches!(event.keystroke.key.as_str(), "enter" | "escape" | "tab")
+                    && composition_state.is_composing(window, cx)
+                {
+                    cx.stop_propagation();
+                }
             })
             .on_any_mouse_down(move |_, window, cx| {
                 if !disabled {
@@ -1261,6 +1306,82 @@ mod tests {
                 .child(self.plain.clone())
                 .child(self.masked.clone())
         }
+    }
+
+    struct CompositionFormFixture {
+        field: gpui::Entity<NyaInputState>,
+        submitted: Rc<Cell<usize>>,
+    }
+
+    impl Render for CompositionFormFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let submitted = self.submitted.clone();
+            div()
+                .w(px(300.))
+                .h(px(36.))
+                .on_key_down(move |event, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
+                        submitted.set(submitted.get() + 1);
+                        cx.stop_propagation();
+                    }
+                })
+                .child(super::NyaInput::new(&self.field))
+        }
+    }
+
+    #[gpui::test]
+    fn composing_text_does_not_submit_or_dismiss_the_form(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        cx.update(gpui_kit::init);
+        let submitted = Rc::new(Cell::new(0));
+        let (fixture, cx) = cx.add_window_view({
+            let submitted = submitted.clone();
+            move |_, cx| CompositionFormFixture {
+                field: cx.new(|cx| NyaInputState::new(cx, "")),
+                submitted,
+            }
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            window.focus(&field.read(cx).component_focus_handle(cx), cx);
+            field
+                .read(cx)
+                .component_state()
+                .unwrap()
+                .update(cx, |state, cx| {
+                    state.replace_and_mark_text_in_range(None, "拼", Some(0..1), window, cx);
+                });
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 0, "Enter must confirm composition first");
+        cx.update(|window, cx| {
+            field
+                .read(cx)
+                .component_state()
+                .unwrap()
+                .update(cx, |state, cx| {
+                    state.replace_and_mark_text_in_range(None, "音", Some(0..1), window, cx);
+                });
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 0, "Escape must cancel composition first");
+        cx.update(|window, cx| {
+            field
+                .read(cx)
+                .component_state()
+                .unwrap()
+                .update(cx, |state, cx| state.unmark_text(window, cx))
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 1);
     }
 
     #[test]

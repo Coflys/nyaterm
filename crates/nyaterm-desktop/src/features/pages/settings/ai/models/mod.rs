@@ -318,6 +318,7 @@ impl SettingsPanel {
                         "icons/settings/eye.svg"
                     },
                 )
+                .form_control()
                 .tooltip(t!(if revealed {
                     "ai.hideApiKey"
                 } else {
@@ -419,7 +420,7 @@ impl SettingsPanel {
                 )
                 .child(
                     NyaButton::new("ai-provider-model-add", t!("common.add"))
-                        .small()
+                        .form_control()
                         .icon("icons/settings/plus.svg")
                         .disabled(draft.trim().is_empty())
                         .on_click(cx.listener({

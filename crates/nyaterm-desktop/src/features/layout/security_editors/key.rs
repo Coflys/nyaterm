@@ -181,14 +181,18 @@ impl NyaTermApp {
                                     )),
                                     cx,
                                 )))
-                                .child(small_button(
-                                    palette,
-                                    "security-key-browse",
-                                    t!("securityAuth.browse"),
-                                    cx.listener(|this, _, window, cx| {
-                                        this.pick_security_key_file(false, window, cx);
-                                    }),
-                                )),
+                                .child(
+                                    nyaterm_ui::NyaButton::new(
+                                        "security-key-browse",
+                                        t!("securityAuth.browse"),
+                                    )
+                                    .form_control()
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            this.pick_security_key_file(false, window, cx);
+                                        },
+                                    )),
+                                ),
                         )
                     }),
             )
@@ -269,14 +273,18 @@ impl NyaTermApp {
                                         )),
                                         cx,
                                     )))
-                                    .child(small_button(
-                                        palette,
-                                        "security-cert-browse",
-                                        t!("securityAuth.browse"),
-                                        cx.listener(|this, _, window, cx| {
-                                            this.pick_security_key_file(true, window, cx);
-                                        }),
-                                    )),
+                                    .child(
+                                        nyaterm_ui::NyaButton::new(
+                                            "security-cert-browse",
+                                            t!("securityAuth.browse"),
+                                        )
+                                        .form_control()
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.pick_security_key_file(true, window, cx);
+                                            }),
+                                        ),
+                                    ),
                             )
                         }),
                 )
@@ -309,6 +317,7 @@ impl NyaTermApp {
                                 "icons/eye.svg"
                             },
                         )
+                        .form_control()
                         .tooltip(t!(if editor.show_passphrase {
                             "settings.hidePassphrase"
                         } else {

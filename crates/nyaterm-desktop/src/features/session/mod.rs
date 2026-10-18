@@ -1,4 +1,5 @@
 //! Session lifecycle, prompts, recording and file-transfer session runtimes.
+mod transfer_wire;
 
 use std::collections::HashMap;
 

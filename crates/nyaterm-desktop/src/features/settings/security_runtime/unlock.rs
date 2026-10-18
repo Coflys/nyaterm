@@ -74,6 +74,8 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.security.lock_secrets();
+        self.forget_text_inputs("security.editor.");
+        self.connection_state.clear_editor_secrets(cx);
         self.forget_text_inputs("security.unlock.password");
         window.close_all_nya_dialogs(cx);
         cx.notify();
@@ -170,15 +172,18 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         match action {
+            SecurityUnlockAction::SavePasswordEditor(token) => {
+                if self.security.account_editor_token() == Some(token) {
+                    self.save_security_password_editor(window, cx);
+                }
+            }
             SecurityUnlockAction::ViewPrivateKey(id) => {
                 self.view_security_private_key(id, window, cx);
             }
             SecurityUnlockAction::CopyPublicKey(id) => {
                 self.copy_security_public_key(id, window, cx);
             }
-            SecurityUnlockAction::OpenPasswordEditor(id) => {
-                self.open_security_password_editor(id, window, cx);
-            }
+
             SecurityUnlockAction::RevealPassword(id) => {
                 self.reveal_security_password(id, window, cx);
             }

@@ -36,6 +36,10 @@ pub use child_window::{ChildWindowSlot, activate_child_window};
 pub use command::{NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState};
 pub use dialog::{NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogWindowExt};
 pub use document_editor::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
+pub use gpui_kit::component::color_picker::{
+    ColorPicker as NyaColorPicker, ColorPickerEvent as NyaColorPickerEvent,
+    ColorPickerState as NyaColorPickerState,
+};
 pub use gpui_kit::component::input::{
     Copy as NyaCopy, Cut as NyaCut, Paste as NyaPaste, Redo as NyaRedo, SelectAll as NyaSelectAll,
     Undo as NyaUndo,
@@ -58,7 +62,7 @@ pub use number_input::{
     NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState, NyaNumberStep,
 };
 pub use popover::{NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
-pub use root::{NyaRoot, NyaWindowHandle, nya_root};
+pub use root::{NyaRoot, NyaWindowHandle, nya_root, set_nya_root_transparent};
 pub use selectable_text::NyaSelectableText;
 pub use selection::{
     NyaCheckbox, NyaRadioGroup, NyaSelect, NyaSelectEvent, NyaSelectOption, NyaSelectState,
@@ -67,7 +71,10 @@ pub use selection::{
 pub use settings::{NyaSettingsLayout, NyaSettingsNavGroup, NyaSettingsNavItem};
 pub use sizing::NYA_FORM_CONTROL_HEIGHT_PX;
 pub use tabs::{NyaTabItem, NyaTabs, NyaTabsVariant};
-pub use theme::{APPEARANCE_THEME_IDS, ThemePalette, appearance_theme_label, theme_palette};
+pub use theme::{
+    APPEARANCE_THEME_IDS, ThemePalette, appearance_theme_label, available_themes,
+    palette_from_theme, resolve_theme_palette, theme_palette,
+};
 pub use theme_bridge::apply_component_theme;
 pub use tooltip::NyaTooltip;
 pub use widgets::{

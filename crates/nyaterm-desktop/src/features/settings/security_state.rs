@@ -463,6 +463,7 @@ impl SecurityFeatureState {
     }
 
     pub(in crate::features) fn activate_screen_lock(&mut self, status: String) {
+        self.lock_secrets();
         self.screen_lock.locked = true;
         self.screen_lock.idle = false;
         self.screen_lock.unlock_busy = false;
@@ -921,6 +922,13 @@ impl SecurityFeatureState {
         self.editors.otp_qr_importing
     }
 
+    pub(in crate::features) fn account_editor_token(&self) -> Option<u64> {
+        self.editors
+            .password
+            .as_ref()
+            .map(|_| self.editors.request_id)
+    }
+
     pub(in crate::features) fn password_editor(&self) -> Option<&SecurityPasswordEditorState> {
         self.editors.password.as_ref()
     }
@@ -974,6 +982,8 @@ impl SecurityFeatureState {
         editor: SecurityPasswordEditorState,
         status: String,
     ) {
+        self.panel.pending_request = None;
+        self.revealed.passwords.clear();
         self.clear_editors();
         self.editors.password = Some(editor);
         self.status = status;
@@ -1070,8 +1080,13 @@ impl SecurityFeatureState {
                 match id {
                     "pw-name" => editor.name = text,
                     "pw-username" => editor.username = text,
-                    _ => editor.password = text.into(),
+                    _ => {
+                        editor.password_update =
+                            nyaterm_core::models::credentials::PasswordUpdate::Replace(text.into())
+                    }
                 }
+                editor.error = None;
+                editor.error_field = None;
             }
             "otp-issuer" | "otp-username" | "otp-secret" | "otp-digits" | "otp-period"
             | "otp-counter" => {
@@ -1105,6 +1120,7 @@ impl SecurityFeatureState {
     }
 
     fn clear_editors(&mut self) {
+        self.editors.request_id = self.editors.request_id.wrapping_add(1).max(1);
         self.editors.key = None;
         self.editors.otp = None;
         self.editors.password = None;
@@ -1135,7 +1151,11 @@ impl SecurityFeatureState {
     }
 
     pub(in crate::features) fn close_password_editor(&mut self) {
+        self.panel.pending_request = None;
+        self.editors.request_id = self.editors.request_id.wrapping_add(1).max(1);
+        self.editors.busy = false;
         self.editors.password = None;
+        self.revealed.passwords.clear();
         self.status = "password editor closed".to_string();
     }
 
@@ -1222,6 +1242,7 @@ mod tests {
 
     fn security_state() -> SecurityFeatureState {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = || cx.update(|cx| cx.focus_handle());
         SecurityFeatureState::new(
             SecurityCatalogState::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()),
@@ -1348,7 +1369,12 @@ mod tests {
                 id: None,
                 name: String::new(),
                 username: String::new(),
-                password: nyaterm_core::SecretString::default(),
+                password_update: nyaterm_core::models::credentials::PasswordUpdate::Replace(
+                    nyaterm_core::SecretString::default(),
+                ),
+                references_expanded: false,
+                connection_origin: None,
+                error_field: None,
                 has_password: false,
                 show_password: false,
                 error: None,
@@ -1602,7 +1628,12 @@ mod tests {
                 id: None,
                 name: "draft".to_string(),
                 username: String::new(),
-                password: "secret".to_string().into(),
+                password_update: nyaterm_core::models::credentials::PasswordUpdate::Replace(
+                    "secret".to_string().into(),
+                ),
+                references_expanded: false,
+                connection_origin: None,
+                error_field: None,
                 has_password: false,
                 show_password: true,
                 error: None,
@@ -1616,6 +1647,39 @@ mod tests {
         security.set_auth_tab(crate::models::SecurityAuthTab::Otp);
         assert!(security.password_editor().is_none());
         assert!(!security.finish_editor_request(request_id));
+    }
+
+    #[test]
+    fn account_editor_lifecycle_rejects_old_save_and_reveal_results() {
+        use nyaterm_core::models::credentials::PasswordUpdate;
+        let mut security = security_state();
+        let draft = SecurityPasswordEditorState {
+            id: Some("account".into()),
+            name: "Account".into(),
+            username: "root".into(),
+            password_update: PasswordUpdate::Replace("new fixture".into()),
+            has_password: true,
+            references_expanded: false,
+            connection_origin: Some(1),
+            error_field: None,
+            show_password: true,
+            error: None,
+        };
+        security.open_password_editor(draft.clone(), "editing".into());
+        let token = security.account_editor_token();
+        let reveal = security.begin_password_request("account".into());
+        let save = security.begin_editor_request().unwrap();
+        security.close_password_editor();
+        security.open_password_editor(draft, "new lifecycle".into());
+        assert_ne!(security.account_editor_token(), token);
+        assert!(!security.finish_password_request(reveal, "account"));
+        assert!(!security.finish_editor_request(save));
+        let save = security.begin_editor_request().unwrap();
+        security.reveal_password("account".into(), "old fixture".into());
+        security.lock_secrets();
+        assert!(security.password_editor().is_none());
+        assert!(security.revealed_password("account").is_none());
+        assert!(!security.finish_editor_request(save));
     }
 
     #[test]
@@ -1761,6 +1825,7 @@ mod tests {
     fn screen_lock_lifecycle_clears_password_and_resets_activity() {
         let mut security = security_state();
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let previous_focus = cx.update(|cx| cx.focus_handle());
         security.remember_screen_lock_focus(Some(previous_focus.clone()));
         security.set_screen_lock_password_draft("secret".to_string(), "ready".to_string());

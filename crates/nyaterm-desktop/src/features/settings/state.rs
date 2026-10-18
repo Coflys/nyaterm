@@ -149,7 +149,12 @@ struct KeywordHighlightSettingsState {
 }
 
 struct AppearanceSettingsState {
+    palette: nyaterm_ui::ThemePalette,
+    theme_options: Arc<[(String, String)]>,
+    theme_diagnostics: Arc<[String]>,
+    terminal_palette: nyaterm_ui::ThemePalette,
     font_catalog: FontCatalogState,
+    designer: super::theme_designer::ThemeDesignerState,
 }
 
 struct KeybindingSettingsState {
@@ -199,6 +204,10 @@ impl SettingsFeatureState {
         } = init;
         crate::i18n::apply_locale(&summary.language);
         let master_password = SettingsMasterPasswordState::new(summary.has_master_password);
+        let palette = nyaterm_ui::resolve_theme_palette(&summary.theme, &summary.custom_themes);
+        let terminal_palette = Self::resolve_terminal_palette(&summary);
+        let theme_options = nyaterm_ui::available_themes(&summary.custom_themes).into();
+        let theme_diagnostics = summary.custom_themes.diagnostics().into();
         Self {
             summary,
             keyword_config,
@@ -222,7 +231,12 @@ impl SettingsFeatureState {
                 focus: focus.keyword_highlight,
             },
             appearance: AppearanceSettingsState {
+                palette,
+                theme_options,
+                theme_diagnostics,
+                terminal_palette,
                 font_catalog: FontCatalogState::new(ui_font_options, terminal_font_options),
+                designer: Default::default(),
             },
             keybindings: KeybindingSettingsState {
                 recording_id: None,
@@ -397,6 +411,7 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn replace_summary(&mut self, summary: AppSettingsSummary) {
         self.summary = summary;
+        self.refresh_theme_palettes();
         crate::i18n::apply_locale(&self.summary.language);
     }
 
@@ -1000,6 +1015,7 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn set_appearance_theme(&mut self, theme: String) {
         self.summary.theme = theme;
+        self.refresh_theme_palettes();
     }
 
     pub(in crate::features) fn set_terminal_font_family(&mut self, family: String) -> bool {
@@ -1029,6 +1045,7 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn set_terminal_theme(&mut self, theme: Option<String>) {
         self.summary.terminal_theme = theme;
+        self.refresh_theme_palettes();
     }
 
     pub(in crate::features) fn set_minimum_contrast_ratio(&mut self, ratio: String) -> bool {
@@ -1036,6 +1053,7 @@ impl SettingsFeatureState {
             return false;
         }
         self.summary.minimum_contrast_ratio = ratio;
+        self.refresh_theme_palettes();
         true
     }
 
@@ -1104,6 +1122,21 @@ impl SettingsFeatureState {
             return false;
         }
         self.summary.background_content_opacity = opacity;
+        true
+    }
+
+    pub(in crate::features) fn set_window_material(
+        &mut self,
+        material: nyaterm_core::models::window_material::WindowMaterial,
+    ) {
+        self.summary.window_material = material;
+    }
+
+    pub(in crate::features) fn set_window_background_opacity(&mut self, opacity: u8) -> bool {
+        if self.summary.window_background_opacity == opacity {
+            return false;
+        }
+        self.summary.window_background_opacity = opacity;
         true
     }
 
@@ -1645,6 +1678,67 @@ fn adjusted_index_after_remove(value: Option<usize>, removed: usize) -> Option<u
     }
 }
 
+impl SettingsFeatureState {
+    fn resolve_terminal_palette(summary: &AppSettingsSummary) -> nyaterm_ui::ThemePalette {
+        let id = summary
+            .terminal_theme
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.trim().is_empty());
+        // A broken explicit terminal theme follows the UI, without rewriting its id.
+        let id = id
+            .filter(|id| {
+                nyaterm_core::themes::is_builtin(id) || summary.custom_themes.resolve(id).is_some()
+            })
+            .unwrap_or(&summary.theme);
+        let mut palette = nyaterm_ui::resolve_theme_palette(id, &summary.custom_themes);
+        let ratio = match summary.minimum_contrast_ratio.trim() {
+            "3" => 3.,
+            "4.5" => 4.5,
+            "7" => 7.,
+            "21" => 21.,
+            _ => 1.,
+        };
+        palette.apply_minimum_contrast_ratio(ratio);
+        palette
+    }
+    fn refresh_theme_palettes(&mut self) {
+        self.appearance.theme_diagnostics = self.summary.custom_themes.diagnostics().into();
+        self.appearance.theme_options =
+            nyaterm_ui::available_themes(&self.summary.custom_themes).into();
+        self.appearance.palette =
+            nyaterm_ui::resolve_theme_palette(&self.summary.theme, &self.summary.custom_themes);
+        self.appearance.terminal_palette = Self::resolve_terminal_palette(&self.summary);
+    }
+    pub(in crate::features) fn theme_palette(&self) -> nyaterm_ui::ThemePalette {
+        self.appearance.palette
+    }
+    pub(in crate::features) fn terminal_palette(&self) -> nyaterm_ui::ThemePalette {
+        self.appearance.terminal_palette
+    }
+    pub(in crate::features) fn theme_options(&self) -> Arc<[(String, String)]> {
+        self.appearance.theme_options.clone()
+    }
+    pub(in crate::features) fn theme_diagnostics(&self) -> Arc<[String]> {
+        self.appearance.theme_diagnostics.clone()
+    }
+    pub(in crate::features) fn theme_designer(&self) -> &super::theme_designer::ThemeDesignerState {
+        &self.appearance.designer
+    }
+    pub(in crate::features) fn theme_designer_mut(
+        &mut self,
+    ) -> &mut super::theme_designer::ThemeDesignerState {
+        &mut self.appearance.designer
+    }
+    pub(in crate::features) fn merge_theme_commit(
+        &mut self,
+        commit: &nyaterm_core::themes::management::ThemeCommit,
+    ) {
+        commit.merge_into(&mut self.summary);
+        self.refresh_theme_palettes();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1668,6 +1762,7 @@ mod tests {
 
     fn settings_state() -> SettingsFeatureState {
         let cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let focus = || cx.update(|cx| cx.focus_handle());
         SettingsFeatureState::new(
             SettingsFeatureInit {

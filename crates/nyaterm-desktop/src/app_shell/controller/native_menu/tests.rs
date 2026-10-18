@@ -21,8 +21,13 @@ impl Render for EmptyWindow {
     }
 }
 
-fn fixture() -> (TestAppContext, Entity<NyaTermApp>) {
+fn fixture() -> (
+    TestAppContext,
+    Entity<NyaTermApp>,
+    crate::test_support::TestAppCleanup,
+) {
     let mut cx = TestAppContext::single();
+    let cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let root = std::env::temp_dir().join(format!("nyaterm-native-menu-{}", uuid()));
     let runtime = AppRuntime::from_parts_for_test(
         RuntimeMode::Portable,
@@ -37,7 +42,7 @@ fn fixture() -> (TestAppContext, Entity<NyaTermApp>) {
         overlays: cx.new(|_| OverlayStore::default()),
     };
     let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
-    (cx, app)
+    (cx, app, cleanup)
 }
 
 fn projection(cx: &TestAppContext, app: &Entity<NyaTermApp>) -> NativeMenuProjection {
@@ -91,7 +96,7 @@ fn native_item<'a>(menus: &'a [Menu], command: &TitleMenuCommand) -> &'a MenuIte
 
 #[test]
 fn native_menu_contains_every_window_menu_command_and_existing_extra_commands() {
-    let (cx, app) = fixture();
+    let (cx, app, _test_app_cleanup) = fixture();
     let expected = cx.read_entity(&app, |app, cx| {
         [
             TitleMenu::File,
@@ -141,7 +146,7 @@ fn native_menu_contains_every_window_menu_command_and_existing_extra_commands() 
 
 #[test]
 fn native_preview_menu_uses_preview_identity_and_preserves_os_edit_actions() {
-    let (cx, app) = fixture();
+    let (cx, app, _test_app_cleanup) = fixture();
     let menus = projection(&cx, &app).into_menus(AppFlavor::Preview);
     assert_eq!(menus[0].name.as_ref(), "NyaTerm Preview");
     let MenuItem::Action { name, .. } = &menus[0].items[0] else {
@@ -175,7 +180,7 @@ fn native_preview_menu_uses_preview_identity_and_preserves_os_edit_actions() {
 
 #[test]
 fn secondary_windows_disable_workspace_commands_and_keep_application_commands_available() {
-    let (cx, app) = fixture();
+    let (cx, app, _test_app_cleanup) = fixture();
     let mut snapshot = projection(&cx, &app);
     snapshot.main_active = false;
     let menus = snapshot.into_menus(AppFlavor::Stable);
@@ -202,7 +207,7 @@ fn secondary_windows_disable_workspace_commands_and_keep_application_commands_av
 
 #[test]
 fn locked_and_unready_menu_projections_reject_business_commands() {
-    let (cx, app) = fixture();
+    let (cx, app, _test_app_cleanup) = fixture();
     let mut snapshot = projection(&cx, &app);
     snapshot.locked = true;
     assert!(snapshot.command_enabled(&TitleMenuCommand::About));
@@ -238,7 +243,7 @@ fn locked_and_unready_menu_projections_reject_business_commands() {
 
 #[test]
 fn cocoa_validation_cannot_reenable_an_unavailable_command() {
-    let (cx, app) = fixture();
+    let (cx, app, _test_app_cleanup) = fixture();
     cx.update(|cx| {
         cx.on_action(|_: &TitleMenuCommand, _| {});
     });
@@ -254,7 +259,7 @@ fn cocoa_validation_cannot_reenable_an_unavailable_command() {
 
 #[test]
 fn unchanged_projections_coalesce_without_reinstalling_and_keymap_changes_refresh() {
-    let (cx, app) = fixture();
+    let (cx, app, _test_app_cleanup) = fixture();
     let snapshot = projection(&cx, &app);
     let mut state = NativeMenuState::default();
     assert!(state.begin_refresh());
@@ -276,6 +281,7 @@ fn unchanged_projections_coalesce_without_reinstalling_and_keymap_changes_refres
 #[test]
 fn active_main_window_wins_over_recent_and_closed_windows_are_never_selected() {
     let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let first = cx.add_window(|_, _| EmptyWindow).into();
     let second = cx.add_window(|_, _| EmptyWindow).into();
     let child = cx.add_window(|_, _| EmptyWindow).into();
@@ -302,7 +308,7 @@ fn active_main_window_wins_over_recent_and_closed_windows_are_never_selected() {
 
 #[test]
 fn checks_follow_current_state_and_disabled_commands_are_revalidated() {
-    let (mut cx, app) = fixture();
+    let (mut cx, app, _test_app_cleanup) = fixture();
     let window = cx.add_window(|_, _| EmptyWindow);
     let before = projection(&cx, &app).into_menus(AppFlavor::Stable);
     assert!(native_item(&before, &TitleMenuCommand::Unsplit).is_disabled());

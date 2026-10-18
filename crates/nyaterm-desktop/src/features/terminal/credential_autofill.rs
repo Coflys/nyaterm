@@ -110,7 +110,7 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };
-        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell_for_autofill();
+        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell();
         self.dismiss_command_suggestions(cx);
         let selected_index = (precise && matches.len() == 1).then_some(0);
         self.terminal.assist.credential_suggestions = Some(CredentialSuggestionState {
@@ -123,17 +123,6 @@ impl NyaTermApp {
             cursor_col,
         });
         cx.notify();
-    }
-
-    fn active_terminal_cursor_cell_for_autofill(&self) -> (usize, usize) {
-        let offset = self.active_terminal_display_offset();
-        let snapshot = self.terminal_snapshot_for_session(self.session.active_id(), offset);
-        let row = if snapshot.cursor.row == usize::MAX {
-            snapshot.row_count().saturating_sub(1)
-        } else {
-            snapshot.cursor.row
-        };
-        (row, snapshot.cursor.col)
     }
 
     pub(in crate::features) fn drain_pending_credential_autofill_detection(
@@ -2109,6 +2098,7 @@ mod tests {
     fn connection_password_candidate_matches_the_effective_session_user() {
         let root = TestConfigDir::new("nyaterm-credential-autofill-user");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         // The catalog says `dev`; the saved account resolved the session to `root`.
         let app = app_with_account_backed_session(
             &mut cx,
@@ -2132,6 +2122,7 @@ mod tests {
     fn connection_password_candidate_is_refused_for_otp_style_prompts() {
         let root = TestConfigDir::new("nyaterm-credential-autofill-otp");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_account_backed_session(
             &mut cx,
             &root,
@@ -2168,6 +2159,7 @@ mod tests {
         // answer to them.
         let root = TestConfigDir::new("nyaterm-credential-autofill-bare");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_account_backed_session(
             &mut cx,
             &root,
@@ -2200,6 +2192,7 @@ mod tests {
     fn connection_password_candidate_requires_a_resolvable_password_source() {
         let root = TestConfigDir::new("nyaterm-credential-autofill-source");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         // The connection owns its password, so the account reference is not one.
         let connection_owned_without_password = ConnectionAuth {
             mode: "password".into(),
@@ -2256,6 +2249,7 @@ mod tests {
     fn only_a_unique_precise_match_is_preselected() {
         let root = TestConfigDir::new("nyaterm-credential-selection");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
         cx.update_entity(&app, |app, cx| {
             for (precise, count, expected) in [
@@ -2295,6 +2289,7 @@ mod tests {
     fn disabling_autofill_cancels_the_password_pending_after_username_selection() {
         let root = TestConfigDir::new("nyaterm-credential-toggle-pending");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), SESSION_ID);
         cx.update_entity(&app, |app, cx| {
             let target = test_credential_target("c1");
@@ -2335,6 +2330,7 @@ mod tests {
         };
         let root = TestConfigDir::new("nyaterm-credential-disabled");
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_account_backed_session(
             &mut cx,
             &root,
@@ -2426,6 +2422,7 @@ mod tests {
         drop(store);
 
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();

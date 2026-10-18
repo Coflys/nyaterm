@@ -26,6 +26,7 @@ use super::{
     SftpTransferProgress, SftpTransferSummary, SshClientHandler, SshMultiplexHandle,
     SshProcessService, SshSessionConfig, open_authenticated_ssh_handle,
 };
+use crate::remote_file::copy_progress::CopyProgress;
 use crate::remote_file::{
     RemoteTextDocument, RemoteTextMetadata, RemoteTextRevision, RemoteTextWriteResult,
     metadata_is_stable,
@@ -818,6 +819,7 @@ impl SftpService {
         destination_path: &RemoteFilePath,
         control: SftpTransferControl,
         options: SftpTransferOptions,
+        progress: CopyProgress,
     ) -> anyhow::Result<u64> {
         if !destination.config.remote_file_browser_enabled() {
             anyhow::bail!("SFTP is disabled for the destination SSH profile");
@@ -892,6 +894,7 @@ impl SftpService {
                 destination_raw,
                 &control,
                 &options,
+                &progress,
             )
             .await;
             close_sftp_session(destination_session).await;
@@ -2550,6 +2553,7 @@ async fn copy_remote_path_between_sftp(
     destination_path: Vec<u8>,
     control: &SftpTransferControl,
     options: &SftpTransferOptions,
+    progress: &CopyProgress,
 ) -> anyhow::Result<u64> {
     control.wait_if_paused().await?;
     let source_attrs = source.metadata_bytes(source_path.clone()).await?;
@@ -2561,6 +2565,7 @@ async fn copy_remote_path_between_sftp(
             destination_path,
             control,
             options,
+            progress,
         )
         .await;
     }
@@ -2592,6 +2597,7 @@ async fn copy_remote_path_between_sftp(
                         destination_child,
                         control,
                         options,
+                        progress,
                     )
                     .await?,
                 );
@@ -2610,6 +2616,7 @@ async fn copy_remote_path_between_sftp(
             ..russh_sftp::protocol::FileAttributes::empty()
         };
         destination.set_metadata_bytes(path, attrs).await?;
+        progress.finish_item();
     }
     Ok(total_bytes)
 }
@@ -2632,6 +2639,7 @@ async fn copy_remote_file_between_sftp(
     destination_path: Vec<u8>,
     control: &SftpTransferControl,
     options: &SftpTransferOptions,
+    progress: &CopyProgress,
 ) -> anyhow::Result<u64> {
     control.wait_if_paused().await?;
     let source_attrs = source.metadata_bytes(source_path.clone()).await?;
@@ -2651,6 +2659,7 @@ async fn copy_remote_file_between_sftp(
             }
             destination_file.write_all(&buffer[..read]).await?;
             bytes = bytes.saturating_add(read as u64);
+            progress.add_bytes(read as u64);
         }
         destination_file.flush().await?;
         destination_file.shutdown().await?;
@@ -2676,6 +2685,7 @@ async fn copy_remote_file_between_sftp(
         destination
             .rename_bytes(temporary_path.clone(), destination_path)
             .await?;
+        progress.finish_item();
         Ok::<u64, anyhow::Error>(bytes)
     }
     .await;
@@ -2854,6 +2864,8 @@ fn sftp_error_is_stream_closed(error: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod compatibility_tests;
+#[cfg(test)]
+mod copy_tests;
 #[cfg(test)]
 mod editor_save_tests;
 #[cfg(test)]

@@ -525,6 +525,7 @@ mod tests {
     #[test]
     fn opening_tray_panels_repeatedly_keeps_them_visible_in_each_layout() {
         let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let root = std::env::temp_dir().join(format!("nyaterm-tray-panels-{}", uuid()));
         let app = app_with_visible_local_session(&mut cx, &root, "session");
         cx.update_entity(&app, |app, _| {

@@ -2,6 +2,7 @@ use rust_i18n::t;
 
 use gpui::{Context, IntoElement as _, KeyDownEvent, Window};
 use nyaterm_core::SavedPassword;
+use nyaterm_core::models::credentials::PasswordUpdate;
 use nyaterm_ui::NyaDialogWindowExt as _;
 
 use crate::features::{NyaTermApp, formatting::compact_id, runtime_jobs::await_blocking_job};
@@ -10,6 +11,19 @@ use crate::models::{SecurityAuthTab, SecurityPasswordEditorState, SecurityUnlock
 use super::jobs::{SecurityStoreLocation, load_security_catalog};
 
 impl NyaTermApp {
+    pub(in crate::features) fn open_connection_account_editor(
+        &mut self,
+        id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_security_password_editor(id, window, cx);
+        let origin = self.connection_state.editor_token();
+        if let Some(editor) = self.security.password_editor_mut() {
+            editor.connection_origin = origin;
+        }
+    }
+
     pub(in crate::features) fn open_security_password_editor(
         &mut self,
         password_id: Option<String>,
@@ -17,17 +31,6 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.forget_text_inputs("security.editor.pw-");
-        if password_id.is_some()
-            && !self.require_security_secrets_unlocked(
-                window,
-                cx,
-                Some(SecurityUnlockAction::OpenPasswordEditor(
-                    password_id.clone(),
-                )),
-            )
-        {
-            return;
-        }
         let editor = if let Some(password_id) = password_id {
             let Some(entry) = self
                 .security
@@ -44,7 +47,10 @@ impl NyaTermApp {
                 id: Some(entry.id),
                 name: entry.name,
                 username: entry.username,
-                password: nyaterm_core::SecretString::default(),
+                password_update: PasswordUpdate::Keep,
+                references_expanded: false,
+                connection_origin: None,
+                error_field: None,
                 has_password: entry.has_password,
                 show_password: false,
                 error: None,
@@ -54,7 +60,10 @@ impl NyaTermApp {
                 id: None,
                 name: String::new(),
                 username: String::new(),
-                password: nyaterm_core::SecretString::default(),
+                password_update: PasswordUpdate::Replace(Default::default()),
+                references_expanded: false,
+                connection_origin: None,
+                error_field: None,
                 has_password: false,
                 show_password: false,
                 error: None,
@@ -62,7 +71,6 @@ impl NyaTermApp {
         };
         self.security
             .open_password_editor(editor, "password editor opened".to_string());
-        window.focus(self.security.password_editor_focus(), cx);
         let title = if self
             .security
             .password_editor()
@@ -76,7 +84,7 @@ impl NyaTermApp {
         self.open_guarded_form_dialog(
             (
                 title,
-                320.,
+                440.,
                 t!("common.save").to_string(),
                 |app, _, cx| {
                     app.security
@@ -98,13 +106,6 @@ impl NyaTermApp {
             window,
             cx,
         );
-        if let Some(password_id) = self
-            .security
-            .password_editor()
-            .and_then(|editor| editor.id.clone())
-        {
-            self.load_security_password_editor_secret(password_id, cx);
-        }
         cx.notify();
     }
 
@@ -113,6 +114,13 @@ impl NyaTermApp {
             return;
         }
         self.forget_text_inputs("security.editor.pw-");
+        if let Some(id) = self
+            .security
+            .password_editor()
+            .and_then(|editor| editor.id.clone())
+        {
+            self.security.hide_revealed_password(&id);
+        }
         self.security.close_password_editor();
         cx.notify();
     }
@@ -122,24 +130,33 @@ impl NyaTermApp {
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.mark_user_activity();
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
-            return;
+            return false;
         }
-        // The boxes own the text; the editor owns the keys that close or save
-        // it, which the boxes leave unconsumed.
         match keystroke.key.as_str() {
             "escape" => {
                 if !self.security.editor_busy() {
                     self.close_security_password_editor(cx);
+                    window.close_nya_dialog(cx);
                 }
+                true
             }
             "enter" => {
-                self.save_security_password_editor(window, cx);
+                let input_focused = self.text_input_fields_snapshot().iter().any(|(id, field)| {
+                    id.starts_with("security.editor.pw-")
+                        && field.read(cx).component_focus_handle(cx).is_focused(window)
+                });
+                if input_focused || self.security.password_editor_focus().is_focused(window) {
+                    self.save_security_password_editor(window, cx);
+                    true
+                } else {
+                    false
+                }
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -155,30 +172,61 @@ impl NyaTermApp {
         if name.is_empty() {
             if let Some(editor) = self.security.password_editor_mut() {
                 editor.error = Some(t!("passwordManager.nameRequired").to_string());
+                editor.error_field = Some("pw-name");
             }
+            self.focus_account_editor_field("pw-name", window, cx);
             cx.notify();
             return;
         }
-        if editor.id.is_none()
-            && editor.password.trim().is_empty()
-            && editor.username.trim().is_empty()
-        {
+        let has_password = match &editor.password_update {
+            PasswordUpdate::Keep => editor.has_password,
+            PasswordUpdate::Replace(value) => !value.is_empty(),
+            PasswordUpdate::Remove => false,
+        };
+        if !has_password && editor.username.trim().is_empty() {
             if let Some(editor) = self.security.password_editor_mut() {
                 editor.error = Some(t!("passwordManager.credentialsRequired").to_string());
+                editor.error_field = Some("pw-username");
             }
+            self.focus_account_editor_field("pw-username", window, cx);
             cx.notify();
             return;
         }
+        if matches!(&editor.password_update, PasswordUpdate::Replace(value) if value.is_empty())
+            && editor.id.is_some()
+        {
+            if let Some(editor) = self.security.password_editor_mut() {
+                editor.error = Some(t!("authForm.passwordRequired").to_string());
+                editor.error_field = Some("pw-value");
+            }
+            self.focus_account_editor_field("pw-value", window, cx);
+            cx.notify();
+            return;
+        }
+        let update = match editor.password_update.clone() {
+            PasswordUpdate::Replace(value) if value.is_empty() => PasswordUpdate::Remove,
+            update => update,
+        };
+        if editor.id.is_some() && !matches!(update, PasswordUpdate::Keep) {
+            let Some(token) = self.security.account_editor_token() else {
+                return;
+            };
+            if !self.require_security_secrets_unlocked(
+                window,
+                cx,
+                Some(SecurityUnlockAction::SavePasswordEditor(token)),
+            ) {
+                return;
+            }
+        }
+        let origin = editor.connection_origin;
+        let is_new = editor.id.is_none();
         let entry = SavedPassword {
             sort_order: 0,
             id: editor.id.clone().unwrap_or_default(),
             name,
             username: editor.username.trim().to_string(),
-            password: if editor.password.trim().is_empty() {
-                None
-            } else {
-                Some(editor.password.clone())
-            },
+            password: None,
             has_password: false,
         };
         let Some(request_id) = self.security.begin_editor_request() else {
@@ -190,7 +238,7 @@ impl NyaTermApp {
             let task = scheduler.submit_task("saved-password-save", move |_| {
                 let store = location.open()?;
                 let id = store
-                    .save_password(entry)
+                    .save_password_with_update(entry, update)
                     .map_err(|error| error.to_string())?;
                 let catalog = load_security_catalog(&store)?;
                 Ok::<_, String>((id, catalog))
@@ -203,6 +251,7 @@ impl NyaTermApp {
                 }
                 match result {
                     Ok((id, catalog)) => {
+                        this.forget_text_inputs("security.editor.pw-");
                         this.security.hide_revealed_password(&id);
                         this.security.replace_catalog_state(catalog);
                         this.request_shared_state_refresh(
@@ -213,6 +262,26 @@ impl NyaTermApp {
                             "password saved ({})",
                             compact_id(&id)
                         ));
+                        if is_new
+                            && origin.is_some()
+                            && this.connection_state.editor_token() == origin
+                        {
+                            let select = if this.connection_state.active_editor_draft().is_some_and(
+                                |draft| {
+                                    matches!(
+                                        draft.kind,
+                                        crate::models::ConnectionKindTab::Ssh
+                                            | crate::models::ConnectionKindTab::Telnet
+                                    )
+                                },
+                            ) {
+                                crate::models::ConnectionEditorSelect::Account
+                            } else {
+                                crate::models::ConnectionEditorSelect::SavedPassword
+                            };
+                            this.set_connection_editor_select_value(select, Some(&id), cx);
+                            this.connection_state.set_editor_credential_overlay(None);
+                        }
                         this.shell.set_status("password saved".to_string());
                         close = true;
                     }
@@ -225,7 +294,27 @@ impl NyaTermApp {
                 cx.notify();
             });
             if close {
-                let _ = cx.update(|window, cx| window.close_nya_dialog(cx));
+                let _ = cx.update(|window, cx| {
+                    window.close_nya_dialog(cx);
+                    let _ = this.update(cx, |this, cx| {
+                        if origin.is_some() && this.connection_state.editor_token() == origin {
+                            let select = if this.connection_state.active_editor_draft().is_some_and(
+                                |draft| {
+                                    matches!(
+                                        draft.kind,
+                                        crate::models::ConnectionKindTab::Ssh
+                                            | crate::models::ConnectionKindTab::Telnet
+                                    )
+                                },
+                            ) {
+                                crate::models::ConnectionEditorSelect::Account
+                            } else {
+                                crate::models::ConnectionEditorSelect::SavedPassword
+                            };
+                            this.focus_connection_editor_select(select, window, cx);
+                        }
+                    });
+                });
             }
         })
         .detach();
@@ -336,6 +425,7 @@ impl NyaTermApp {
     }
 
     fn load_security_password(&mut self, password_id: String, copy: bool, cx: &mut Context<Self>) {
+        let editor_origin = self.security.account_editor_token();
         let request_password_id = password_id.clone();
         let request_id = self.security.begin_password_request(password_id.clone());
         let location = SecurityStoreLocation::new(self.store_blocking_client());
@@ -352,6 +442,10 @@ impl NyaTermApp {
             });
             let result = await_blocking_job(task).await.and_then(|result| result);
             let _ = this.update(cx, |this, cx| {
+                if editor_origin.is_some() && this.security.account_editor_token() != editor_origin
+                {
+                    return;
+                }
                 if !this
                     .security
                     .finish_password_request(request_id, &request_password_id)
@@ -373,8 +467,10 @@ impl NyaTermApp {
                                 );
                             }
                         } else {
-                            this.security
-                                .reveal_password(request_password_id.clone(), value.clone());
+                            if !copy {
+                                this.security
+                                    .reveal_password(request_password_id.clone(), value.clone());
+                            }
                             if copy {
                                 this.copy_text_with_feedback_at(
                                     origin_window,
@@ -419,39 +515,30 @@ impl NyaTermApp {
         .detach();
     }
 
-    fn load_security_password_editor_secret(
+    pub(in crate::features) fn set_account_password_update(
         &mut self,
-        password_id: String,
+        update: PasswordUpdate,
         cx: &mut Context<Self>,
     ) {
-        let Some(request_id) = self.security.begin_editor_request() else {
+        if self.security.editor_busy() {
             return;
-        };
-        let location = SecurityStoreLocation::new(self.store_blocking_client());
-        let scheduler = self.blocking_jobs.clone();
-        cx.spawn(async move |this, cx| {
-            let task = scheduler.submit_task("saved-password-editor-secret", move |_| {
-                let store = location.open()?;
-                store
-                    .load_decrypted_password_by_id(&password_id)
-                    .map_err(|error| error.to_string())
-            });
-            let result = await_blocking_job(task).await.and_then(|result| result);
-            let _ = this.update(cx, |this, cx| {
-                if !this.security.finish_editor_request(request_id) {
-                    return;
-                }
-                let Some(editor) = this.security.password_editor_mut() else {
-                    return;
-                };
-                match result {
-                    Ok(Some(entry)) => editor.password = entry.password.unwrap_or_default(),
-                    Ok(None) => editor.error = Some("password not found".to_string()),
-                    Err(error) => editor.error = Some(error),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+        }
+        self.forget_text_inputs("security.editor.pw-value");
+        if let Some(editor) = self.security.password_editor_mut() {
+            editor.password_update = update;
+            editor.show_password = false;
+            editor.error = None;
+            editor.error_field = None;
+        }
+        cx.notify();
+    }
+
+    fn focus_account_editor_field(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_text_input_if_present(&format!("security.editor.{id}"), window, cx);
     }
 }

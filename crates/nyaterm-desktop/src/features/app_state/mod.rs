@@ -128,6 +128,7 @@ impl gpui::EventEmitter<NotesCatalogEvent> for NyaTermApp {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppLifecycleEvent {
     ShutdownRequested,
+    ShutdownCancelled,
     NewWindowRequested,
 }
 

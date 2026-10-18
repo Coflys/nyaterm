@@ -18,6 +18,23 @@ fn snapshot_text(snapshot: &TerminalSnapshot) -> String {
 }
 
 #[test]
+fn reverse_snapshot_preserves_source_colors_and_sgr_reset_semantics() {
+    let mut screen = TerminalScreen::new(16, 2);
+    screen.advance(b"\x1b[1;4;31;44mA\x1b[7mB\x1b[27mC\x1b[7mD\x1b[0mE");
+    let snapshot = screen.snapshot();
+    let row = snapshot.row(0).unwrap();
+    for (col, reverse) in [false, true, false, true].into_iter().enumerate() {
+        let style = row.cells[col].style;
+        assert_eq!(style.fg, Some(1));
+        assert_eq!(style.bg, Some(4));
+        assert_eq!(style.reverse, reverse);
+        assert!(style.bold && style.underline);
+        assert_eq!(row.styled_spans[col].style, style);
+    }
+    assert_eq!(row.cells[4].style, super::CellStyle::default());
+}
+
+#[test]
 fn snapshot_preserves_styled_trailing_blanks_while_trimming_plain_text() {
     for alternate in [false, true] {
         let mut screen = TerminalScreen::new(24, 3);
@@ -2378,4 +2395,63 @@ fn tab_cell_materializes_stop_columns_for_paint() {
     assert_eq!(row.styled_spans[0].text, "System load:  \t ");
     assert_eq!(row.styled_spans[1].text, "0.33");
     assert_eq!(row.styled_spans[1].style.bg, Some(0));
+}
+
+#[test]
+fn history_coordinates_distinguish_growth_from_full_buffer_rotation() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.set_scrollback_limit(8);
+    let initial = screen.history_state();
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n4\r\n");
+    let growing = screen.snapshot();
+    assert!(growing.history.preserves_coordinates_from(initial));
+    assert!(growing.history.scroll_count > initial.scroll_count);
+    screen.advance(b"5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n");
+    let full = screen.snapshot();
+    assert_eq!(full.scrollback_len, 8);
+    let reading = screen.viewport_snapshot(3);
+    screen.advance(b"11\r\n12\r\n");
+    let rotated = screen.snapshot();
+    assert_eq!(rotated.scrollback_len, full.scrollback_len);
+    assert_eq!(rotated.history.scrolled_since(full.history), Some(2));
+    assert!(!rotated.history.preserves_coordinates_from(full.history));
+    let anchored = rotated.history.reanchor_offset(full.history, 3);
+    assert_eq!(anchored, 5);
+    assert_eq!(screen.viewport_snapshot(anchored).line(0), reading.line(0));
+    assert_eq!(rotated.history.reanchor_offset(full.history, 0), 0);
+}
+
+#[test]
+fn history_coordinates_reject_reset_resize_screen_switch_and_backwards_snapshots() {
+    let mut screen = TerminalScreen::new(16, 3);
+    screen.advance(b"0\r\n1\r\n2\r\n3\r\n");
+    let before = screen.history_state();
+    screen.advance(b"4\r\n");
+    let after = screen.history_state();
+    assert_eq!(before.scrolled_since(after), None);
+    screen.advance(b"\x1b[?1049h");
+    assert_eq!(screen.history_state().scrolled_since(after), None);
+    screen.advance(b"\x1b[?1049l");
+    let primary = screen.history_state();
+    screen.resize(20, 3);
+    assert_eq!(screen.history_state().scrolled_since(primary), None);
+    let resized = screen.history_state();
+    screen.advance(b"\x1bc");
+    assert_eq!(screen.history_state().scrolled_since(resized), None);
+}
+
+#[test]
+fn history_scroll_counter_wrap_preserves_a_continuous_observation() {
+    let previous = super::TerminalHistoryState {
+        scroll_count: u64::MAX,
+        scrollback_len: 8,
+        ..Default::default()
+    };
+    let current = super::TerminalHistoryState {
+        scroll_count: 1,
+        ..previous
+    };
+    assert_eq!(current.scrolled_since(previous), Some(2));
+    assert_eq!(current.reanchor_offset(previous, 7), 8);
+    assert!(!current.preserves_coordinates_from(previous));
 }

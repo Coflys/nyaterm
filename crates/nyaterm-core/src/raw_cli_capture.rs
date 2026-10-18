@@ -120,6 +120,10 @@ impl RawCliCapture {
     pub fn into_output(self) -> String {
         self.output
     }
+
+    pub fn is_truncated(&self) -> bool {
+        self.truncated
+    }
 }
 
 fn same_device_prompt(expected: &str, actual: &str) -> bool {

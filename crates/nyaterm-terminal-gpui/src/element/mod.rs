@@ -6,7 +6,7 @@ use std::time::Instant;
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, Font, FontFallbacks, GlobalElementId,
     InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style,
-    TextRun, Window, fill, font, point, px, relative, rgb, rgba, size,
+    TextRun, Window, fill, font, outline, point, px, relative, rgb, rgba, size,
 };
 use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::selection::{
@@ -697,12 +697,7 @@ impl NyaTerminalElement {
     fn paint_style_key(&self, keyword_rules_key: u64) -> u64 {
         let mut hasher = DefaultHasher::new();
         keyword_rules_key.hash(&mut hasher);
-        self.palette.bg.hash(&mut hasher);
-        self.palette.accent.hash(&mut hasher);
-        self.palette.warning.hash(&mut hasher);
-        self.palette.terminal_fg.hash(&mut hasher);
-        self.palette.terminal_bg.hash(&mut hasher);
-        self.palette.terminal_ansi.hash(&mut hasher);
+        self.palette.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
         self.font_fallbacks.hash(&mut hasher);
         self.font_size.to_bits().hash(&mut hasher);
@@ -1109,11 +1104,12 @@ pub(super) fn terminal_background_ranges_for_spans(
 pub(super) fn terminal_background_ranges_for_cells(
     cells: &[nyaterm_terminal::RenderCell],
     palette: nyaterm_ui::ThemePalette,
+    bold_default_foreground: bool,
 ) -> Vec<TerminalRowBackgroundRange> {
     let mut out: Vec<TerminalRowBackgroundRange> = Vec::new();
     // Include spacer cells and trailing blanks: text length is not a paint boundary.
     for (col, cell) in cells.iter().enumerate() {
-        let Some(bg) = crate::resolve_cell_bg(palette, cell.style) else {
+        let Some(bg) = crate::resolve_cell_bg(palette, cell.style, bold_default_foreground) else {
             continue;
         };
         if let Some(last) = out
@@ -1191,7 +1187,8 @@ fn terminal_text_decorations_for_row(
     // authority for decorated blanks beyond that trimmed text boundary.
     for (col, cell) in cells.unwrap_or_default().iter().enumerate().skip(col) {
         let color = if cell.style.hidden {
-            crate::resolve_cell_bg(palette, cell.style).unwrap_or(palette.terminal_bg)
+            crate::resolve_cell_bg(palette, cell.style, bold_default_foreground)
+                .unwrap_or(palette.terminal_bg)
         } else {
             crate::resolve_cell_fg(palette, cell.style, bold_default_foreground)
         };
@@ -1247,7 +1244,7 @@ fn push_terminal_zebra_stripes(
     for row_index in visible_rows {
         let color = snapshot.row(row_index).and_then(|row| {
             if row.line_id.is_some() && row.line_id == target_line {
-                Some((palette.accent << 8) | 0x24)
+                Some((palette.terminal_line_highlight << 8) | 0xff)
             } else if matches!(
                 row.shell_input,
                 Some(ShellInputLineKind::Submitted | ShellInputLineKind::Active)
@@ -1360,10 +1357,19 @@ fn push_dynamic_decoration_backgrounds(
         push_selected_occurrence_bg(row, start, end, palette, geometry, out);
     }
     for &(start, end) in &decorations.search_ranges {
-        push_col_range_bg(row, start, end, palette.terminal_selection, geometry, out);
+        push_col_range_bg(row, start, end, palette.terminal_find_bg, geometry, out);
     }
     for &(start, end) in &decorations.active_search_ranges {
-        push_col_range_bg(row, start, end, palette.warning, geometry, out);
+        let previous_len = out.len();
+        push_col_range_bg(row, start, end, palette.terminal_find_bg, geometry, out);
+        if out.len() > previous_len {
+            let bounds = out.last().expect("range fill was pushed").bounds;
+            out.push(outline(
+                bounds,
+                rgb(palette.terminal_find_border),
+                Default::default(),
+            ));
+        }
     }
 }
 
@@ -1794,7 +1800,13 @@ impl Element for NyaTerminalElement {
                     glyph_spans_storage.as_slice()
                 };
                 let background_ranges = snapshot_row
-                    .map(|row| terminal_background_ranges_for_cells(&row.cells, self.palette))
+                    .map(|row| {
+                        terminal_background_ranges_for_cells(
+                            &row.cells,
+                            self.palette,
+                            self.bold_default_foreground,
+                        )
+                    })
                     .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
                 let text_decorations = terminal_text_decorations_for_row(
                     glyph_spans,

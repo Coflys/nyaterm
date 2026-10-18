@@ -289,6 +289,7 @@ pub(in crate::features::pages::connections) fn connection_section(
                                     position,
                                 };
                                 if this.connection_state.set_list_drop_target_if_changed(next) {
+                                    this.ensure_drop_hover_clock(cx);
                                     cx.notify();
                                 }
                             })
@@ -596,6 +597,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                         position,
                     };
                     if this.connection_state.set_list_drop_target_if_changed(next) {
+                        this.ensure_drop_hover_clock(cx);
                         cx.notify();
                     }
                 })
