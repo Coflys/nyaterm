@@ -96,7 +96,11 @@ impl TerminalExecutionState {
             return None;
         }
         task.capture_started = true;
-        self.draining.remove(session_id);
+        if let Some((previous, _)) = self.draining.remove(session_id)
+            && let Some(capture) = task.capture.as_mut()
+        {
+            capture.continue_control_sequences_from(previous);
+        }
         Some(TerminalExecutionEvent::Started {
             id: id.into(),
             session_id: session_id.into(),
@@ -229,8 +233,7 @@ impl TerminalExecutionState {
                     (capture, Instant::now() + Duration::from_millis(150)),
                 );
             } else if status != TerminalExecutionStatus::Completed {
-                let mut filter = RetiredCaptureFilter::new(&task.capture_marker_id);
-                filter.process(&capture.take_pending_marker_tail());
+                let filter = capture.retire(&task.capture_marker_id);
                 self.retired
                     .entry(session_id.into())
                     .or_default()
@@ -304,6 +307,21 @@ impl TerminalExecutionState {
                 task.request.cancellation.cancel();
             }
         }
+    }
+
+    fn expire_draining(&mut self, now: Instant) -> Vec<String> {
+        let expired = self
+            .draining
+            .iter()
+            .filter_map(|(session, (capture, until))| {
+                // A time limit cannot turn a split OSC title into printable text.
+                (now >= *until && !capture.has_pending_control()).then_some(session.clone())
+            })
+            .collect::<Vec<_>>();
+        for session in &expired {
+            self.draining.remove(session);
+        }
+        expired
     }
 }
 
@@ -748,20 +766,12 @@ impl NyaTermApp {
             };
             self.finish_terminal_execution(&session, &id, result, status, cx);
         }
-        let expired = self
+        for session in self
             .mcp
             .capabilities
             .terminal_executions
-            .draining
-            .iter()
-            .filter_map(|(session, (_, until))| (now >= *until).then_some(session.clone()))
-            .collect::<Vec<_>>();
-        for session in expired {
-            self.mcp
-                .capabilities
-                .terminal_executions
-                .draining
-                .remove(&session);
+            .expire_draining(now)
+        {
             self.sync_session_event_bridge_session_policy(&session);
         }
     }

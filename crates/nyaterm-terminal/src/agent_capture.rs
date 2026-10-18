@@ -11,6 +11,8 @@ pub struct RetiredCaptureFilter {
     start: String,
     end: String,
     pending: String,
+    control_filter: CaptureControlFilter,
+    finished: bool,
 }
 
 impl RetiredCaptureFilter {
@@ -19,13 +21,15 @@ impl RetiredCaptureFilter {
             start: format!("{MARKER_PREFIX}START_{id}__"),
             end: format!("{MARKER_PREFIX}END_{id}_"),
             pending: String::new(),
+            control_filter: CaptureControlFilter::default(),
+            finished: false,
         }
     }
 
     pub fn process(&mut self, text: &str) -> (String, bool) {
         let mut output = String::with_capacity(text.len());
-        let mut finished = false;
-        for ch in text.chars() {
+        let filtered = self.control_filter.process(text);
+        for ch in filtered.text.chars() {
             self.pending.push(ch);
             while !self.pending.is_empty() {
                 if self.pending == self.start {
@@ -41,7 +45,7 @@ impl RetiredCaptureFilter {
                         .is_some_and(|code| code.parse::<i32>().is_ok())
                     {
                         self.pending.clear();
-                        finished = true;
+                        self.finished = true;
                         break;
                     }
                     let partial = code.strip_suffix('_').unwrap_or(code);
@@ -55,7 +59,7 @@ impl RetiredCaptureFilter {
                 output.push(ch);
             }
         }
-        (output, finished)
+        (output, self.finished && !self.control_filter.has_pending())
     }
 }
 
@@ -98,22 +102,33 @@ struct ActiveCapture {
     source_truncated: bool,
 }
 
-/// Keep the shell's terminal handshake alive while its visible bytes are hidden.
-/// Only queries are forwarded; command output cannot change screen modes or styles.
+/// Control strings are opaque to marker matching. CMD titles can contain copies
+/// of the wrapper's markers, including an END marker with a numeric exit status.
 #[derive(Debug, Default)]
-struct CaptureProtocolQueries {
+struct CaptureControlFilter {
     pending: String,
-    in_string: bool,
+    // OSC accepts BEL as well as ST; the other control strings accept only ST.
+    in_string: Option<bool>,
     string_escape: bool,
 }
 
-impl CaptureProtocolQueries {
-    fn process(&mut self, text: &str) -> String {
+struct CaptureControlOutput {
+    text: String,
+    queries: String,
+}
+
+impl CaptureControlFilter {
+    fn has_pending(&self) -> bool {
+        self.in_string.is_some() || !self.pending.is_empty()
+    }
+
+    fn process(&mut self, text: &str) -> CaptureControlOutput {
         let mut queries = String::new();
+        let mut output = String::with_capacity(text.len());
         for ch in text.chars() {
-            if self.in_string {
-                if ch == '\x07' || ch == '\u{009c}' || (self.string_escape && ch == '\\') {
-                    self.in_string = false;
+            if let Some(osc) = self.in_string {
+                if (osc && ch == '\x07') || ch == '\u{009c}' || (self.string_escape && ch == '\\') {
+                    self.in_string = None;
                 }
                 self.string_escape = ch == '\x1b';
                 continue;
@@ -127,14 +142,19 @@ impl CaptureProtocolQueries {
                     '[' => self.pending.push(ch),
                     ']' | 'P' | 'X' | '^' | '_' => {
                         self.pending.clear();
-                        self.in_string = true;
+                        self.in_string = Some(ch == ']');
                         self.string_escape = false;
                     }
                     'Z' => {
                         queries.push_str("\x1bZ");
+                        output.push_str("\x1bZ");
                         self.pending.clear();
                     }
-                    _ => self.pending.clear(),
+                    _ => {
+                        output.push_str(&self.pending);
+                        output.push(ch);
+                        self.pending.clear();
+                    }
                 }
             } else if self.pending.starts_with("\x1b[") {
                 self.pending.push(ch);
@@ -155,13 +175,26 @@ impl CaptureProtocolQueries {
                     ) {
                         queries.push_str(&self.pending);
                     }
+                    output.push_str(&self.pending);
                     self.pending.clear();
                 } else if self.pending.len() > 64 {
                     self.pending.clear();
                 }
+            } else {
+                match ch {
+                    '\u{009b}' => self.pending.push_str("\x1b["),
+                    '\u{009d}' | '\u{0090}' | '\u{0098}' | '\u{009e}' | '\u{009f}' => {
+                        self.in_string = Some(ch == '\u{009d}');
+                        self.string_escape = false;
+                    }
+                    _ => output.push(ch),
+                }
             }
         }
-        queries
+        CaptureControlOutput {
+            text: output,
+            queries,
+        }
     }
 }
 
@@ -170,7 +203,7 @@ pub struct AgentOutputCaptureProcessor {
     active: HashMap<String, ActiveCapture>,
     pending_marker_tail: String,
     completed: VecDeque<AgentCapturedOutput>,
-    protocol_queries: CaptureProtocolQueries,
+    control_filter: CaptureControlFilter,
 }
 
 impl AgentOutputCaptureProcessor {
@@ -191,11 +224,24 @@ impl AgentOutputCaptureProcessor {
     }
 
     pub fn has_active(&self) -> bool {
-        !self.active.is_empty()
+        !self.active.is_empty() || self.has_pending_control()
     }
 
-    pub fn take_pending_marker_tail(&mut self) -> String {
-        std::mem::take(&mut self.pending_marker_tail)
+    pub fn has_pending_control(&self) -> bool {
+        self.control_filter.has_pending()
+    }
+
+    /// A new execution boundary may arrive in the middle of the previous title.
+    pub fn continue_control_sequences_from(&mut self, previous: Self) {
+        self.control_filter = previous.control_filter;
+    }
+
+    /// Keep partial markers and control strings opaque after observation stops.
+    pub fn retire(&mut self, marker_id: &str) -> RetiredCaptureFilter {
+        let mut filter = RetiredCaptureFilter::new(marker_id);
+        filter.process(&std::mem::take(&mut self.pending_marker_tail));
+        filter.control_filter = std::mem::take(&mut self.control_filter);
+        filter
     }
 
     pub fn cancel(&mut self, marker_id: &str) -> Option<AgentCaptureCancelResult> {
@@ -213,12 +259,21 @@ impl AgentOutputCaptureProcessor {
     }
 
     pub fn process(&mut self, text: &str) -> AgentCaptureProcessResult {
-        if self.active.is_empty() {
+        if !self.has_active() {
             return AgentCaptureProcessResult {
                 visible_text: text.to_string(),
                 completed: self.drain_completed(),
             };
         }
+
+        let filtered = self.control_filter.process(text);
+        if self.active.is_empty() {
+            return AgentCaptureProcessResult {
+                visible_text: filtered.text,
+                completed: self.drain_completed(),
+            };
+        }
+        let text = filtered.text.as_str();
 
         let combined;
         let mut remaining = if self.pending_marker_tail.is_empty() {
@@ -228,7 +283,8 @@ impl AgentOutputCaptureProcessor {
             self.pending_marker_tail.clear();
             combined.as_str()
         };
-        let mut visible_text = self.protocol_queries.process(text);
+        // Forward only terminal queries during capture so shell startup can finish.
+        let mut visible_text = filtered.queries;
 
         while !remaining.is_empty() {
             if let Some(result) = self.try_match_start(remaining) {
@@ -451,6 +507,55 @@ mod tests {
     }
 
     #[test]
+    fn markers_inside_control_strings_cannot_start_or_finish_a_capture() {
+        for (open, close) in [
+            ("\x1b]0;", "\x07"),
+            ("\x1b]0;", "\x1b\\"),
+            ("\x1bP", "\x1b\\"),
+            ("\x1bX", "\x1b\\"),
+            ("\x1b^", "\x1b\\"),
+            ("\x1b_", "\x1b\\"),
+            ("\u{009d}0;", "\u{009c}"),
+        ] {
+            let stream = format!(
+                "{open}__DF_CMD_START_title__\nwrong\n__DF_CMD_END_title_9__{close}\
+                 __DF_CMD_START_title__\nexpected\n\
+                 {open}__DF_CMD_END_title_8__{close}\
+                 __DF_CMD_END_title_0__\nPS>"
+            );
+            for split in stream.char_indices().map(|(i, _)| i) {
+                let mut processor = AgentOutputCaptureProcessor::new();
+                processor.register("title".into());
+                let mut completed = processor.process(&stream[..split]).completed;
+                completed.extend(processor.process(&stream[split..]).completed);
+                assert_eq!(completed.len(), 1, "{open:?}, split {split}");
+                assert_eq!(completed[0].exit_code, Some(0), "{open:?}, split {split}");
+                assert_eq!(completed[0].output, "expected", "{open:?}, split {split}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_split_cmd_title_after_completion_never_becomes_visible_text() {
+        let title = "\x1b]0;cmd - call echo __DF_CMD_END_cmd_%ERRORLEVEL%__\x07";
+        for split in 1..title.len() {
+            let mut processor = AgentOutputCaptureProcessor::new();
+            processor.register("cmd".into());
+            let first = processor.process(&format!(
+                "__DF_CMD_START_cmd__\r\nexpected\r\n__DF_CMD_END_cmd_0__\r\n{}",
+                &title[..split]
+            ));
+            assert_eq!(first.completed.len(), 1, "split {split}");
+            assert_eq!(first.completed[0].output, "expected", "split {split}");
+            assert!(processor.has_active(), "unfinished title at split {split}");
+            let tail = processor.process(&format!("{}\r\nC:\\>", &title[split..]));
+            assert!(!tail.visible_text.contains("__DF_CMD_"), "split {split}");
+            assert!(tail.completed.is_empty(), "split {split}");
+            assert!(!processor.has_active(), "finished title at split {split}");
+        }
+    }
+
+    #[test]
     fn late_marker_filter_preserves_unicode_and_ordinary_text_at_every_split() {
         use super::RetiredCaptureFilter;
         let stream = "猫\n__DF_CMD_START_old__\nlate output🐱\n__DF_CMD_END_old_-3__\nready>";
@@ -461,6 +566,27 @@ mod tests {
             visible.push_str(&tail);
             assert_eq!(visible, "猫\n\nlate output🐱\n\nready>", "split {split}");
         }
+    }
+
+    #[test]
+    fn cancellation_transfers_an_unfinished_title_to_the_late_marker_filter() {
+        let mut processor = AgentOutputCaptureProcessor::new();
+        processor.register("old".into());
+        processor.process("__DF_CMD_START_old__\npartial\n\x1b]0;");
+        let mut filter = processor.retire("old");
+        processor.cancel("old").unwrap();
+        let (visible, finished) = filter.process("__DF_CMD_END_old_0__\x07normal");
+        assert_eq!(visible, "normal");
+        assert!(!finished, "the title's marker cannot finish the filter");
+        let (visible, finished) = filter.process("__DF_CMD_END_old_0__\x1b]0;");
+        assert!(visible.is_empty());
+        assert!(
+            !finished,
+            "the title must finish before dropping the filter"
+        );
+        let (visible, finished) = filter.process("__DF_CMD_END_old_0__\x07ready>");
+        assert_eq!(visible, "ready>");
+        assert!(finished);
     }
 
     #[test]

@@ -404,6 +404,61 @@ fn a_prompt_from_the_previous_task_cannot_overtake_the_next_start_boundary() {
 }
 
 #[test]
+fn drain_timeout_waits_for_a_split_title_terminator() {
+    let mut state = TerminalExecutionState::default();
+    let (request, _receiver) = execution_request("old", "owner", "a", false);
+    let mut capture = AgentOutputCaptureProcessor::new();
+    capture.register("old".into());
+    assert!(state.insert(request, Some(capture)).is_ok());
+    state.begin_capture("a", "old");
+    let output = state.process_output(
+        "a",
+        "__DF_CMD_START_old__\nok\n__DF_CMD_END_old_0__\n\x1b]0;call echo ",
+    );
+    assert_eq!(output.completed.len(), 1);
+    state
+        .finish("a", "old", Ok(result()), TerminalExecutionStatus::Completed)
+        .unwrap();
+    let expired = std::time::Instant::now() + Duration::from_secs(1);
+    assert!(state.expire_draining(expired).is_empty());
+    assert!(state.intercepting("a"));
+    let tail = state.process_output("a", "__DF_CMD_END_old_%ERRORLEVEL%__\x07\nC:\\>");
+    assert!(!tail.visible_text.contains("__DF_CMD_"));
+    assert!(!state.intercepting("a"));
+}
+
+#[test]
+fn a_new_capture_inherits_an_unfinished_title_from_the_previous_execution() {
+    let mut state = TerminalExecutionState::default();
+    let (request, _receiver) = execution_request("old", "owner", "a", false);
+    let mut capture = AgentOutputCaptureProcessor::new();
+    capture.register("old".into());
+    assert!(state.insert(request, Some(capture)).is_ok());
+    state.begin_capture("a", "old");
+    state.process_output(
+        "a",
+        "__DF_CMD_START_old__\nok\n__DF_CMD_END_old_0__\n\x1b]0;",
+    );
+    state
+        .finish("a", "old", Ok(result()), TerminalExecutionStatus::Completed)
+        .unwrap();
+    let (request, _receiver) = execution_request("new", "owner", "a", false);
+    let mut capture = AgentOutputCaptureProcessor::new();
+    capture.register("new".into());
+    assert!(state.insert(request, Some(capture)).is_ok());
+    state.begin_capture("a", "new");
+    let output = state.process_output(
+        "a",
+        "__DF_CMD_START_new__wrong__DF_CMD_END_new_9__\x07\
+         __DF_CMD_START_new__\nexpected\n__DF_CMD_END_new_0__\nC:\\>",
+    );
+    assert!(output.visible_text.is_empty());
+    assert_eq!(output.completed.len(), 1);
+    assert_eq!(output.completed[0].output, "expected");
+    assert_eq!(output.completed[0].exit_code, Some(0));
+}
+
+#[test]
 fn retired_markers_remain_hidden_after_cancellation_and_a_new_task() {
     let mut state = TerminalExecutionState::default();
     let (request, _receiver) = execution_request("old", "owner", "a", false);
