@@ -207,24 +207,58 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
                 "-NoProfile".into(),
                 "-NoExit".into(),
                 "-Command".into(),
-                "$nyatermCaptureFixture = 'powershell-pty'".into(),
+                // The prompt is emitted after startup, unlike process creation or
+                // output from the initialization command itself.
+                "$nyatermCaptureFixture = 'powershell-pty'; function global:prompt { 'nyaterm-powershell-ready> ' }".into(),
             ],
             ..LocalSessionConfig::default()
         })
         .unwrap();
-    let mut powershell_reply = cx.update_entity(&app, |app, cx| {
+    cx.update_entity(&app, |app, _| {
         let mut metadata = app.session.metadata("visible").unwrap().clone();
         metadata.ai_execution_profile = AiExecutionProfile::Powershell;
         app.session
             .register_session_metadata(&powershell.id, metadata);
+    });
+    let startup_deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut frame = cx.update_entity(&app, |app, _| {
+        app.terminal.request_frame_text_for_test(&powershell.id)
+    });
+    let mut saw_output = false;
+    loop {
+        cx.run_until_parked();
+        cx.update_entity(&app, |app, cx| {
+            app.drain_session_events(cx);
+            app.drain_terminal_frame_events(cx);
+        });
+        if let Some(text) = frame.try_recv().expect("PowerShell frame worker stopped") {
+            let text = text.unwrap_or_default();
+            saw_output |= !text.is_empty();
+            if text.contains("nyaterm-powershell-ready>") {
+                break;
+            }
+            frame = cx.update_entity(&app, |app, _| {
+                app.terminal.request_frame_text_for_test(&powershell.id)
+            });
+        }
+        assert!(
+            std::time::Instant::now() < startup_deadline,
+            "PowerShell startup timed out before its prompt (terminal output received: {saw_output})"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let execution_timeout = Duration::from_secs(30);
+    let mut powershell_reply = cx.update_entity(&app, |app, cx| {
         let (mut request, receiver) =
             execution_request("powershell", "external", &powershell.id, false);
         request.command = "Write-Output $nyatermCaptureFixture".into();
+        request.timeout = execution_timeout;
         request.policy.max_lines = 0;
         app.start_terminal_execution(request, cx);
         receiver
     });
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    // Let the execution layer report its own timeout before the test watchdog.
+    let deadline = std::time::Instant::now() + execution_timeout + Duration::from_secs(5);
     let powershell_result = loop {
         cx.run_until_parked();
         cx.update_entity(&app, |app, cx| {
@@ -232,15 +266,23 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
             app.drain_terminal_frame_events(cx);
             app.poll_terminal_executions(cx);
         });
-        if let Ok(result) = powershell_reply.try_recv() {
-            break result.unwrap();
+        match powershell_reply.try_recv() {
+            Ok(result) => break result.expect("PowerShell execution failed after readiness"),
+            Err(oneshot::error::TryRecvError::Closed) => {
+                panic!("PowerShell execution reply closed after readiness");
+            }
+            Err(oneshot::error::TryRecvError::Empty) => {}
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "PowerShell PTY timed out"
+            "PowerShell execution did not reply after its request timeout (startup completed)"
         );
         std::thread::sleep(Duration::from_millis(10));
     };
+    assert_eq!(
+        powershell_result["timedOut"], false,
+        "PowerShell execution timed out after its prompt was ready"
+    );
     assert_eq!(powershell_result["exitCode"], 0);
     assert!(
         powershell_result["output"]
