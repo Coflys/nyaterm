@@ -41,27 +41,37 @@ function endpointKey(endpoint: SshAgentEndpoint): string {
 export function validateSshAgentForwardingEndpoints(
   endpoints: SshAgentEndpoint[],
 ): SshAgentEndpointValidationError | null {
+  return getSshAgentEndpointIssue(endpoints)?.code ?? null;
+}
+
+/** Frontend-only location information; the saved endpoint representation is unchanged. */
+export function getSshAgentEndpointIssue(
+  endpoints: SshAgentEndpoint[],
+): { code: SshAgentEndpointValidationError; endpointIndex?: number } | null {
   if (endpoints.length > MAX_SSH_AGENT_FORWARDING_ENDPOINTS) {
-    return "too_many";
+    return { code: "too_many" };
   }
 
   const seen = new Set<string>();
-  for (const endpoint of endpoints) {
+  for (const [endpointIndex, endpoint] of endpoints.entries()) {
     if (endpoint.type === "environment") {
       const variable = normalizeEnvironmentVariable(endpoint.variable);
-      if (!variable) return "empty";
-      if (variable.includes("=") || variable.includes("\0")) return "invalid";
-      if (utf8Length(variable) > MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_BYTES) return "too_long";
+      if (!variable) return { code: "empty", endpointIndex };
+      if (variable.includes("=") || variable.includes("\0"))
+        return { code: "invalid", endpointIndex };
+      if (utf8Length(variable) > MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_BYTES)
+        return { code: "too_long", endpointIndex };
     }
     if (endpoint.type === "unix_socket") {
-      if (endpoint.path.includes("\0")) return "invalid";
-      if (!endpoint.path.trim()) return "empty";
-      if (utf8Length(endpoint.path) > MAX_SSH_AGENT_UNIX_SOCKET_PATH_BYTES) return "too_long";
+      if (endpoint.path.includes("\0")) return { code: "invalid", endpointIndex };
+      if (!endpoint.path.trim()) return { code: "empty", endpointIndex };
+      if (utf8Length(endpoint.path) > MAX_SSH_AGENT_UNIX_SOCKET_PATH_BYTES)
+        return { code: "too_long", endpointIndex };
     }
 
-    if (!seen.add(endpointKey(endpoint))) {
-      return "duplicate";
-    }
+    const key = endpointKey(endpoint);
+    if (seen.has(key)) return { code: "duplicate", endpointIndex };
+    seen.add(key);
   }
 
   return null;

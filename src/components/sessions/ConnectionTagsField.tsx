@@ -8,12 +8,22 @@ interface ConnectionTagsFieldProps {
   value: string[];
   suggestions: string[];
   onChange: (tags: string[]) => void;
+  draft?: string;
+  onDraftChange?: (value: string) => void;
 }
 
-export function ConnectionTagsField({ value, suggestions, onChange }: ConnectionTagsFieldProps) {
+export function ConnectionTagsField({
+  value,
+  suggestions,
+  onChange,
+  draft,
+  onDraftChange,
+}: ConnectionTagsFieldProps) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [inputValue, setInputValue] = useState("");
+  const [localDraft, setLocalDraft] = useState("");
+  const inputValue = draft ?? localDraft;
+  const setInputValue = onDraftChange ?? setLocalDraft;
   const [focused, setFocused] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState<number | null>(null);
 
@@ -45,7 +55,7 @@ export function ConnectionTagsField({ value, suggestions, onChange }: Connection
       setInputValue("");
       setActiveSuggestion(null);
     },
-    [onChange, value],
+    [onChange, value, setInputValue],
   );
 
   const removeTag = useCallback(

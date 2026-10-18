@@ -892,8 +892,8 @@ export function openNewSessionWithTarget(
     title: i18n.t(editId ? "dialog.editConnection" : "dialog.newConnection"),
     url,
     parentLabel: ownerMainWindowLabel,
-    width: 520,
-    height: 620,
+    width: 900,
+    height: 680,
     stateKey: "new-session",
   });
 }

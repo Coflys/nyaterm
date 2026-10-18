@@ -1,16 +1,13 @@
-import { SessionNetworkSection } from "@/components/sessions/SessionNetworkSection";
-import type { ConnectionOption } from "@/components/network/shared";
-import type { ProxyConfig } from "@/types/global";
-import { getCurrentWindow } from "@/lib/backend/platform/window";
 import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdChevronRight, MdClose, MdSettings } from "react-icons/md";
+import { MdClose, MdSettings } from "react-icons/md";
+import type { ConnectionOption } from "@/components/network/shared";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
 import { AccountSelector } from "@/components/sessions/AccountSelector";
 import { ConnectionRecordingSettings } from "@/components/sessions/ConnectionRecordingSettings";
+import { SessionNetworkSection } from "@/components/sessions/SessionNetworkSection";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -30,16 +27,30 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { AccountPasswordSource, RecordingMode, SavedAccount } from "@/types/global";
+import type {
+  AccountPasswordSource,
+  ProxyConfig,
+  RecordingMode,
+  SavedAccount,
+} from "@/types/global";
+import { EditorSection, useEditorDialogState } from "./ConnectionEditor";
 
 const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
 type TelnetEnterMode = "crlf" | "cr" | "lf";
 type TelnetAuthMode = "none" | "password";
 
 interface TelnetFormProps {
-  network?: { proxyId: string; setProxyId: (v: string) => void; proxies: ProxyConfig[]; jumpHostId: string; setJumpHostId: (v: string) => void; jumpHostOptions: ConnectionOption[] };
+  network?: {
+    proxyId: string;
+    setProxyId: (v: string) => void;
+    proxies: ProxyConfig[];
+    jumpHostId: string;
+    setJumpHostId: (v: string) => void;
+    jumpHostOptions: ConnectionOption[];
+  };
   host: string;
   setHost: (v: string) => void;
   port: number;
@@ -146,8 +157,8 @@ export function TelnetForm({
   onLockPasswordSecrets,
 }: TelnetFormProps) {
   const { t } = useTranslation();
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [showPasswordManagement, setShowPasswordManagement] = useState(false);
+  const [showPasswordManagement, setShowPasswordManagement, restorePasswordManagementFocus] =
+    useEditorDialogState();
   const [showDirectPassword, setShowDirectPassword] = useState(false);
   const [directPasswordLoading, setDirectPasswordLoading] = useState(false);
   const loadAccounts = useCallback(async () => {
@@ -227,400 +238,370 @@ export function TelnetForm({
 
   return (
     <div className="space-y-3 w-full">
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <div className="min-w-0 flex-1">
-          <Label className="text-xs font-medium text-foreground/80">
-            {t("dialog.host")}
-            <RequiredMark />
-          </Label>
-          <Input
-            className="mt-1 text-xs h-8"
-            placeholder="192.168.1.100"
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-          />
+      <EditorSection category="basic">
+        <div className="flex flex-col gap-3 @min-[480px]/editor:flex-row">
+          <div className="min-w-0 flex-1">
+            <Label className="text-xs font-medium text-foreground/80">
+              {t("dialog.host")}
+              <RequiredMark />
+            </Label>
+            <Input
+              data-editor-field="host"
+              className="mt-1 text-xs h-8"
+              placeholder="192.168.1.100"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+            />
+          </div>
+          <div className="w-full @min-[480px]/editor:w-32">
+            <Label className="text-xs font-medium text-foreground/80">
+              {t("dialog.port")}
+              <RequiredMark />
+            </Label>
+            <NumberInput
+              data-editor-field="port"
+              className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+              value={port}
+              onChange={setPort}
+              min={1}
+              max={65535}
+            />
+          </div>
         </div>
-        <div className="w-full sm:w-32">
-          <Label className="text-xs font-medium text-foreground/80">
-            {t("dialog.port")}
-            <RequiredMark />
-          </Label>
-          <NumberInput
-            className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-            value={port}
-            onChange={setPort}
-            min={1}
-            max={65535}
-          />
-        </div>
-      </div>
-
-      <AccountSelector
-        accounts={accounts}
-        value={accountId}
-        onChange={(nextAccountId) => {
-          setAccountId(nextAccountId);
-          if (nextAccountId) {
-            setPasswordSource("account");
-            setPassword("");
-            setHasPassword(false);
-          } else if (!nextAccountId && passwordSource === "account") {
-            setPasswordSource("direct");
-          }
-        }}
-      />
-
-      <div>
-        <Label className="text-xs font-medium text-foreground/80">{t("dialog.username")}</Label>
-        <Input
-          className="mt-1 text-xs h-8"
-          value={accountProvidesUsername ? selectedAccount?.username : username}
-          onChange={(e) => setUsername(e.target.value)}
-          readOnly={accountProvidesUsername}
-        />
-        {accountId ? (
-          <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-            {accountProvidesUsername
-              ? t("dialog.usernameProvidedByAccount")
-              : t("dialog.accountUsernameFallbackDescription")}
-          </p>
-        ) : null}
-      </div>
-
-      <div>
-        <Label className="text-xs font-medium text-foreground/80">
-          {t("dialog.authentication")}
-        </Label>
-        <Tabs
-          value={authType}
-          onValueChange={(value) => {
-            const next = value as TelnetAuthMode;
-            setAuthType(next);
-            if (next === "none") {
+      </EditorSection>
+      <EditorSection category="authentication">
+        <AccountSelector
+          accounts={accounts}
+          value={accountId}
+          onChange={(nextAccountId) => {
+            setAccountId(nextAccountId);
+            if (nextAccountId) {
+              setPasswordSource("account");
               setPassword("");
               setHasPassword(false);
+            } else if (!nextAccountId && passwordSource === "account") {
+              setPasswordSource("direct");
             }
           }}
-          className="mt-1 w-full"
-        >
-          <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
-            <TabsTrigger value="none" className="text-xs">
-              {t("dialog.noAuthentication", "None")}
-            </TabsTrigger>
-            <TabsTrigger value="password" className="text-xs">
-              {t("dialog.password")}
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="none" className="mt-3 border-0 outline-none">
-            <div className="rounded-md border border-dashed bg-accent/25 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
-              {t("dialog.telnetNoAuthenticationDescription")}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="password" className="mt-3 border-0 outline-none">
-            <Label className="text-xs font-medium text-foreground/80">
-              {t("dialog.passwordSource")}
-            </Label>
-            <Tabs
-              value={passwordSource}
-              onValueChange={(value) => {
-                const next = value as AccountPasswordSource;
-                setPasswordSource(next);
-                if (next === "account") {
-                  setPassword("");
-                  setHasPassword(false);
-                }
-              }}
-              className="mt-1 w-full"
-            >
-              <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
-                {accountId ? (
-                  <TabsTrigger value="account" className="text-xs">
-                    {t("dialog.accountPassword")}
-                  </TabsTrigger>
-                ) : null}
-                <TabsTrigger value="direct" className="text-xs">
-                  {t("dialog.directPassword")}
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="direct" className="mt-3 border-0 outline-none">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("dialog.password")}
-                </Label>
-                <div className="relative mt-1">
-                  <Input
-                    data-custom-password-reveal
-                    type={showDirectPassword ? "text" : "password"}
-                    className="text-xs h-8 pr-16"
-                    placeholder={
-                      hasPassword && !password
-                        ? MASKED_PASSWORD_PLACEHOLDER
-                        : t("dialog.passwordPlaceholder")
-                    }
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      if (e.target.value) setHasPassword(false);
-                    }}
-                    disabled={directPasswordLoading}
-                  />
-                  {(password || hasPassword) && (
-                    <button
-                      type="button"
-                      className="absolute right-7 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-                      title={
-                        showDirectPassword ? t("dialog.hidePassword") : t("dialog.showPassword")
-                      }
-                      disabled={directPasswordLoading}
-                      onClick={() => {
-                        void toggleDirectPasswordVisibility();
-                      }}
-                    >
-                      {showDirectPassword ? (
-                        <EyeOff className="h-3.5 w-3.5" />
-                      ) : (
-                        <Eye className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  )}
-                  {(password || hasPassword) && (
-                    <button
-                      type="button"
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-                      title={t("dialog.clearPassword", "Clear password")}
-                      onClick={() => {
-                        setPassword("");
-                        setHasPassword(false);
-                        setShowDirectPassword(false);
-                      }}
-                    >
-                      <MdClose className="text-sm" />
-                    </button>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="account" className="mt-3 border-0 outline-none">
-                <div className="flex items-center justify-between gap-3 rounded-md border border-dashed bg-accent/25 px-3 py-2">
-                  <div className="min-w-0 text-[0.6875rem] leading-relaxed text-muted-foreground">
-                    {selectedAccount
-                      ? selectedAccount.has_password
-                        ? t("dialog.accountPasswordDescription", { name: selectedAccount.name })
-                        : t("dialog.accountPasswordMissingTelnetDescription", {
-                            name: selectedAccount.name,
-                          })
-                      : t("dialog.missingAccountDescription")}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 shrink-0 gap-1 px-2 text-xs"
-                    onClick={() => setShowPasswordManagement(true)}
-                  >
-                    <MdSettings className="text-sm" />
-                    {t("dialog.manageAccounts")}
-                  </Button>
-                </div>
-              </TabsContent>
-            </Tabs>
-          </TabsContent>
-        </Tabs>
-      </div>
-
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
-          <MdChevronRight
-            className={`text-sm transition-transform duration-200 ${advancedOpen ? "rotate-90" : ""}`}
+        />
+        <div>
+          <Label className="text-xs font-medium text-foreground/80">{t("dialog.username")}</Label>
+          <Input
+            data-editor-field="username"
+            className="mt-1 text-xs h-8"
+            value={accountProvidesUsername ? selectedAccount?.username : username}
+            onChange={(e) => setUsername(e.target.value)}
+            readOnly={accountProvidesUsername}
           />
-          <span>{t("dialog.advancedConfig")}</span>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3">
-          <Tabs defaultValue="input" className="w-full">
-            <TabsList className="grid h-8 w-full grid-cols-3 pointer-events-auto">
-              <TabsTrigger value="input" className="text-xs">
-                {t("dialog.telnetInputSettings", "Input")}
+          {accountId ? (
+            <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+              {accountProvidesUsername
+                ? t("dialog.usernameProvidedByAccount")
+                : t("dialog.accountUsernameFallbackDescription")}
+            </p>
+          ) : null}
+        </div>
+        <div>
+          <Label className="text-xs font-medium text-foreground/80">
+            {t("dialog.authentication")}
+          </Label>
+          <Tabs
+            value={authType}
+            onValueChange={(value) => {
+              const next = value as TelnetAuthMode;
+              setAuthType(next);
+              if (next === "none") {
+                setPassword("");
+                setHasPassword(false);
+              }
+            }}
+            className="mt-1 w-full"
+          >
+            <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
+              <TabsTrigger value="none" className="text-xs">
+                {t("dialog.noAuthentication", "None")}
               </TabsTrigger>
-              <TabsTrigger value="terminal" className="text-xs">
-                {t("dialog.encodingSettings")}
-              </TabsTrigger>
-              <TabsTrigger value="telnet" className="text-xs">
-                {t("dialog.telnetCompatibility", "Compatibility")}
+              <TabsTrigger value="password" className="text-xs">
+                {t("dialog.password")}
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="input" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-medium">
-                    {t("dialog.telnetInputBehavior", "Key input")}
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3">
-                  <div className="min-w-0">
-                    <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.backspaceMode", "Backspace Mode")}
-                    </Label>
-                    <Select value={backspaceMode} onValueChange={setBackspaceMode}>
-                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ctrl_h">
-                          {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
-                        </SelectItem>
-                        <SelectItem value="del">
-                          {t("dialog.backspaceDel", "DEL (0x7F)")}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="min-w-0">
-                    <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.telnetEnterMode", "Enter sends")}
-                    </Label>
-                    <Select
-                      value={enterMode}
-                      onValueChange={(value) => setEnterMode(value as TelnetEnterMode)}
-                    >
-                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="crlf">CRLF (\r\n)</SelectItem>
-                        <SelectItem value="cr">CR (\r)</SelectItem>
-                        <SelectItem value="lf">LF (\n)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+            <TabsContent value="none" className="mt-3 border-0 outline-none">
+              <div className="rounded-md border border-dashed bg-accent/25 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                {t("dialog.telnetNoAuthenticationDescription")}
               </div>
             </TabsContent>
 
-            <TabsContent value="terminal" className="mt-3 border-0 outline-none">
-              <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
-                <div className="max-w-md">
+            <TabsContent value="password" className="mt-3 border-0 outline-none">
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.passwordSource")}
+              </Label>
+              <Tabs
+                value={passwordSource}
+                onValueChange={(value) => {
+                  const next = value as AccountPasswordSource;
+                  setPasswordSource(next);
+                  if (next === "account") {
+                    setPassword("");
+                    setHasPassword(false);
+                  }
+                }}
+                className="mt-1 w-full"
+              >
+                <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
+                  {accountId ? (
+                    <TabsTrigger value="account" className="text-xs">
+                      {t("dialog.accountPassword")}
+                    </TabsTrigger>
+                  ) : null}
+                  <TabsTrigger value="direct" className="text-xs">
+                    {t("dialog.directPassword")}
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="direct" className="mt-3 border-0 outline-none">
                   <Label className="text-xs font-medium text-foreground/80">
-                    {t("connection.encoding")}
+                    {t("dialog.password")}
                   </Label>
-                  <Select value={encoding} onValueChange={setEncoding}>
-                    <SelectTrigger className="mt-1 h-8 w-full text-xs">
-                      <SelectValue placeholder={t("connection.encodingFollowGlobal")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
-                      <SelectItem value="UTF-8">UTF-8</SelectItem>
-                      <SelectItem value="GBK">GBK</SelectItem>
-                      <SelectItem value="GB2312">GB2312</SelectItem>
-                      <SelectItem value="GB18030">GB18030</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <ConnectionRecordingSettings
-                  useGlobal={recordingUseGlobal}
-                  onUseGlobalChange={setRecordingUseGlobal}
-                  autoStart={recordingAutoStart}
-                  onAutoStartChange={setRecordingAutoStart}
-                  mode={recordingMode}
-                  onModeChange={setRecordingMode}
-                />
-              </div>
-            </TabsContent>
-
-            <TabsContent value="telnet" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-medium">
-                    {t("dialog.telnetCompatibility", "Compatibility")}
-                  </div>
-                  <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                    {t("dialog.telnetRawTcpCliDesc")}
-                  </p>
-                </div>
-
-                <div className="mt-3 grid gap-2">
-                  <div className="max-w-md space-y-1">
-                    <Label
-                      htmlFor="telnet-keep-alive"
-                      className="text-xs font-medium text-foreground/80"
-                    >
-                      {t("dialog.telnetKeepAliveInterval")}
-                    </Label>
-                    <NumberInput
-                      id="telnet-keep-alive"
-                      value={keepAliveInterval}
-                      onChange={(value) =>
-                        setKeepAliveInterval(
-                          Math.min(
-                            4_294_967_295,
-                            Math.max(0, Math.trunc(value)),
-                          ),
-                        )
+                  <div className="relative mt-1">
+                    <Input
+                      data-editor-field="password"
+                      data-custom-password-reveal
+                      type={showDirectPassword ? "text" : "password"}
+                      className="text-xs h-8 pr-16"
+                      placeholder={
+                        hasPassword && !password
+                          ? MASKED_PASSWORD_PLACEHOLDER
+                          : t("dialog.passwordPlaceholder")
                       }
-                      min={0}
-                      max={4_294_967_295}
-                      step={1}
-                      disabled={rawTcpCli}
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        if (e.target.value) setHasPassword(false);
+                      }}
+                      disabled={directPasswordLoading}
                     />
-                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                      {t("dialog.telnetKeepAliveIntervalDesc")}
-                    </p>
+                    {(password || hasPassword) && (
+                      <button
+                        type="button"
+                        className="absolute right-7 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                        title={
+                          showDirectPassword ? t("dialog.hidePassword") : t("dialog.showPassword")
+                        }
+                        disabled={directPasswordLoading}
+                        onClick={() => {
+                          void toggleDirectPasswordVisibility();
+                        }}
+                      >
+                        {showDirectPassword ? (
+                          <EyeOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    )}
+                    {(password || hasPassword) && (
+                      <button
+                        type="button"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                        title={t("dialog.clearPassword", "Clear password")}
+                        onClick={() => {
+                          setPassword("");
+                          setHasPassword(false);
+                          setShowDirectPassword(false);
+                        }}
+                      >
+                        <MdClose className="text-sm" />
+                      </button>
+                    )}
                   </div>
-                  {renderSwitchRow(
-                    t("dialog.telnetRawTcpCli", "Embedded debug port / Raw TCP CLI"),
-                    t("dialog.telnetRawTcpCliLongDesc"),
-                    rawTcpCli,
-                    (checked) => {
-                      setRawTcpCli(checked);
-                      if (checked) setEnterMode("cr");
-                    },
-                  )}
+                </TabsContent>
 
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {renderSwitchRow(
-                      t("dialog.telnetLocalEcho", "Local Echo"),
-                      t("dialog.telnetLocalEchoDesc"),
-                      localEcho,
-                      setLocalEcho,
-                    )}
-                    {renderSwitchRow(
-                      t("dialog.telnetLocalLineEdit", "Local line editing / Send line on Enter"),
-                      t("dialog.telnetLocalLineEditDesc"),
-                      localLineEdit,
-                      setLocalLineEdit,
-                    )}
-                    {renderSwitchRow(
-                      t("dialog.telnetForceCharAtATime", "Force character-at-a-time"),
-                      t("dialog.telnetForceCharAtATimeDesc"),
-                      forceCharacterAtATime,
-                      setForceCharacterAtATime,
-                    )}
-                    {renderSwitchRow(
-                      t("dialog.telnetSendNaws", "Send NAWS"),
-                      t("dialog.telnetSendNawsDesc"),
-                      sendNaws,
-                      setSendNaws,
-                      rawTcpCli,
-                    )}
-                    {renderSwitchRow(
-                      t("dialog.telnetSendSga", "Send SGA"),
-                      t("dialog.telnetSendSgaDesc"),
-                      sendSga,
-                      setSendSga,
-                      rawTcpCli,
-                    )}
+                <TabsContent value="account" className="mt-3 border-0 outline-none">
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-dashed bg-accent/25 px-3 py-2">
+                    <div className="min-w-0 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {selectedAccount
+                        ? selectedAccount.has_password
+                          ? t("dialog.accountPasswordDescription", {
+                              name: selectedAccount.name,
+                            })
+                          : t("dialog.accountPasswordMissingTelnetDescription", {
+                              name: selectedAccount.name,
+                            })
+                        : t("dialog.missingAccountDescription")}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 shrink-0 gap-1 px-2 text-xs"
+                      onClick={() => setShowPasswordManagement(true)}
+                    >
+                      <MdSettings className="text-sm" />
+                      {t("dialog.manageAccounts")}
+                    </Button>
                   </div>
-                </div>
-              </div>
+                </TabsContent>
+              </Tabs>
             </TabsContent>
           </Tabs>
-        </CollapsibleContent>
-      </Collapsible>
+        </div>
+      </EditorSection>
+      <EditorSection category="terminal">
+        <div className="rounded-lg border bg-accent/25 p-3">
+          <div className="space-y-0.5">
+            <div className="text-xs font-medium">
+              {t("dialog.telnetInputBehavior", "Key input")}
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 @min-[480px]/editor:grid-cols-2 gap-2 @min-[480px]/editor:gap-3">
+            <div className="min-w-0">
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.backspaceMode", "Backspace Mode")}
+              </Label>
+              <Select value={backspaceMode} onValueChange={setBackspaceMode}>
+                <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ctrl_h">
+                    {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
+                  </SelectItem>
+                  <SelectItem value="del">{t("dialog.backspaceDel", "DEL (0x7F)")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-0">
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.telnetEnterMode", "Enter sends")}
+              </Label>
+              <Select
+                value={enterMode}
+                onValueChange={(value) => setEnterMode(value as TelnetEnterMode)}
+              >
+                <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="crlf">CRLF (\r\n)</SelectItem>
+                  <SelectItem value="cr">CR (\r)</SelectItem>
+                  <SelectItem value="lf">LF (\n)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      </EditorSection>
+      <EditorSection category="terminal">
+        <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
+          <div className="max-w-md">
+            <Label className="text-xs font-medium text-foreground/80">
+              {t("connection.encoding")}
+            </Label>
+            <Select value={encoding} onValueChange={setEncoding}>
+              <SelectTrigger className="mt-1 h-8 w-full text-xs">
+                <SelectValue placeholder={t("connection.encodingFollowGlobal")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
+                <SelectItem value="UTF-8">UTF-8</SelectItem>
+                <SelectItem value="GBK">GBK</SelectItem>
+                <SelectItem value="GB2312">GB2312</SelectItem>
+                <SelectItem value="GB18030">GB18030</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <ConnectionRecordingSettings
+            useGlobal={recordingUseGlobal}
+            onUseGlobalChange={setRecordingUseGlobal}
+            autoStart={recordingAutoStart}
+            onAutoStartChange={setRecordingAutoStart}
+            mode={recordingMode}
+            onModeChange={setRecordingMode}
+          />
+        </div>
+      </EditorSection>
+      <EditorSection category="compatibility">
+        <div className="rounded-lg border bg-accent/25 p-3">
+          <div className="space-y-0.5">
+            <div className="text-xs font-medium">
+              {t("dialog.telnetCompatibility", "Compatibility")}
+            </div>
+            <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+              {t("dialog.telnetRawTcpCliDesc")}
+            </p>
+          </div>
 
-      {network && <SessionNetworkSection {...network} />}
+          <div className="mt-3 grid gap-2">
+            <div className="max-w-md space-y-1">
+              <Label htmlFor="telnet-keep-alive" className="text-xs font-medium text-foreground/80">
+                {t("dialog.telnetKeepAliveInterval")}
+              </Label>
+              <NumberInput
+                id="telnet-keep-alive"
+                value={keepAliveInterval}
+                onChange={(value) =>
+                  setKeepAliveInterval(Math.min(4_294_967_295, Math.max(0, Math.trunc(value))))
+                }
+                min={0}
+                max={4_294_967_295}
+                step={1}
+                disabled={rawTcpCli}
+              />
+              <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                {t("dialog.telnetKeepAliveIntervalDesc")}
+              </p>
+            </div>
+            {renderSwitchRow(
+              t("dialog.telnetRawTcpCli", "Embedded debug port / Raw TCP CLI"),
+              t("dialog.telnetRawTcpCliLongDesc"),
+              rawTcpCli,
+              (checked) => {
+                setRawTcpCli(checked);
+                if (checked) setEnterMode("cr");
+              },
+            )}
 
+            <div className="grid gap-2 md:grid-cols-2">
+              {renderSwitchRow(
+                t("dialog.telnetLocalEcho", "Local Echo"),
+                t("dialog.telnetLocalEchoDesc"),
+                localEcho,
+                setLocalEcho,
+              )}
+              {renderSwitchRow(
+                t("dialog.telnetLocalLineEdit", "Local line editing / Send line on Enter"),
+                t("dialog.telnetLocalLineEditDesc"),
+                localLineEdit,
+                setLocalLineEdit,
+              )}
+              {renderSwitchRow(
+                t("dialog.telnetForceCharAtATime", "Force character-at-a-time"),
+                t("dialog.telnetForceCharAtATimeDesc"),
+                forceCharacterAtATime,
+                setForceCharacterAtATime,
+              )}
+              {renderSwitchRow(
+                t("dialog.telnetSendNaws", "Send NAWS"),
+                t("dialog.telnetSendNawsDesc"),
+                sendNaws,
+                setSendNaws,
+                rawTcpCli,
+              )}
+              {renderSwitchRow(
+                t("dialog.telnetSendSga", "Send SGA"),
+                t("dialog.telnetSendSgaDesc"),
+                sendSga,
+                setSendSga,
+                rawTcpCli,
+              )}
+            </div>
+          </div>
+        </div>
+      </EditorSection>
+      <EditorSection category="network">
+        {network && <SessionNetworkSection {...network} />}
+      </EditorSection>
       <Dialog
         disablePointerDismissal
         open={showPasswordManagement}
@@ -630,6 +611,7 @@ export function TelnetForm({
         }}
       >
         <DialogContent
+          onCloseAutoFocus={restorePasswordManagementFocus}
           className="!flex w-[min(27rem,calc(100vw-3rem))] max-w-none !max-h-[76vh] min-h-0 flex-col !overflow-hidden"
           onOpenAutoFocus={(event) => event.preventDefault()}
         >

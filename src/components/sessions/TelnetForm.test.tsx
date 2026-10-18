@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { useState, type ComponentProps } from "react";
+import { type ComponentProps, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TelnetForm } from "./TelnetForm";
 
@@ -70,11 +70,6 @@ function Harness() {
 }
 
 function openCompatibility() {
-  fireEvent.click(screen.getByText("dialog.advancedConfig"));
-  fireEvent.mouseDown(
-    screen.getByRole("tab", { name: "dialog.telnetCompatibility" }),
-    { button: 0, ctrlKey: false },
-  );
   return screen.getByRole("spinbutton", {
     name: "dialog.telnetKeepAliveInterval",
   }) as HTMLInputElement;
