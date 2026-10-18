@@ -1,3 +1,4 @@
+use gpui::AppContext as _;
 use std::time::Duration;
 
 use nyaterm_mcp_protocol::{RpcError, TerminalExecuteResult};
@@ -184,21 +185,21 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
             .metadata_mut(&session.id)
             .unwrap()
             .ai_execution_profile = AiExecutionProfile::SendOnly;
-        let (mut request, receiver) = execution_request("send-only", "external", &session.id, true);
-        request.command = "echo send-only-fixture".into();
+        let (request, receiver) = execution_request("send-only", "external", &session.id, true);
         app.start_terminal_execution(request, cx);
         assert!(!app.mcp.capabilities.terminal_executions.busy(&session.id));
         assert!(
-            app.mcp
+            !app.mcp
                 .capabilities
                 .terminal_executions
                 .take_inserted("send-only")
         );
         receiver
     });
-    let sent = send_only.try_recv().unwrap().unwrap();
-    assert!(sent["exitCode"].is_null());
-    assert!(sent["output"].as_str().unwrap().contains("Command sent"));
+    assert_eq!(
+        send_only.try_recv().unwrap().unwrap_err().code,
+        "permission_denied"
+    );
     let powershell = manager
         .create_local_session(LocalSessionConfig {
             shell_path: Some("powershell.exe".into()),
@@ -627,4 +628,290 @@ fn cancellation_wins_a_racing_success_and_insertion_audit_is_consumed_once() {
     state.inserted_requests.insert("foreground".into());
     assert!(state.take_inserted("foreground"));
     assert!(!state.take_inserted("foreground"));
+}
+
+#[test]
+fn raw_capture_respects_output_boundary_and_replies_with_unknown_exit_status() {
+    use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
+    use std::time::Instant;
+    let mut state = TerminalExecutionState::default();
+    let (request, mut receiver) = execution_request("raw", "external", "a", false);
+    assert!(state.insert(request, None).is_ok());
+    state.tasks.get_mut("a").unwrap().raw_capture =
+        Some(RawCliCapture::new("Router#", Instant::now()));
+    assert!(state.capturing("a"));
+    state.process_output("a", "queued-before-command\r\nRouter#");
+    assert!(state.begin_capture("a", "wrong").is_none());
+    assert!(state.begin_capture("a", "raw").is_some());
+    state.process_output("other", "unrelated");
+    state.process_output("a", "result\r\nRouter(config)#");
+    let task = &state.tasks["a"];
+    assert_eq!(
+        task.raw_capture.as_ref().unwrap().poll(
+            Instant::now() + Duration::from_secs(1),
+            task.started + task.request.timeout
+        ),
+        Some(RawCliEnd::Prompt)
+    );
+    let completion = state
+        .finish(
+            "a",
+            "raw",
+            Ok(TerminalExecuteResult {
+                output: RawCliEnd::Prompt.description().into(),
+                exit_code: None,
+                duration_ms: 0,
+                timed_out: false,
+                source_truncated: false,
+            }),
+            TerminalExecutionStatus::Completed,
+        )
+        .unwrap();
+    completion.reply.send(completion.result).unwrap();
+    let output = receiver.try_recv().unwrap().unwrap();
+    assert!(output["exitCode"].is_null());
+    assert!(
+        output["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("result\nRouter(config)#")
+    );
+    assert!(
+        !output["output"]
+            .as_str()
+            .unwrap()
+            .contains("queued-before-command")
+    );
+    assert!(!state.busy("a") && !state.capturing("a"));
+    // A subsequent command must not inherit the previous capture.
+    let (request, _receiver) = execution_request("next", "external", "a", false);
+    assert!(state.insert(request, None).is_ok());
+    state.tasks.get_mut("a").unwrap().raw_capture =
+        Some(RawCliCapture::new("Router#", Instant::now()));
+    state.begin_capture("a", "next");
+    state.process_output("a", "next-result\r\nRouter#");
+    let completion = state
+        .finish(
+            "a",
+            "next",
+            Ok(TerminalExecuteResult {
+                exit_code: None,
+                ..result()
+            }),
+            TerminalExecutionStatus::Completed,
+        )
+        .unwrap();
+    assert!(
+        !completion.result.unwrap()["output"]
+            .as_str()
+            .unwrap()
+            .contains("Router(config)")
+    );
+}
+
+#[test]
+fn raw_failures_keep_partial_output_and_release_occupancy() {
+    use nyaterm_core::raw_cli_capture::RawCliCapture;
+    use std::time::Instant;
+    for status in [
+        TerminalExecutionStatus::Cancelled,
+        TerminalExecutionStatus::Disconnected,
+        TerminalExecutionStatus::TimedOut,
+        TerminalExecutionStatus::Failed,
+    ] {
+        let mut state = TerminalExecutionState::default();
+        let (request, _receiver) = execution_request("raw", "native", "a", false);
+        assert!(state.insert(request, None).is_ok());
+        state.tasks.get_mut("a").unwrap().raw_capture =
+            Some(RawCliCapture::new("Router#", Instant::now()));
+        state.begin_capture("a", "raw");
+        state.process_output("a", "partial\r\n---- More ----");
+        let completion = state
+            .finish(
+                "a",
+                "raw",
+                Err(super::rpc_failure(
+                    "execution_incomplete",
+                    "Review terminal",
+                )),
+                status,
+            )
+            .unwrap();
+        assert!(completion.result.is_err());
+        assert!(
+            matches!(completion.event, Some(TerminalExecutionEvent::Finished { output, .. }) if output.contains("partial") && output.contains("More"))
+        );
+        assert!(!state.busy("a") && !state.capturing("a"));
+    }
+}
+
+#[gpui::test]
+fn raw_session_events_survive_full_degraded_ui_tail(cx: &mut gpui::TestAppContext) {
+    // The frame worker and session bridge wake this test from real threads.
+    cx.executor().allow_parking();
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::TERMINAL_UI_OUTPUT_TAIL_CAP;
+    use crate::test_support::TestConfigDir;
+    use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
+    use nyaterm_transport::SessionEvent;
+    use std::time::Instant;
+    let directory = TestConfigDir::new("nyaterm-raw-session-events");
+    let app = app_with_visible_local_session(cx, directory.path(), "raw");
+    cx.update_entity(&app, |app, cx| {
+        app.terminal.seed_session_view(
+            "raw".into(),
+            "x".repeat(TERMINAL_UI_OUTPUT_TAIL_CAP),
+            "UTF-8",
+        );
+        app.terminal.enter_session_render_degraded("raw");
+        app.terminal.complete_terminal_windows_restore();
+        let (request, _receiver) = execution_request("raw-task", "native", "raw", false);
+        let state = &mut app.mcp.capabilities.terminal_executions;
+        assert!(state.insert(request, None).is_ok());
+        state.tasks.get_mut("raw").unwrap().raw_capture =
+            Some(RawCliCapture::new("Router#", Instant::now()));
+        app.sync_session_event_bridge_policy();
+        app.start_runtime_data_plane_drain(cx);
+        for event in [
+            SessionEvent::OutputBoundary {
+                session_id: "raw".into(),
+                token: "raw-task".into(),
+            },
+            SessionEvent::Output {
+                session_id: "raw".into(),
+                data: b"command-result\r\nRouter#".to_vec(),
+            },
+        ] {
+            app.session.push_event_bridge_ui_event_for_test(event);
+        }
+    });
+    cx.run_until_parked();
+    cx.update_entity(&app, |app, _| {
+        let task = &app.mcp.capabilities.terminal_executions.tasks["raw"];
+        assert!(task.capture_started);
+        assert_eq!(
+            task.raw_capture.as_ref().unwrap().poll(
+                Instant::now() + Duration::from_secs(1),
+                task.started + task.request.timeout
+            ),
+            Some(RawCliEnd::Prompt)
+        );
+    });
+}
+
+#[gpui::test]
+fn network_session_profile_and_background_policy_are_shared(cx: &mut gpui::TestAppContext) {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::TestConfigDir;
+    use nyaterm_core::AiExecutionProfile;
+    use nyaterm_transport::{SshSessionConfig, SshSessionProfile};
+    let directory = TestConfigDir::new("nyaterm-network-policy");
+    let app = app_with_visible_local_session(cx, directory.path(), "ssh");
+    cx.update_entity(&app, |app, cx| {
+        let metadata = app.session.metadata_mut("ssh").unwrap();
+        metadata.launch_config = SessionLaunchConfig::Ssh(Box::new(SshSessionConfig {
+            profile: SshSessionProfile::NetworkDevice,
+            ..SshSessionConfig::default()
+        }));
+        metadata.ai_execution_profile = AiExecutionProfile::Auto;
+        assert_eq!(
+            app.ai_execution_profile_for_session("ssh"),
+            AiExecutionProfile::SendOnly
+        );
+        for profile in [
+            AiExecutionProfile::Auto,
+            AiExecutionProfile::Posix,
+            AiExecutionProfile::SendOnly,
+            AiExecutionProfile::Disabled,
+        ] {
+            app.session
+                .metadata_mut("ssh")
+                .unwrap()
+                .ai_execution_profile = profile;
+            if profile != AiExecutionProfile::Auto {
+                assert_eq!(app.ai_execution_profile_for_session("ssh"), profile);
+            }
+            assert!(app.validate_ai_background_execution("ssh").is_err());
+            let (request, mut receiver) =
+                execution_request("background", "external MCP", "ssh", true);
+            app.start_terminal_execution(request, cx);
+            assert_eq!(
+                receiver.try_recv().unwrap().unwrap_err().code,
+                "permission_denied"
+            );
+            assert!(!app.mcp.capabilities.terminal_executions.busy("ssh"));
+        }
+        let metadata = app.session.metadata_mut("ssh").unwrap();
+        metadata.launch_config = SessionLaunchConfig::Ssh(Box::default());
+        metadata.ai_execution_profile = AiExecutionProfile::Auto;
+        app.terminal
+            .seed_session_view("ssh".into(), "root#".into(), "UTF-8");
+        assert_eq!(
+            app.ai_execution_profile_for_session("ssh"),
+            AiExecutionProfile::Posix
+        );
+        assert!(app.validate_ai_background_execution("ssh").is_ok());
+    });
+}
+
+#[gpui::test]
+fn raw_output_loss_cancellation_and_disconnect_release_the_shared_task(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+    use nyaterm_core::raw_cli_capture::RawCliCapture;
+    use std::time::Instant;
+    let directory = TestConfigDir::new("nyaterm-raw-endings");
+    let app = app_with_visible_local_session(cx, directory.path(), "raw");
+    for outcome in ["loss", "cancel", "disconnect", "timeout"] {
+        cx.update_entity(&app, |app, cx| {
+            app.session.metadata_mut("raw").unwrap().disconnected = false;
+            let (request, mut receiver) = execution_request(outcome, "native", "raw", false);
+            let cancellation = request.cancellation.clone();
+            let state = &mut app.mcp.capabilities.terminal_executions;
+            assert!(state.insert(request, None).is_ok());
+            state.tasks.get_mut("raw").unwrap().raw_capture =
+                Some(RawCliCapture::new("Router#", Instant::now()));
+            state.begin_capture("raw", outcome);
+            state.process_output("raw", "retained-prefix");
+            match outcome {
+                "loss" => app.note_terminal_execution_output_dropped("raw", cx),
+                "cancel" => {
+                    cancellation.cancel();
+                    app.poll_terminal_executions(cx);
+                }
+                "disconnect" => {
+                    app.session.metadata_mut("raw").unwrap().disconnected = true;
+                    app.poll_terminal_executions(cx);
+                }
+                _ => {
+                    app.mcp
+                        .capabilities
+                        .terminal_executions
+                        .tasks
+                        .get_mut("raw")
+                        .unwrap()
+                        .started = Instant::now() - Duration::from_secs(31);
+                    app.poll_terminal_executions(cx);
+                }
+            }
+            let result = receiver.try_recv().unwrap();
+            if outcome == "loss" {
+                let value = result.unwrap();
+                assert_eq!(value["sourceTruncated"], true);
+                assert!(
+                    value["output"]
+                        .as_str()
+                        .unwrap()
+                        .contains("retained-prefix")
+                );
+            } else {
+                assert!(result.is_err());
+            }
+            assert!(!app.mcp.capabilities.terminal_executions.busy("raw"));
+            assert!(!app.mcp.capabilities.terminal_executions.capturing("raw"));
+        });
+    }
 }

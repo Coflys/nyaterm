@@ -204,6 +204,9 @@ impl NyaTermApp {
                             && (value["exitCode"].is_null()
                                 || value["timedOut"] == true
                                 || value["sourceTruncated"] == true);
+                        let stop_execution = tool_kind == AgentTool::TerminalExecute
+                            && (value["timedOut"] == true || value["sourceTruncated"] == true
+                                || matches!(value["code"].as_str(), Some("execution_incomplete" | "target_disconnected" | "cancelled")));
                         if this.ai.complete_native_call(
                             &callback_run,
                             AgentToolResult {
@@ -228,8 +231,14 @@ impl NyaTermApp {
                                 nyaterm_core::truncate_preview(&value.to_string(), 500),
                             );
                             this.ai.record_native_tool_output(&value);
+                            if stop_execution {
+                                this.ai.set_native_run_status(&callback_run, nyaterm_core::ai::harness::AgentRunStatus::Blocked);
+                                this.ai.set_native_message("Terminal execution is incomplete; review the terminal before starting another command.".into());
+                                this.clear_capability_owner(&format!("native:{callback_run}"), cx);
+                            } else {
+                                this.start_native_agent_continuation(cx);
+                            }
                             this.persist_native_chat_projection(cx);
-                            this.start_native_agent_continuation(cx);
                         }
                         this.ai.switch_scope(&visible);
                         this.defer_ai_panel_snapshot_flush(cx);

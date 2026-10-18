@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use gpui::Context;
 use nyaterm_core::agent_capture::build_agent_capture_command;
 use nyaterm_core::models::connection::AiExecutionProfile;
+use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
 use nyaterm_mcp_protocol::{RpcError, TerminalExecuteArgs, TerminalExecuteResult};
 use nyaterm_terminal::agent_capture::{
     AgentCaptureProcessResult, AgentOutputCaptureProcessor, RetiredCaptureFilter,
@@ -51,6 +52,7 @@ struct TerminalExecutionTask {
     step_index: u16,
     started: Instant,
     capture: Option<AgentOutputCaptureProcessor>,
+    raw_capture: Option<RawCliCapture>,
     capture_started: bool,
     capture_marker_id: String,
     worker_cancellation: CancellationToken,
@@ -82,7 +84,7 @@ impl TerminalExecutionState {
     pub fn capturing(&self, session_id: &str) -> bool {
         self.tasks
             .get(session_id)
-            .is_some_and(|task| task.capture.is_some())
+            .is_some_and(|task| task.capture.is_some() || task.raw_capture.is_some())
             || self.draining.contains_key(session_id)
     }
 
@@ -92,7 +94,10 @@ impl TerminalExecutionState {
 
     pub fn begin_capture(&mut self, session_id: &str, id: &str) -> Option<TerminalExecutionEvent> {
         let task = self.tasks.get_mut(session_id)?;
-        if task.capture_marker_id != id || task.capture_started || task.capture.is_none() {
+        if task.capture_marker_id != id
+            || task.capture_started
+            || (task.capture.is_none() && task.raw_capture.is_none())
+        {
             return None;
         }
         task.capture_started = true;
@@ -122,6 +127,18 @@ impl TerminalExecutionState {
             if filters.is_empty() {
                 self.retired.remove(session_id);
             }
+        }
+        if let Some(raw) = self
+            .tasks
+            .get_mut(session_id)
+            .filter(|task| task.capture_started)
+            .and_then(|task| task.raw_capture.as_mut())
+        {
+            raw.feed(&text, Instant::now());
+            return AgentCaptureProcessResult {
+                visible_text: text,
+                completed: Vec::new(),
+            };
         }
         if let Some(capture) = self
             .tasks
@@ -172,6 +189,7 @@ impl TerminalExecutionState {
                 step_index,
                 started: Instant::now(),
                 capture,
+                raw_capture: None,
                 capture_started: false,
             },
         );
@@ -224,32 +242,50 @@ impl TerminalExecutionState {
         if result.is_err() && status == TerminalExecutionStatus::Completed {
             status = TerminalExecutionStatus::Failed;
         }
-        if let Some(mut capture) = task.capture.take() {
+        if task.capture.is_some() || task.raw_capture.is_some() {
             let mut partial_output = String::new();
             let mut partial_truncated = false;
-            if status == TerminalExecutionStatus::Completed && capture.has_active() {
-                self.draining.insert(
-                    session_id.into(),
-                    (capture, Instant::now() + Duration::from_millis(150)),
-                );
-            } else if status != TerminalExecutionStatus::Completed {
-                let filter = capture.retire(&task.capture_marker_id);
-                self.retired
-                    .entry(session_id.into())
-                    .or_default()
-                    .push(filter);
-                if let Some(partial) = capture.cancel(&task.capture_marker_id) {
-                    partial_truncated = partial.source_truncated;
-                    match &mut result {
-                        Ok(value) => {
-                            value.output = partial.output;
-                            value.source_truncated |= partial.source_truncated;
-                        }
-                        Err(_) => {
-                            partial_output =
+            if let Some(raw) = task.raw_capture.take() {
+                partial_truncated = raw.is_truncated();
+                let output = raw.into_output();
+                match &mut result {
+                    Ok(value) => {
+                        // The caller supplies the completion explanation.
+                        value.output = format!("{output}\n{}", value.output);
+                        value.source_truncated |= partial_truncated;
+                    }
+                    Err(_) => {
+                        partial_output =
+                            nyaterm_terminal::recording_sanitizer::RecordingSanitizer::default()
+                                .feed(&output)
+                    }
+                }
+            }
+            if let Some(mut capture) = task.capture.take() {
+                if status == TerminalExecutionStatus::Completed && capture.has_active() {
+                    self.draining.insert(
+                        session_id.into(),
+                        (capture, Instant::now() + Duration::from_millis(150)),
+                    );
+                } else if status != TerminalExecutionStatus::Completed {
+                    let filter = capture.retire(&task.capture_marker_id);
+                    self.retired
+                        .entry(session_id.into())
+                        .or_default()
+                        .push(filter);
+                    if let Some(partial) = capture.cancel(&task.capture_marker_id) {
+                        partial_truncated = partial.source_truncated;
+                        match &mut result {
+                            Ok(value) => {
+                                value.output = partial.output;
+                                value.source_truncated |= partial.source_truncated;
+                            }
+                            Err(_) => {
+                                partial_output =
                                 nyaterm_terminal::recording_sanitizer::RecordingSanitizer::default(
                                 )
                                 .feed(&partial.output);
+                            }
                         }
                     }
                 }
@@ -387,7 +423,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn start_terminal_execution(
         &mut self,
-        mut request: TerminalExecutionRequest,
+        request: TerminalExecutionRequest,
         cx: &mut Context<Self>,
     ) {
         let reject = |request: TerminalExecutionRequest, code: &str, message: &str| {
@@ -435,11 +471,11 @@ impl NyaTermApp {
             );
             return;
         }
-        if matches!(
-            profile,
-            AiExecutionProfile::SendOnly | AiExecutionProfile::Auto
-        ) {
-            request.policy.background = false;
+        if request.policy.background
+            && let Err(error) = self.validate_ai_background_execution(&request.session_id)
+        {
+            reject(request, "permission_denied", &error);
+            return;
         }
         let target = if request.policy.background {
             match session.kind {
@@ -479,6 +515,14 @@ impl NyaTermApp {
             capture.register(capture_marker_id.clone());
             capture
         });
+        let raw_capture = (profile == AiExecutionProfile::SendOnly).then(|| {
+            let tail = self.terminal_buffer_tail_for_session(&request.session_id);
+            let mut start = tail.len().saturating_sub(4096);
+            while !tail.is_char_boundary(start) {
+                start += 1;
+            }
+            RawCliCapture::new(&tail[start..], Instant::now())
+        });
         let session_id = request.session_id.clone();
         let id = capture_marker_id.clone();
         let audit_request_id = request.id.clone();
@@ -492,17 +536,19 @@ impl NyaTermApp {
             .terminal_executions
             .insert(request, capture)
             .unwrap_or_else(|_| unreachable!("target checked on UI thread"));
-        self.mcp
+        let task = self
+            .mcp
             .capabilities
             .terminal_executions
             .tasks
             .get_mut(&session_id)
-            .expect("inserted task")
-            .capture_marker_id = capture_marker_id;
+            .expect("inserted task");
+        task.capture_marker_id = capture_marker_id;
+        task.raw_capture = raw_capture;
         let cancellation = self.mcp.capabilities.terminal_executions.tasks[&session_id]
             .worker_cancellation
             .clone();
-        if !background && wrapped.is_some() {
+        if !background {
             self.session
                 .begin_terminal_execution_boundary(&session_id, &id);
         }
@@ -594,23 +640,6 @@ impl NyaTermApp {
                         .terminal_executions
                         .inserted_requests
                         .insert(audit_request_id);
-                }
-                if profile == AiExecutionProfile::SendOnly || profile == AiExecutionProfile::Auto {
-                    self.finish_terminal_execution(
-                        &session_id,
-                        &id,
-                        Ok(TerminalExecuteResult {
-                            output:
-                                "Command sent; captured output and exit status are unavailable."
-                                    .into(),
-                            exit_code: None,
-                            duration_ms: 0,
-                            timed_out: false,
-                            source_truncated: false,
-                        }),
-                        TerminalExecutionStatus::Completed,
-                        cx,
-                    );
                 }
             }
         }
@@ -729,6 +758,50 @@ impl NyaTermApp {
 
     pub(in crate::features) fn poll_terminal_executions(&mut self, cx: &mut Context<Self>) {
         let now = Instant::now();
+        let raw_ended = self
+            .mcp
+            .capabilities
+            .terminal_executions
+            .tasks
+            .iter()
+            .filter_map(|(session, task)| {
+                if task.request.cancellation.is_cancelled()
+                    || self.session.is_disconnected(session)
+                    || self.session.session_info(session).is_none()
+                {
+                    return None;
+                }
+                let end = task
+                    .raw_capture
+                    .as_ref()?
+                    .poll(now, task.started + task.request.timeout)?;
+                Some((session.clone(), task.capture_marker_id.clone(), end))
+            })
+            .collect::<Vec<_>>();
+        for (session, id, end) in raw_ended {
+            let (result, status) = if end == RawCliEnd::Prompt {
+                (
+                    Ok(TerminalExecuteResult {
+                        output: end.description().into(),
+                        exit_code: None,
+                        duration_ms: 0,
+                        timed_out: false,
+                        source_truncated: false,
+                    }),
+                    TerminalExecutionStatus::Completed,
+                )
+            } else {
+                (
+                    Err(rpc_failure("execution_incomplete", end.description())),
+                    if end == RawCliEnd::TimedOut {
+                        TerminalExecutionStatus::TimedOut
+                    } else {
+                        TerminalExecutionStatus::Failed
+                    },
+                )
+            };
+            self.finish_terminal_execution(&session, &id, result, status, cx);
+        }
         let ended = self
             .mcp
             .capabilities
