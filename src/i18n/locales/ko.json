@@ -3136,6 +3136,7 @@
     "dropPathsRequired": "이 드래그 소스에는 로컬 경로가 없습니다.",
     "dropUploadFailed": "파일 업로드에 실패했습니다.",
     "hiddenSessions": "숨겨진 세션",
+    "imagePathPreviewHint": "{{modifier}}+클릭으로 이미지 미리 보기",
     "largeOutputProtectionActive": "대용량 출력 보호가 활성화됨",
     "largeOutputProtectionActiveDetail": "인터페이스 응답성을 유지하기 위해 터미널 출력 속도를 조절하고 있습니다.",
     "largeOutputProtectionRecovered": "대용량 출력 보호가 복구됨",

@@ -3138,6 +3138,7 @@
     "dropPathsRequired": "Нет локальных путей от этого источника перетаскивания.",
     "dropUploadFailed": "Не удалось загрузить файл.",
     "hiddenSessions": "Скрытые сеансы",
+    "imagePathPreviewHint": "{{modifier}}+Нажмите, чтобы просмотреть изображение",
     "largeOutputProtectionActive": "Включена защита от большого объёма вывода",
     "largeOutputProtectionActiveDetail": "Объём выводимых в терминал данных ограничивается, чтобы интерфейс оставался отзывчивым.",
     "largeOutputProtectionRecovered": "Защита от большого объёма вывода снята",

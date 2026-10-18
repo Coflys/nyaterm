@@ -3136,6 +3136,7 @@
     "dropPathsRequired": "此次拖拽没有暴露本机文件路径。",
     "dropUploadFailed": "文件上传失败。",
     "hiddenSessions": "被隐藏的会话",
+    "imagePathPreviewHint": "按住 {{modifier}} 并点击以预览图片",
     "largeOutputProtectionActive": "大流量输出保护已启用",
     "largeOutputProtectionActiveDetail": "终端输出正在被限速，以保持界面响应。",
     "largeOutputProtectionRecovered": "大流量输出保护已恢复正常",
