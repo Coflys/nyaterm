@@ -1,5 +1,8 @@
-use gpui::{Context, IntoElement, MouseButton, SharedString, div, prelude::*, px, rgb, svg};
-use nyaterm_ui::{NyaButton, NyaContextMenu, NyaMenuItem, NyaTooltip};
+use gpui::{
+    Context, FontWeight, IntoElement, MouseButton, SharedString, div, prelude::*, px, rgb, rgba,
+    svg,
+};
+use nyaterm_ui::{NyaContextMenu, NyaMenuItem, NyaTooltip};
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
@@ -21,6 +24,8 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let key = WorkspaceTabId::Editor(id).layout_key();
         let selected = active == Some(key.as_str());
+        let tab_group = SharedString::from(format!("editor-tab-group-{}", document.id));
+        let hover_bg = self.shell_surface_color(palette.hover);
         let click_key = key.clone();
         let close_key = key.clone();
         let middle_key = key.clone();
@@ -52,28 +57,27 @@ impl NyaTermApp {
         );
         let tab = div()
             .id(SharedString::from(format!("editor-tab-{}", document.id)))
+            .group(tab_group.clone())
             .h(px(36.))
             .min_w(px(118.))
             .max_w(px(236.))
             .flex_none()
-            .px_2()
+            .pl_3()
+            .pr_2()
             .flex()
             .items_center()
             .gap_2()
+            .relative()
             .border_r_1()
             .border_color(rgb(palette.border))
-            .bg(rgb(if selected {
-                palette.bg
+            .when(!selected, |this| this.border_b_1())
+            .bg(if selected {
+                self.shell_surface_color(palette.bg)
             } else {
-                palette.surface
-            }))
-            .text_color(rgb(if selected {
-                palette.text
-            } else {
-                palette.text_muted
-            }))
+                rgba(0x00000000)
+            })
             .cursor_pointer()
-            .hover(move |this| this.bg(rgb(palette.hover)))
+            .hover(move |this| this.bg(hover_bg))
             .tooltip(move |window, cx| NyaTooltip::new(title.clone()).build(window, cx))
             .on_click(cx.listener(move |app, _, _, cx| app.activate_workspace_tab(&click_key, cx)))
             .on_mouse_down(
@@ -106,32 +110,107 @@ impl NyaTermApp {
                     }
                 }),
             )
+            .when(selected, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .bg(rgb(palette.primary)),
+                )
+            })
             .child(
                 div()
-                    .text_xs()
+                    .size(px(14.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .path("icons/file/text.svg")
+                            .size(px(14.))
+                            .text_color(rgb(palette.link)),
+                    ),
+            )
+            .child(
+                div()
+                    .min_w(px(12.))
+                    .flex_none()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight(700.))
                     .text_color(rgb(palette.text_dimmed))
                     .child(number.to_string()),
             )
             .child(
-                svg()
-                    .path("icons/file/text.svg")
-                    .size(px(14.))
-                    .text_color(rgb(palette.link)),
-            )
-            .when(document.dirty, |this| {
-                this.child(div().size(px(6.)).rounded_full().bg(rgb(palette.link)))
-            })
-            .child(
                 div()
                     .flex_1()
                     .min_w_0()
+                    .max_w(px(160.))
+                    .text_size(px(12.))
+                    .font_weight(if selected {
+                        FontWeight(700.)
+                    } else {
+                        FontWeight(500.)
+                    })
+                    .text_color(rgb(if selected {
+                        palette.text
+                    } else {
+                        palette.text_muted
+                    }))
                     .overflow_hidden()
-                    .text_xs()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(document.name),
             )
+            .when(document.dirty, |this| {
+                this.child(
+                    div()
+                        .size(px(6.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(rgb(palette.link)),
+                )
+            })
             .child(
-                NyaButton::new("editor-tab-close", "×")
-                    .small()
+                div()
+                    .id(SharedString::from(format!(
+                        "editor-tab-close-{}",
+                        document.id
+                    )))
+                    .tooltip(|window, cx| {
+                        NyaTooltip::new(t!("common.close").to_string()).build(window, cx)
+                    })
+                    .size(px(18.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_sm()
+                    .when(!selected, |this| {
+                        this.opacity(0.)
+                            .group_hover(tab_group.clone(), |style| style.opacity(1.))
+                    })
+                    .hover(|this| this.bg(rgb(palette.border)))
+                    .group(SharedString::from(format!(
+                        "editor-tab-close-group-{}",
+                        document.id
+                    )))
+                    .child(
+                        svg()
+                            .size(px(13.))
+                            .path("icons/window/close.svg")
+                            .text_color(rgb(palette.text_muted))
+                            .group_hover(
+                                SharedString::from(format!(
+                                    "editor-tab-close-group-{}",
+                                    document.id
+                                )),
+                                |this| this.text_color(rgb(palette.danger)),
+                            ),
+                    )
                     .on_click(cx.listener(move |app, _, _, cx| {
                         cx.stop_propagation();
                         app.request_workspace_tabs_close(vec![close_key.clone()], None, cx);
