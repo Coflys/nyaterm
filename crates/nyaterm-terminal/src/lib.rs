@@ -1899,6 +1899,21 @@ impl TerminalCore {
         }
         let signature = line_signature(&self.term, line, cols);
         let logical_line = self.active_line_state().logical_line(line);
+        let state = self.active_line_state();
+        let erased_input = state.metadata.get(&logical_line).is_some_and(|metadata| {
+            if !metadata.shell_input
+                || metadata.signature == Some(signature)
+                || state.shell_input_kind(Some(logical_line)) == Some(ShellInputLineKind::Active)
+            {
+                return false;
+            }
+            // Damage can erase input without replacing the logical row.
+            // A surviving prompt or same-row output is not surviving input;
+            // conversely, a partial erase must keep any remaining input.
+            let start = metadata.input_start_col.unwrap_or(0).min(cols);
+            let end = metadata.input_end_col.unwrap_or(cols).min(cols);
+            (start..end).all(|col| cell_text_is_blank(&self.term.grid()[line][Column(col)]))
+        });
         let should_revise = self
             .active_line_state()
             .metadata
@@ -1919,6 +1934,11 @@ impl TerminalCore {
             metadata.revision = Some(revision);
         }
         metadata.signature = Some(signature);
+        if erased_input {
+            metadata.shell_input = false;
+            metadata.input_start_col = None;
+            metadata.input_end_col = None;
+        }
         if should_revise {
             let state = self.active_line_state_mut();
             if let Some(origin) = state.clear_line_origin.as_mut() {

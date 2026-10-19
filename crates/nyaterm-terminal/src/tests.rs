@@ -605,6 +605,248 @@ fn shell_input_commit_is_bounded_to_retained_scrollback() {
     assert!(screen.primary_lines.metadata.len() <= screen.total_rows());
 }
 
+fn submitted_shell_commands() -> TerminalScreen {
+    let mut screen = TerminalScreen::new(24, 8);
+    for command in ["echo 1", "echo 2", "echo 3", "echo 4"] {
+        screen.advance(
+            format!("\x1b]133;A\x07$ \x1b]133;B\x07{command}\r\n\x1b]133;C\x07\x1b]133;D;0\x07")
+                .as_bytes(),
+        );
+    }
+    screen
+}
+
+#[test]
+fn ansi_erase_removes_submitted_shell_input_from_erased_rows() {
+    for (erase, erased, retained) in [
+        ("\x1b[H\x1b[J", vec![0, 1, 2, 3], vec![]),
+        ("\x1b[2;1H\x1b[0J", vec![1, 2, 3], vec![0]),
+        ("\x1b[3;24H\x1b[1J", vec![0, 1, 2], vec![3]),
+        ("\x1b[2;4H\x1b[2K", vec![1], vec![0, 2, 3]),
+        ("\x1b[2;1H\x1b[0K", vec![1], vec![0, 2, 3]),
+        ("\x1b[2;24H\x1b[1K", vec![1], vec![0, 2, 3]),
+    ] {
+        let mut screen = submitted_shell_commands();
+        // Keep the old snapshot alive to exercise row-cache invalidation.
+        let before = screen.snapshot();
+        for row in &before.rows()[..4] {
+            assert_eq!(row.shell_input, Some(ShellInputLineKind::Submitted));
+        }
+        screen.advance(erase.as_bytes());
+        let after = screen.snapshot();
+        for index in erased {
+            let row = after.row(index).unwrap();
+            assert!(row.text.is_empty(), "{erase:?}, row {index}");
+            assert_eq!(row.shell_input, None, "{erase:?}, row {index}");
+            assert_eq!(row.shell_input_columns, None);
+            assert_eq!(row.line_id, before.row(index).unwrap().line_id);
+            assert!(!Arc::ptr_eq(&after.rows()[index], &before.rows()[index]));
+        }
+        for index in retained {
+            assert_eq!(after.row(index), before.row(index), "{erase:?}");
+        }
+    }
+}
+
+#[test]
+fn ansi_partial_erase_checks_input_columns_instead_of_prompt_or_output() {
+    for osc in [133, 633] {
+        for (erase, input_remains) in [
+            ("\x1b[1;6H\x1b[0K", true),
+            ("\x1b[1;5H\x1b[1K", true),
+            ("\x1b[1;3H\x1b[0K", false), // Only the prompt remains.
+            ("\x1b[1;8H\x1b[1K", false), // Only command output remains.
+            ("\x1b[1;6H\x1b[0J", true),
+            ("\x1b[1;5H\x1b[1J", true),
+            ("\x1b[1;3H\x1b[0J", false),
+            ("\x1b[1;8H\x1b[1J", false),
+        ] {
+            let mut screen = TerminalScreen::new(24, 3);
+            screen.advance(format!("$ \x1b]{osc};B\x07abcdef\x1b]{osc};C\x07OUTPUT").as_bytes());
+            let before = screen.snapshot();
+            assert_eq!(before.row(0).unwrap().shell_input_columns, Some((2, 8)));
+            screen.advance(erase.as_bytes());
+            let after = screen.snapshot();
+            let row = after.row(0).unwrap();
+            assert!(!row.text.is_empty());
+            assert_eq!(
+                row.shell_input,
+                input_remains.then_some(ShellInputLineKind::Submitted),
+                "OSC {osc}, {erase:?}"
+            );
+            assert_eq!(row.line_id, before.row(0).unwrap().line_id);
+        }
+    }
+}
+
+#[test]
+fn ansi_erase_keeps_current_active_input_even_when_empty() {
+    for osc in [133, 633] {
+        for erase in ["\x1b[0K", "\x1b[1K", "\x1b[2K", "\x1b[0J", "\x1b[1J"] {
+            let mut screen = submitted_shell_commands();
+            screen.advance(format!("$ \x1b]{osc};B\x07draft").as_bytes());
+            let before = screen.snapshot();
+            screen.advance(format!("\r{erase}").as_bytes());
+            let after = screen.snapshot();
+            assert_eq!(
+                after.row(4).unwrap().shell_input,
+                Some(ShellInputLineKind::Active)
+            );
+            assert_eq!(after.shell_input_anchor, before.shell_input_anchor);
+        }
+    }
+}
+
+#[test]
+fn ansi_full_screen_erase_does_not_restore_submitted_input() {
+    for erase in ["\x1b[2J", "\x1b[2J\x1b[3J"] {
+        let mut screen = submitted_shell_commands();
+        screen.advance(erase.as_bytes());
+        let snapshot = screen.snapshot();
+        assert!(snapshot.rows().iter().all(|row| row.shell_input.is_none()));
+        screen.advance(b"\x1b[?1049hfull screen\x1b[?1049l");
+        assert!(
+            screen
+                .snapshot()
+                .rows()
+                .iter()
+                .all(|row| row.shell_input.is_none())
+        );
+    }
+}
+
+#[test]
+fn ansi_erase_handles_styled_blanks_wide_input_and_split_sequences() {
+    for input in ["abcdef", "中文e\u{301}", " \u{301}"] {
+        for chunk_size in [1, 2, 64] {
+            let mut screen = TerminalScreen::new(24, 3);
+            screen.advance(format!("$ \x1b]133;B\x07{input}\x1b]133;C\x07").as_bytes());
+            assert_eq!(
+                screen.snapshot().row(0).unwrap().shell_input,
+                Some(ShellInputLineKind::Submitted)
+            );
+            for chunk in b"\x1b[1;3H\x1b[44m\x1b[0K".chunks(chunk_size) {
+                screen.advance(chunk);
+            }
+            let snapshot = screen.snapshot();
+            let row = snapshot.row(0).unwrap();
+            assert_eq!(row.text, "$");
+            assert_eq!(row.shell_input, None);
+            assert!(row.cells[2..].iter().all(|cell| cell.style.bg == Some(4)));
+        }
+    }
+}
+
+#[test]
+fn ansi_erase_without_shell_integration_does_not_classify_rows() {
+    let mut screen = TerminalScreen::new(24, 3);
+    screen.advance(b"plain\r\nterminal\x1b[H\x1b[J");
+    assert!(
+        screen
+            .snapshot()
+            .rows()
+            .iter()
+            .all(|row| row.shell_input.is_none() && !row.shell_integration)
+    );
+}
+
+#[test]
+fn alternate_screen_restores_active_primary_input_without_inheriting_it() {
+    let mut screen = submitted_shell_commands();
+    screen.advance(b"$ \x1b]133;B\x07draft");
+    let before = screen.snapshot();
+    screen.advance(b"\x1b[?1049h\x1b[H\x1b[2Jalternate");
+    assert!(screen.alternate_screen());
+    assert!(
+        screen
+            .snapshot()
+            .rows()
+            .iter()
+            .all(|row| row.shell_input.is_none())
+    );
+    screen.advance(b"\x1b[?1049l");
+    let after = screen.snapshot();
+    for index in 0..5 {
+        assert_eq!(
+            after.row(index).unwrap().shell_input,
+            before.row(index).unwrap().shell_input
+        );
+        assert_eq!(
+            after.row(index).unwrap().text,
+            before.row(index).unwrap().text
+        );
+        assert_eq!(
+            after.row(index).unwrap().line_id,
+            before.row(index).unwrap().line_id
+        );
+    }
+    assert_eq!(
+        after.row(4).unwrap().shell_input,
+        Some(ShellInputLineKind::Active)
+    );
+}
+
+#[test]
+fn ansi_erase_and_alternate_screen_preserve_only_valid_primary_input() {
+    for erase in ["", "\x1b[2;1H\x1b[2K"] {
+        for single_chunk in [false, true] {
+            let mut screen = submitted_shell_commands();
+            let before = screen.snapshot();
+            let enter = "\x1b[?1049h\x1b[H\x1b[2J\x1b]133;B\x07alternate";
+            let leave = "\x1b[?1049l";
+            // Clear a primary command before the switch, including in a single read.
+            if single_chunk {
+                screen.advance(format!("{erase}{enter}{leave}").as_bytes());
+            } else {
+                screen.advance(erase.as_bytes());
+                screen.advance(enter.as_bytes());
+                let alternate = screen.snapshot();
+                assert!(alternate.rows().iter().all(|row| row.shell_input.is_none()));
+                screen.advance(leave.as_bytes());
+            }
+            let after = screen.snapshot();
+            assert_eq!(
+                after.row(1).unwrap().shell_input,
+                erase.is_empty().then_some(ShellInputLineKind::Submitted)
+            );
+            for index in [0, 2, 3] {
+                assert_eq!(after.row(index), before.row(index));
+            }
+        }
+    }
+}
+
+#[test]
+fn ansi_erase_preserves_wrapped_multiline_history_through_scroll_and_resize() {
+    let mut screen = TerminalScreen::new(12, 6);
+    screen.advance(b"$ \x1b]133;B\x07abcdefghijklmn\r\nsecond\r\n\x1b]133;C\x07");
+    let before = screen.snapshot();
+    for row in &before.rows()[..3] {
+        assert_eq!(row.shell_input, Some(ShellInputLineKind::Submitted));
+    }
+    screen.advance(b"\x1b[2;1H\x1b[2K\x1b[6;1H\r\noutput\r\nmore");
+    let history = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    assert_eq!(
+        history.row(0).unwrap().shell_input,
+        Some(ShellInputLineKind::Submitted)
+    );
+    assert_eq!(history.row(1).unwrap().shell_input, None);
+    assert_eq!(
+        history.row(2).unwrap().shell_input,
+        Some(ShellInputLineKind::Submitted)
+    );
+    for index in 0..3 {
+        assert_eq!(
+            history.row(index).unwrap().line_id,
+            before.row(index).unwrap().line_id
+        );
+    }
+    // Width reflow deliberately invalidates uncertain semantic coordinates.
+    screen.resize(8, 8);
+    let reflowed = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    assert!(reflowed.rows().iter().all(|row| row.shell_input.is_none()));
+}
+
 #[test]
 fn active_shell_input_range_is_clamped_or_closed_with_retained_rows() {
     let mut partially_retained = ScreenLineState {
