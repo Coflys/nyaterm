@@ -542,7 +542,6 @@ fn pty_session_thread(
 
     #[cfg(target_os = "macos")]
     ensure_macos_interactive_path(&mut cmd);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     configure_local_pty_environment(&mut cmd);
 
     // Structured shell init arguments are used only when the saved argv is
