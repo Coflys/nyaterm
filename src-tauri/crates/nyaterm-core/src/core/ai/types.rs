@@ -376,6 +376,10 @@ pub struct AiSessionBackendMetadata {
     pub external_thread_id: Option<String>,
     #[serde(default)]
     pub codex_terminal_tools_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_thread_mode: Option<crate::config::CodexThreadMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_tool_integration_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -556,6 +560,30 @@ pub fn uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_backend_metadata_keeps_legacy_history_readable() {
+        let legacy = serde_json::json!({
+            "backend": "codex", "externalThreadId": "thread-old", "codexTerminalToolsVersion": 1
+        });
+        let mut metadata: AiSessionBackendMetadata =
+            serde_json::from_value(legacy.clone()).unwrap();
+        assert!(metadata.codex_thread_mode.is_none());
+        assert!(metadata.codex_tool_integration_mode.is_none());
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), legacy);
+        metadata.codex_thread_mode = Some(crate::config::CodexThreadMode::Ephemeral);
+        metadata.codex_tool_integration_mode = Some("dynamic_tools".into());
+        let restored: AiSessionBackendMetadata =
+            serde_json::from_value(serde_json::to_value(metadata).unwrap()).unwrap();
+        assert_eq!(
+            restored.codex_thread_mode,
+            Some(crate::config::CodexThreadMode::Ephemeral)
+        );
+        assert_eq!(
+            restored.codex_tool_integration_mode.as_deref(),
+            Some("dynamic_tools")
+        );
+    }
 
     #[test]
     fn parses_agent_risk_level_case_insensitively() {

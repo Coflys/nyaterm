@@ -404,6 +404,7 @@ mod tests {
                 backend: AiBackendKind::Codex,
                 external_thread_id: Some("thread-123".to_string()),
                 codex_terminal_tools_version: None,
+                ..Default::default()
             }),
         };
 

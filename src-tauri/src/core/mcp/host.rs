@@ -128,6 +128,138 @@ impl Drop for EphemeralMcpCredential {
     }
 }
 
+/// Stable bridge identity; authority is granted only while a turn guard is alive.
+pub struct SessionMcpCredential {
+    credential: EphemeralMcpCredential,
+    state: Arc<SessionMcpState>,
+}
+
+pub struct McpTurnGuard {
+    state: Arc<SessionMcpState>,
+    id: String,
+}
+
+#[derive(Default)]
+struct SessionMcpState {
+    active: StdMutex<Option<McpActiveTurn>>,
+}
+
+struct McpActiveTurn {
+    id: String,
+    credential: Arc<Credential>,
+    connections: HashMap<String, Arc<ConnectionContext>>,
+}
+
+impl SessionMcpState {
+    fn revoke(&self, id: Option<&str>) {
+        let mut active = self.active.lock().unwrap();
+        if active
+            .as_ref()
+            .is_some_and(|turn| id.is_none_or(|id| turn.id == id))
+        {
+            let turn = active.take().unwrap();
+            turn.credential.cancellation.cancel();
+        }
+    }
+
+    fn context(&self, connection: &ConnectionContext) -> Result<Arc<ConnectionContext>, RpcError> {
+        let mut active = self.active.lock().unwrap();
+        let turn = active
+            .as_mut()
+            .ok_or_else(|| failure("approval_denied", "No active Codex turn."))?;
+        if turn.credential.cancellation.is_cancelled() || connection.cancellation.is_cancelled() {
+            return Err(failure("cancelled", "The Codex MCP turn is closed."));
+        }
+        let context = turn
+            .connections
+            .entry(connection.id.clone())
+            .or_insert_with(|| {
+                Arc::new(ConnectionContext {
+                    id: format!("{}:{}", connection.id, turn.id),
+                    generation: connection.generation.clone(),
+                    credential: turn.credential.clone(),
+                    session: None,
+                    client: StdMutex::new(connection.client.lock().unwrap().clone()),
+                    grants: Mutex::new(HashSet::new()),
+                    outputs: Mutex::new(OutputStore::default()),
+                    cancellation: turn.credential.cancellation.child_token(),
+                })
+            });
+        Ok(context.clone())
+    }
+}
+
+impl SessionMcpCredential {
+    pub fn close(&self) {
+        self.credential.cancellation.cancel();
+        self.state.revoke(None);
+    }
+
+    pub fn env(&self) -> HashMap<String, String> {
+        self.credential.env()
+    }
+
+    pub fn sidecar_path(&self) -> &std::path::Path {
+        &self.credential.sidecar_path
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn activate(
+        &self,
+        session_ids: Vec<String>,
+        default_session_id: Option<String>,
+        permission_mode: AiPermissionMode,
+        owner_window_label: Option<String>,
+        terminal_presentation_max_lines: Option<u16>,
+    ) -> AppResult<McpTurnGuard> {
+        let mut active = self.state.active.lock().unwrap();
+        if active.is_some() || self.credential.cancellation.is_cancelled() {
+            return Err(AppError::Config(
+                "Codex MCP session is busy or closed.".into(),
+            ));
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        *active = Some(McpActiveTurn {
+            id: id.clone(),
+            credential: Arc::new(Credential {
+                token: self.credential.token.clone(),
+                scope: Arc::new(McpScope::explicit(session_ids, default_session_id)),
+                permission_mode,
+                source: "codex_mcp".into(),
+                owner_window_label,
+                cancellation: self.credential.cancellation.child_token(),
+                opened_session_ids: RwLock::new(HashSet::new()),
+                terminal_presentation: terminal_presentation_max_lines
+                    .map(McpTerminalPresentation::new),
+            }),
+            connections: HashMap::new(),
+        });
+        Ok(McpTurnGuard {
+            state: self.state.clone(),
+            id,
+        })
+    }
+}
+
+impl Drop for McpTurnGuard {
+    fn drop(&mut self) {
+        self.state.revoke(Some(&self.id));
+    }
+}
+
+impl Drop for SessionMcpCredential {
+    fn drop(&mut self) {
+        self.close();
+        if let Some(manager) = self.credential.manager.upgrade() {
+            manager
+                .session_credentials
+                .lock()
+                .unwrap()
+                .remove(&self.credential.generation);
+        }
+    }
+}
+
 struct Credential {
     token: String,
     scope: Arc<McpScope>,
@@ -214,6 +346,7 @@ struct ConnectionContext {
     id: String,
     generation: String,
     credential: Arc<Credential>,
+    session: Option<Arc<SessionMcpState>>,
     client: StdMutex<String>,
     grants: Mutex<HashSet<(String, String)>>,
     outputs: Mutex<OutputStore>,
@@ -229,6 +362,7 @@ pub struct McpManager {
     initialized: AtomicBool,
     shutdown: CancellationToken,
     credentials: RwLock<HashMap<String, Arc<Credential>>>,
+    session_credentials: StdMutex<HashMap<String, Weak<SessionMcpState>>>,
     external: Mutex<Option<ExternalRuntime>>,
     startup_settings: Mutex<Option<ExternalMcpSettings>>,
     approvals: Arc<McpApprovalManager>,
@@ -240,6 +374,26 @@ pub struct McpManager {
 }
 
 impl McpManager {
+    #[cfg(test)]
+    pub(crate) async fn create_test_session_credential(self: &Arc<Self>) -> SessionMcpCredential {
+        self.port.store(12345, Ordering::SeqCst);
+        self.create_session_credential().await.unwrap()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn start_test_bridge(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        self.port
+            .store(listener.local_addr().unwrap().port(), Ordering::SeqCst);
+        let manager = self.clone();
+        tokio::spawn(async move { manager.accept_loop(listener).await })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stop_test_bridge(&self) {
+        self.shutdown.cancel();
+    }
+
     pub fn new(
         sessions: Arc<SessionManager>,
         config_dir: impl Into<PathBuf>,
@@ -254,6 +408,7 @@ impl McpManager {
             initialized: AtomicBool::new(false),
             shutdown: CancellationToken::new(),
             credentials: RwLock::new(HashMap::new()),
+            session_credentials: StdMutex::new(HashMap::new()),
             external: Mutex::new(None),
             startup_settings: Mutex::new(None),
             approvals: Arc::new(McpApprovalManager::default()),
@@ -638,6 +793,25 @@ impl McpManager {
         scope
     }
 
+    pub async fn create_session_credential(self: &Arc<Self>) -> AppResult<SessionMcpCredential> {
+        let credential = self
+            .create_ephemeral_credential(
+                "codex_mcp",
+                vec![],
+                None,
+                AiPermissionMode::Confirm,
+                None,
+                None,
+            )
+            .await?;
+        let state = Arc::new(SessionMcpState::default());
+        self.session_credentials
+            .lock()
+            .unwrap()
+            .insert(credential.generation.clone(), Arc::downgrade(&state));
+        Ok(SessionMcpCredential { credential, state })
+    }
+
     pub async fn create_ephemeral_credential(
         self: &Arc<Self>,
         source: &str,
@@ -799,6 +973,12 @@ impl McpManager {
         let cancellation = credential.cancellation.child_token();
         let context = Arc::new(ConnectionContext {
             id: uuid::Uuid::new_v4().to_string(),
+            session: self
+                .session_credentials
+                .lock()
+                .unwrap()
+                .get(&auth.generation)
+                .and_then(Weak::upgrade),
             generation: auth.generation,
             credential: credential.clone(),
             client: StdMutex::new(DEFAULT_CLIENT.into()),
@@ -835,6 +1015,14 @@ impl McpManager {
             }
         }
         context.cancellation.cancel();
+        if let Some(session) = &context.session {
+            let mut active = session.active.lock().unwrap();
+            if let Some(turn) = active.as_mut()
+                && let Some(context) = turn.connections.remove(&context.id)
+            {
+                context.cancellation.cancel();
+            }
+        }
         self.approvals.cancel_connection(&context.id).await;
         if is_external {
             self.external_connections.fetch_sub(1, Ordering::SeqCst);
@@ -880,6 +1068,22 @@ impl McpManager {
                 None => rpc_error(request.id, "invalid_argument", "requestId is required."),
             },
             "capability.execute" => {
+                let turn_context;
+                let context = if let Some(session) = &context.session {
+                    turn_context = match session.context(context) {
+                        Ok(context) => context,
+                        Err(error) => {
+                            return RpcResponse {
+                                id: request.id,
+                                result: None,
+                                error: Some(error),
+                            };
+                        }
+                    };
+                    &turn_context
+                } else {
+                    context
+                };
                 let params = match serde_json::from_value::<CapabilityExecuteParams>(request.params)
                 {
                     Ok(value) => value,
@@ -920,6 +1124,9 @@ impl McpManager {
         arguments: Value,
         cancellation: CancellationToken,
     ) -> Result<Value, RpcError> {
+        if cancellation.is_cancelled() {
+            return Err(failure("cancelled", "The MCP request was cancelled."));
+        }
         let started = Instant::now();
         let definition = capability_for_tool(tool_name)
             .ok_or_else(|| failure("invalid_argument", "Unknown NyaTerm MCP tool."))?;
@@ -1982,6 +2189,326 @@ fn failure(code: &str, message: &str) -> RpcError {
 mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
+
+    async fn session_fixture() -> (tempfile::TempDir, Arc<McpManager>, SessionMcpCredential) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(if cfg!(windows) {
+                "nyaterm-mcp.exe"
+            } else {
+                "nyaterm-mcp"
+            }),
+            b"test",
+        )
+        .unwrap();
+        let manager = McpManager::new(Arc::new(SessionManager::new()), root.path(), root.path());
+        manager.port.store(12345, Ordering::SeqCst);
+        let credential = manager.create_session_credential().await.unwrap();
+        (root, manager, credential)
+    }
+
+    async fn bridge_rpc(
+        reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> RpcResponse {
+        let mut request = serde_json::to_vec(&RpcRequest {
+            id,
+            method: method.into(),
+            params,
+        })
+        .unwrap();
+        request.push(b'\n');
+        writer.write_all(&request).await.unwrap();
+        let line = tokio::time::timeout(Duration::from_secs(3), read_rpc_line(reader))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_slice(&line).unwrap()
+    }
+
+    #[tokio::test]
+    async fn codex_bridge_reuses_connection_with_fresh_turn_authority() {
+        let (_root, manager, credential) = session_fixture().await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let host = manager.clone();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            host.handle_connection(stream).await;
+        });
+        let (read, mut write) = TcpStream::connect(address).await.unwrap().into_split();
+        let mut read = BufReader::new(read);
+        let auth = AuthParams {
+            token: credential.credential.token.clone(),
+            generation: credential.credential.generation.clone(),
+        };
+        assert!(
+            bridge_rpc(
+                &mut read,
+                &mut write,
+                1,
+                "auth",
+                serde_json::to_value(&auth).unwrap()
+            )
+            .await
+            .error
+            .is_none()
+        );
+        let read_output = |id: &str| json!({ "tool": tool::OUTPUT_READ, "arguments": { "outputId": id, "offset": 0, "maxBytes": 100 } });
+        assert_eq!(
+            bridge_rpc(
+                &mut read,
+                &mut write,
+                2,
+                "capability.execute",
+                read_output("old")
+            )
+            .await
+            .error
+            .unwrap()
+            .code,
+            "approval_denied"
+        );
+
+        let environment = credential.env();
+        let first = credential
+            .activate(
+                vec!["terminal-a".into()],
+                Some("terminal-a".into()),
+                AiPermissionMode::FullAccess,
+                Some("window-a".into()),
+                Some(7),
+            )
+            .unwrap();
+        let old_id = first.id.clone();
+        // Create the per-connection turn view through the real bridge dispatch.
+        bridge_rpc(
+            &mut read,
+            &mut write,
+            3,
+            "capability.execute",
+            read_output("missing"),
+        )
+        .await;
+        let first_context = credential
+            .state
+            .active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .connections
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        first_context
+            .grants
+            .lock()
+            .await
+            .insert(("terminal-a".into(), "grant".into()));
+        first_context
+            .credential
+            .opened_session_ids
+            .write()
+            .await
+            .insert("opened-a".into());
+        let old_output = first_context
+            .outputs
+            .lock()
+            .await
+            .protect("first turn output".into(), 0)
+            .output_id
+            .unwrap();
+        assert_eq!(
+            bridge_rpc(
+                &mut read,
+                &mut write,
+                4,
+                "capability.execute",
+                read_output(&old_output)
+            )
+            .await
+            .result
+            .unwrap()["data"],
+            "first turn output"
+        );
+        assert_eq!(
+            first_context
+                .credential
+                .next_terminal_presentation_spec()
+                .unwrap()
+                .step_index,
+            0
+        );
+        assert!(
+            credential
+                .activate(vec![], None, AiPermissionMode::Confirm, None, None)
+                .is_err()
+        );
+        drop(first);
+        assert!(first_context.cancellation.is_cancelled());
+        assert_eq!(
+            bridge_rpc(
+                &mut read,
+                &mut write,
+                5,
+                "capability.execute",
+                read_output(&old_output)
+            )
+            .await
+            .error
+            .unwrap()
+            .code,
+            "approval_denied"
+        );
+
+        let second = credential
+            .activate(
+                vec!["terminal-b".into()],
+                Some("terminal-b".into()),
+                AiPermissionMode::Observer,
+                Some("window-b".into()),
+                Some(12),
+            )
+            .unwrap();
+        // A delayed old guard must not revoke the new turn.
+        drop(McpTurnGuard {
+            state: credential.state.clone(),
+            id: old_id,
+        });
+        assert_eq!(credential.env(), environment);
+        assert!(
+            bridge_rpc(
+                &mut read,
+                &mut write,
+                6,
+                "capability.execute",
+                read_output(&old_output)
+            )
+            .await
+            .error
+            .is_some()
+        );
+        let second_context = credential
+            .state
+            .active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .connections
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert!(!Arc::ptr_eq(&first_context, &second_context));
+        assert!(matches!(
+            second_context.credential.permission_mode,
+            AiPermissionMode::Observer
+        ));
+        assert_eq!(
+            second_context.credential.owner_window_label.as_deref(),
+            Some("window-b")
+        );
+        match second_context.credential.scope.as_ref() {
+            McpScope::Explicit {
+                session_ids,
+                default_session_id,
+            } => {
+                assert_eq!(session_ids, &HashSet::from(["terminal-b".into()]));
+                assert_eq!(default_session_id.as_deref(), Some("terminal-b"));
+            }
+            _ => panic!("expected a request-scoped terminal set"),
+        }
+        assert!(second_context.grants.lock().await.is_empty());
+        assert!(
+            second_context
+                .credential
+                .opened_session_ids
+                .read()
+                .await
+                .is_empty()
+        );
+        assert_eq!(
+            second_context.credential.next_terminal_presentation_spec(),
+            Some(McpTerminalPresentationSpec {
+                step_index: 0,
+                max_lines: 12
+            })
+        );
+        let new_output = second_context
+            .outputs
+            .lock()
+            .await
+            .protect("second turn output".into(), 0)
+            .output_id
+            .unwrap();
+        assert_eq!(
+            bridge_rpc(
+                &mut read,
+                &mut write,
+                7,
+                "capability.execute",
+                read_output(&new_output)
+            )
+            .await
+            .result
+            .unwrap()["data"],
+            "second turn output"
+        );
+        credential.close();
+        assert!(second_context.cancellation.is_cancelled());
+        assert!(manager.authenticate(&auth).await.is_none());
+        assert!(
+            credential
+                .activate(vec![], None, AiPermissionMode::Confirm, None, None)
+                .is_err()
+        );
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_mcp_sessions_are_isolated_and_drop_revokes_authority() {
+        let (_root, manager, first) = session_fixture().await;
+        let second = manager.create_session_credential().await.unwrap();
+        assert_ne!(first.env(), second.env());
+        let first_turn = first
+            .activate(vec![], None, AiPermissionMode::Observer, None, None)
+            .unwrap();
+        let second_turn = second
+            .activate(vec![], None, AiPermissionMode::Confirm, None, None)
+            .unwrap();
+        let token = first
+            .state
+            .active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .credential
+            .cancellation
+            .clone();
+        let auth = AuthParams {
+            token: first.credential.token.clone(),
+            generation: first.credential.generation.clone(),
+        };
+        drop(first);
+        assert!(token.is_cancelled());
+        assert!(manager.authenticate(&auth).await.is_none());
+        assert!(second.state.active.lock().unwrap().is_some());
+        drop(first_turn);
+        drop(second_turn);
+        assert!(second.state.active.lock().unwrap().is_none());
+    }
 
     #[test]
     fn token_is_32_bytes() {
