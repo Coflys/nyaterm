@@ -41,7 +41,7 @@ impl NyaTermApp {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .when(!self.shell_background().transparent_surfaces(), |this| {
+                    .when(!self.wallpaper_enabled(), |this| {
                         this.child(div().mb_9().child(nyaterm_logo_mark(
                             terminal_palette,
                             256.,
