@@ -446,13 +446,19 @@ pub async fn open_child_window(
     let restored_state = state_key.map(|key| {
         crate::window_state::load_child_window_state(key, requested_width, requested_height)
     });
-    let width = restored_state
+    let mut width = restored_state
         .as_ref()
         .map_or(requested_width, |state| state.width);
-    let height = restored_state
+    let mut height = restored_state
         .as_ref()
         .map_or(requested_height, |state| state.height);
     let maximized = restored_state.as_ref().is_some_and(|state| state.maximized);
+    let is_connection_editor =
+        crate::window_state::child_window_state_key_for_label(&options.label)
+            == Some(crate::window_state::ChildWindowStateKey::NewSession);
+    if is_connection_editor {
+        (width, height) = crate::window_state::connection_editor_size(width, height);
+    }
     let kind = options.kind.unwrap_or(ChildWindowKind::Modal);
     let parent_label = options
         .parent_label
@@ -473,6 +479,10 @@ pub async fn open_child_window(
     .decorations(cfg!(target_os = "macos"))
     .resizable(resizable)
     .always_on_top(options.always_on_top.unwrap_or(false));
+
+    if is_connection_editor {
+        builder = builder.min_inner_size(420.0, 480.0);
+    }
 
     #[cfg(target_os = "macos")]
     {

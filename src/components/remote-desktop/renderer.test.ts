@@ -28,7 +28,9 @@ describe("remote desktop renderer", () => {
       putImageData: vi.fn(),
     } as unknown as CanvasRenderingContext2D;
     const canvas = document.createElement("canvas");
-    vi.spyOn(canvas, "getContext").mockImplementation((type) => (type === "2d" ? context : null));
+    vi.spyOn(canvas, "getContext").mockImplementation((type) =>
+      type === "2d" ? context : null,
+    );
 
     const renderer = createRemoteDesktopRenderer(canvas);
     expect(renderer).toBeInstanceOf(Canvas2dRemoteDesktopRenderer);
@@ -68,6 +70,91 @@ describe("remote desktop renderer", () => {
     vi.spyOn(canvas, "getContext").mockReturnValue(null);
 
     expect(createRemoteDesktopRenderer(canvas)).toBeNull();
+  });
+
+  it("allocates texture storage even if a replacement renderer inherits matching canvas dimensions", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 4;
+    canvas.height = 3;
+    const gl = createWebGlMock();
+    const renderer = new WebGl2RemoteDesktopRenderer(
+      canvas,
+      gl as unknown as WebGL2RenderingContext,
+    );
+    renderer.draw(patch());
+    renderer.draw(patch());
+    expect(gl.texImage2D).toHaveBeenCalledOnce();
+    renderer.draw({ ...patch(), desktopWidth: 8 });
+    expect(gl.texImage2D).toHaveBeenCalledTimes(2);
+    renderer.dispose();
+    renderer.dispose();
+    expect(gl.deleteTexture).toHaveBeenCalledOnce();
+  });
+
+  it("cleans all resources if shader linking fails instead of trying 2D on a WebGL canvas", () => {
+    const gl = createWebGlMock();
+    gl.getProgramParameter.mockReturnValue(false);
+    const canvas = document.createElement("canvas");
+    const getContext = vi
+      .spyOn(canvas, "getContext")
+      .mockReturnValue(gl as unknown as WebGL2RenderingContext);
+    expect(() => createRemoteDesktopRenderer(canvas)).toThrow();
+    expect(getContext).toHaveBeenCalledOnce();
+    expect(gl.deleteShader).toHaveBeenCalledTimes(2);
+    expect(gl.deleteBuffer).toHaveBeenCalledTimes(2);
+    expect(gl.deleteTexture).toHaveBeenCalledOnce();
+    expect(gl.deleteProgram).toHaveBeenCalledOnce();
+  });
+
+  it("cleans the first shader if the fragment shader fails to compile", () => {
+    const gl = createWebGlMock();
+    gl.getShaderParameter.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    expect(
+      () =>
+        new WebGl2RemoteDesktopRenderer(
+          document.createElement("canvas"),
+          gl as unknown as WebGL2RenderingContext,
+        ),
+    ).toThrow();
+    expect(gl.deleteShader).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the pixels of a recovered snapshot followed by incremental patches", () => {
+    const pixels = new Uint8Array(8);
+    const context = {
+      createImageData: (width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+      }),
+      putImageData: (image: ImageData, x: number) =>
+        pixels.set(image.data, x * 4),
+    } as unknown as CanvasRenderingContext2D;
+    const renderer = new Canvas2dRemoteDesktopRenderer(
+      document.createElement("canvas"),
+      context,
+    );
+    const snapshot = {
+      ...patch(),
+      desktopWidth: 2,
+      desktopHeight: 1,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 1,
+      stride: 8,
+      payload: new Uint8Array([1, 2, 3, 255, 4, 5, 6, 255]),
+    };
+    renderer.drawMany([
+      snapshot,
+      {
+        ...snapshot,
+        sequence: 2n,
+        x: 1,
+        width: 1,
+        stride: 4,
+        payload: new Uint8Array([7, 8, 9, 255]),
+      },
+    ]);
+    expect([...pixels]).toEqual([1, 2, 3, 255, 7, 8, 9, 255]);
   });
 });
 

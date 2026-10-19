@@ -44,6 +44,7 @@ async fn telnet_session_task(
     encoding: String,
     startup_command: Option<TelnetStartupCommand>,
 ) {
+    let mut encoding = nyaterm_core::terminal_encoding::session_encoding_label(&encoding);
     let backspace_as_bs = config.backspace_mode == "ctrl_h";
     let (mut reader, mut writer) = tokio::io::split(stream);
     let output_event = format!("terminal-output-{}", session_id);
@@ -90,11 +91,11 @@ async fn telnet_session_task(
     let (reader_done_tx, mut reader_done_rx) = mpsc::unbounded_channel::<()>();
 
     let reader_config = config.clone();
-    let encoding_reader = encoding.clone();
+    let output_decoder = Arc::new(TokioMutex::new(TerminalOutputDecoder::new(&encoding)));
+    let output_decoder_reader = output_decoder.clone();
     let reader_handle = tokio::spawn(async move {
         let mut buf = [0u8; 4096];
         let mut zmodem_detector = ZmodemDetector::new();
-        let mut output_decoder = TerminalOutputDecoder::new(&encoding_reader);
         let mut telnet_decoder = TelnetDecoder::default();
         'reader: loop {
             while *pause_rx.borrow() {
@@ -191,7 +192,7 @@ async fn telnet_session_task(
                                 if let Some(ref recorder) = recording_mgr_reader {
                                     recorder.write_raw_output(&sid_reader, &passthrough);
                                 }
-                                let pre = output_decoder.decode(&passthrough);
+                                let pre = output_decoder_reader.lock().await.decode(&passthrough);
                                 if !pre.is_empty() {
                                     if let Some(ref recorder) = recording_mgr_reader {
                                         recorder.write_output(&sid_reader, &pre);
@@ -232,7 +233,7 @@ async fn telnet_session_task(
                         }
                     };
 
-                    let mut text = output_decoder.decode(&process_visible);
+                    let mut text = output_decoder_reader.lock().await.decode(&process_visible);
                     let mut proc = capture_for_reader.lock().await;
                     if proc.has_active() {
                         text = proc.process(&text);
@@ -291,9 +292,35 @@ async fn telnet_session_task(
     if auto_login.lock().await.is_none() {
         arm_telnet_startup_timer(&pending_startup, &mut startup_deadline);
     }
+    let mut keep_alive = telnet_keep_alive_interval(&config);
 
     loop {
         tokio::select! {
+            _ = tick_telnet_keep_alive(&mut keep_alive) => {
+                let now = std::time::Instant::now();
+                if zmodem_state.lock().await.is_some()
+                    || zmodem_upload_drain.lock().await.is_suppressing(now)
+                    || zmodem_download_oo_drain.lock().await.is_suppressing(now)
+                {
+                    continue;
+                }
+                if let Err(e) = writer.write_all(&TELNET_NOP).await {
+                    log_rate_limited(StructuredLog {
+                        level: StructuredLogLevel::Warn,
+                        domain: "session.lifecycle".to_string(),
+                        event: "telnet.keep_alive_write_error".to_string(),
+                        message: "Telnet keep-alive write error".to_string(),
+                        ids: Some(serde_json::json!({
+                            "session_id": session_id.clone(),
+                            "connection_id": connection_id.clone(),
+                        })),
+                        data: Some(serde_json::json!({ "session_type": "Telnet" })),
+                        error: Some(serde_json::json!({ "message": e.to_string() })),
+                        client_timestamp: None,
+                    });
+                    break;
+                }
+            }
             Some(neg_data) = negotiate_rx.recv() => {
                 if let Err(e) = writer.write_all(&neg_data).await {
                     log_rate_limited(StructuredLog {
@@ -371,6 +398,19 @@ async fn telnet_session_task(
                     }
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();
+                    }
+                    Some(SessionCommand::GetEncoding { reply }) => {
+                        let _ = reply.send(encoding.clone());
+                    }
+                    Some(SessionCommand::SetEncoding { encoding: requested, reply }) => {
+                        let result = if let Some(next) = nyaterm_core::terminal_encoding::supported_session_encoding(&requested) {
+                            output_decoder.lock().await.reset(next);
+                            encoding = next.to_string();
+                            Ok(encoding.clone())
+                        } else {
+                            Err(format!("Unsupported terminal encoding: {requested}"))
+                        };
+                        let _ = reply.send(result);
                     }
                     Some(SessionCommand::Write { mut data, raw, automated, .. }) => {
                         if !automated {
@@ -532,6 +572,7 @@ async fn telnet_session_task(
                             "Direct modem upload is only available for Serial sessions".to_string(),
                         ));
                     }
+                    Some(SessionCommand::TmuxCommand { .. } | SessionCommand::TmuxDetach) => {}
                     Some(SessionCommand::Close) | None => {
                         break;
                     }

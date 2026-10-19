@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RdpSessionPane, Tab, TerminalSessionPane, VncSessionPane } from "@/types/global";
 import PaneWorkspace from "./PaneWorkspace";
 
-const { rdpPaneHostMock, vncPaneHostMock, xTerminalMock } = vi.hoisted(() => ({
+const { rdpPaneHostMock, vncPaneHostMock, xTerminalMock, appState } = vi.hoisted(() => ({
+  appState: { tabs: [] as Tab[], setActivePane: vi.fn() },
   rdpPaneHostMock: vi.fn(),
   vncPaneHostMock: vi.fn(),
   xTerminalMock: vi.fn(),
@@ -11,7 +12,8 @@ const { rdpPaneHostMock, vncPaneHostMock, xTerminalMock } = vi.hoisted(() => ({
 
 vi.mock("@/context/AppContext", () => ({
   useApp: () => ({
-    tabs: [],
+    tabs: appState.tabs,
+    setActivePane: appState.setActivePane,
     syncGroups: [],
     broadcastToAll: false,
     isLocked: true,
@@ -41,10 +43,24 @@ vi.mock("@/components/vnc/VncPaneHost", () => ({
   },
 }));
 
+vi.mock("./TmuxWindowStrip", () => ({
+  default: ({ controlSessionId }: { controlSessionId: string }) => (
+    <div data-testid={`tmux-strip-${controlSessionId}`} />
+  ),
+}));
+
 vi.mock("./XTerminal", () => ({
   default: (props: unknown) => {
     xTerminalMock(props);
-    return <div data-testid="x-terminal" />;
+    const terminal = props as { sessionId: string; active: boolean; visible: boolean };
+    return (
+      <div
+        data-testid="x-terminal"
+        data-session={terminal.sessionId}
+        data-active={String(terminal.active)}
+        data-visible={String(terminal.visible)}
+      />
+    );
   },
 }));
 
@@ -53,6 +69,7 @@ describe("PaneWorkspace RDP routing", () => {
     rdpPaneHostMock.mockReset();
     vncPaneHostMock.mockReset();
     xTerminalMock.mockReset();
+    appState.tabs = [];
   });
 
   it("routes RDP leaves to RdpPaneHost with active and visible state", () => {
@@ -326,3 +343,152 @@ function terminalPane(): TerminalSessionPane {
     connectionId: "ssh-connection",
   };
 }
+
+describe("PaneWorkspace tmux leaf integration", () => {
+  function setup(twoControls = false) {
+    const ssh = terminalPane();
+    const sibling: TerminalSessionPane = {
+      ...terminalPane(),
+      id: "sibling",
+      sessionId: "sibling-session",
+      type: twoControls ? "SSH" : "Local",
+    };
+    const host = tabWithRoot(
+      {
+        id: "split",
+        kind: "split",
+        direction: "vertical",
+        ratio: 0.4,
+        first: ssh,
+        second: sibling,
+      },
+      ssh.id,
+    );
+    const virtual: TerminalSessionPane = {
+      ...ssh,
+      id: "virtual",
+      sessionId: "virtual-session",
+      tmux: { controlSessionId: ssh.sessionId, paneId: "%0" },
+    };
+    const child: Tab = {
+      ...tabWithRoot(virtual, virtual.id),
+      id: "child",
+      tmux: {
+        controlSessionId: ssh.sessionId,
+        windowId: "@0",
+        windowName: "bash",
+        windowIndex: 0,
+        active: true,
+      },
+    };
+    const props = {
+      tab: host,
+      visible: true,
+      onActivatePane: vi.fn(),
+      onActivatePaneInTab: vi.fn(),
+      onUpdateSplitRatio: vi.fn(),
+    };
+    return { ssh, sibling, host, child, props };
+  }
+
+  it("keeps the sibling visible and the shell mounted across attach/detach", () => {
+    const { ssh, sibling, host, child, props } = setup();
+    appState.tabs = [host];
+    const view = render(<PaneWorkspace {...props} />);
+    const shell = view.container.querySelector(`[data-session="${ssh.sessionId}"]`)!;
+    const peer = view.container.querySelector(`[data-session="${sibling.sessionId}"]`)!;
+    appState.tabs = [host, child];
+    view.rerender(<PaneWorkspace {...props} tab={{ ...host }} />);
+    expect(view.container.querySelector(`[data-session="${ssh.sessionId}"]`)).toBe(shell);
+    expect(shell.getAttribute("data-visible")).toBe("false");
+    expect(view.container.querySelector(`[data-session="${sibling.sessionId}"]`)).toBe(peer);
+    expect(peer.getAttribute("data-visible")).toBe("true");
+    const pane = view.container.querySelector('[data-session="virtual-session"]')!;
+    expect(pane.getAttribute("data-visible")).toBe("true");
+    fireEvent.mouseDown(pane);
+    expect(props.onActivatePaneInTab).toHaveBeenCalledWith(child.id, child.activePaneId);
+    fireEvent.mouseDown(peer);
+    expect(props.onActivatePane).toHaveBeenLastCalledWith(sibling.id);
+    appState.tabs = [host];
+    view.rerender(<PaneWorkspace {...props} tab={{ ...host }} />);
+    expect(view.container.querySelector(`[data-session="${ssh.sessionId}"]`)).toBe(shell);
+    expect(shell.getAttribute("data-visible")).toBe("true");
+    expect(view.queryByTestId(`tmux-strip-${ssh.sessionId}`)).toBeNull();
+    view.unmount();
+  });
+
+  it("keeps both remote window terminals mounted when switching windows", () => {
+    const { host, child, props } = setup();
+    const secondPane = { ...terminalPane(), id: "remote-second", sessionId: "remote-second-session", tmux: { controlSessionId: "terminal-session", paneId: "%2" } };
+    const second: Tab = { ...child, id: "window-second", root: secondPane, activePaneId: secondPane.id, tmux: { ...child.tmux!, windowId: "@1", windowIndex: 1, active: false } };
+    appState.tabs = [host, child, second];
+    const view = render(<PaneWorkspace {...props} />);
+    const firstTerminal = view.container.querySelector('[data-session="virtual-session"]')!;
+    const secondTerminal = view.container.querySelector('[data-session="remote-second-session"]')!;
+    expect(firstTerminal.getAttribute("data-visible")).toBe("true");
+    expect(secondTerminal.getAttribute("data-visible")).toBe("false");
+    appState.tabs = [host, { ...child, tmux: { ...child.tmux!, active: false } }, { ...second, tmux: { ...second.tmux!, active: true } }];
+    view.rerender(<PaneWorkspace {...props} tab={{ ...host }} />);
+    expect(view.container.querySelector('[data-session="virtual-session"]')).toBe(firstTerminal);
+    expect(view.container.querySelector('[data-session="remote-second-session"]')).toBe(secondTerminal);
+    expect(firstTerminal.getAttribute("data-visible")).toBe("false");
+    expect(secondTerminal.getAttribute("data-visible")).toBe("true");
+    view.rerender(<PaneWorkspace {...props} visible={false} />);
+    expect(secondTerminal.getAttribute("data-visible")).toBe("false");
+    view.unmount();
+    appState.tabs = [];
+  });
+
+  it("gates tmux focus by the host leaf and supports independent controls", () => {
+    const { ssh, sibling, host, child, props } = setup(true);
+    const secondPane = {
+      ...sibling,
+      id: "second-virtual",
+      sessionId: "second-virtual-session",
+      tmux: { controlSessionId: sibling.sessionId, paneId: "%1" },
+    };
+    const second: Tab = {
+      ...child,
+      id: "second-child",
+      root: secondPane,
+      activePaneId: secondPane.id,
+      tmux: { ...child.tmux!, controlSessionId: sibling.sessionId },
+    };
+    appState.tabs = [host, child, second];
+    const view = render(<PaneWorkspace {...props} />);
+    expect(
+      view.container.querySelector('[data-session="virtual-session"]')?.getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      view.container
+        .querySelector('[data-session="second-virtual-session"]')
+        ?.getAttribute("data-active"),
+    ).toBe("false");
+    view.rerender(<PaneWorkspace {...props} tab={{ ...host, activePaneId: sibling.id }} />);
+    expect(
+      view.container.querySelector('[data-session="virtual-session"]')?.getAttribute("data-active"),
+    ).toBe("false");
+    expect(
+      view.container
+        .querySelector('[data-session="second-virtual-session"]')
+        ?.getAttribute("data-active"),
+    ).toBe("true");
+    view.rerender(<PaneWorkspace {...props} paneFocusMode />);
+    expect(
+      view.container
+        .querySelector('[data-session="virtual-session"]')
+        ?.getAttribute("data-visible"),
+    ).toBe("true");
+    expect(
+      view.container
+        .querySelector('[data-session="second-virtual-session"]')
+        ?.getAttribute("data-visible"),
+    ).toBe("false");
+    appState.tabs = [host, second];
+    view.rerender(<PaneWorkspace {...props} tab={{ ...host }} />);
+    expect(view.queryByTestId(`tmux-strip-${ssh.sessionId}`)).toBeNull();
+    expect(view.getByTestId(`tmux-strip-${sibling.sessionId}`)).not.toBeNull();
+    view.unmount();
+    appState.tabs = [];
+  });
+});

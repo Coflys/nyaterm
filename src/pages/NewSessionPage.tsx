@@ -1,9 +1,5 @@
-import { runtime, supports } from "@/lib/backend/runtime";
-import { pickBrowserImage } from "@/lib/backend/browserArtifacts";
-import { emit } from "@/lib/backend/api";
-import { getCurrentWindow } from "@/lib/backend/platform/window";
-import { open as openDialog } from "@/lib/backend/platform/dialog";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { MdAdd, MdClose, MdExpandMore, MdImage } from "react-icons/md";
 import {
@@ -16,7 +12,19 @@ import {
 } from "@/components/icons";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
+import {
+  ConnectionBasicInformation,
+  ConnectionEditor,
+} from "@/components/sessions/ConnectionEditor";
 import { ConnectionTagsField } from "@/components/sessions/ConnectionTagsField";
+import type {
+  AlgorithmTab,
+  EditorCategory,
+  EditorIssue,
+  EditorProtocol,
+  ForwardingTab,
+} from "@/components/sessions/connectionEditorModel";
+import { validateConnectionEditor } from "@/components/sessions/connectionEditorValidation";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
 import { RdpForm } from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
@@ -33,10 +41,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { emit } from "@/lib/backend/api";
+import { pickBrowserImage } from "@/lib/backend/browserArtifacts";
+import { open as openDialog } from "@/lib/backend/platform/dialog";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
+import { runtime, supports } from "@/lib/backend/runtime";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { isWindows } from "@/lib/platform";
-import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
 import type {
   AccountPasswordSource,
@@ -58,15 +70,13 @@ import type {
   SshAlgorithmPreferences,
   SshProfile,
   SshTerminalType,
+  SupportedSshAlgorithms,
 } from "@/types/global";
 
-const isValidPort = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65535;
 const DEFAULT_POST_LOGIN_DELAY_MS = 1000;
 const MIN_POST_LOGIN_DELAY_MS = 0;
 const MAX_POST_LOGIN_DELAY_MS = 60_000;
 const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
-const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
-const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
 const DEFAULT_RDP_USERNAME = "Administrator";
 const CUSTOM_ICON_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif"];
 const FALLBACK_LOCAL_SHELL = isWindows ? "powershell.exe" : "/bin/bash";
@@ -186,14 +196,6 @@ function normalizeConnectionTags(tags: string[]): string[] {
   return normalized;
 }
 
-const isValidPostLoginDelay = (value: number) =>
-  Number.isInteger(value) && value >= MIN_POST_LOGIN_DELAY_MS && value <= MAX_POST_LOGIN_DELAY_MS;
-
-const isValidSftpShellDetectionTimeout = (value: number) =>
-  Number.isInteger(value) &&
-  value >= MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS &&
-  value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
-
 export default function NewSessionPage() {
   const { t } = useTranslation();
   const { appSettings } = useApp();
@@ -208,6 +210,25 @@ export default function NewSessionPage() {
   const sourceTabId = params.get("sourceTabId") ?? undefined;
   const sourcePaneId = params.get("sourcePaneId") ?? undefined;
 
+  const [category, setCategory] = useState<EditorCategory>("basic");
+  const [algorithmTab, setAlgorithmTab] = useState<AlgorithmTab>("kex");
+  const [forwardingTab, setForwardingTab] = useState<ForwardingTab>("agent");
+  const [supportedAlgorithms, setSupportedAlgorithms] = useState<SupportedSshAlgorithms | null>(
+    null,
+  );
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const [focusIssue, setFocusIssue] = useState<EditorIssue | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tagDraft, setTagDraft] = useState("");
+  const saveAction = useRef<() => Promise<void>>(async () => {});
+  const composing = useRef(false);
+  const resetNavigation = useCallback(() => {
+    setCategory("basic");
+    setAlgorithmTab("kex");
+    setForwardingTab("agent");
+    setFocusIssue(null);
+    setValidationAttempted(false);
+  }, []);
   const [initialData, setInitialData] = useState<SavedConnection | undefined>();
   const [name, setName] = useState("");
   const [groupId, setGroupId] = useState(initialGroupId);
@@ -242,7 +263,7 @@ export default function NewSessionPage() {
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupParentId, setNewGroupParentId] = useState("");
-  const [currentTab, setCurrentTab] = useState("ssh");
+  const [currentTab, setCurrentTab] = useState<EditorProtocol>("ssh");
   const [rdpUseNla, setRdpUseNla] = useState(true);
   const [rdpClientMode, setRdpClientMode] = useState<RdpClientMode | "default">("default");
   const [rdpCertificatePolicy, setRdpCertificatePolicy] = useState<RdpCertificatePolicy>("prompt");
@@ -312,6 +333,7 @@ export default function NewSessionPage() {
   const [serialBackspaceMode, setSerialBackspaceMode] = useState("ctrl_h");
   const [telnetBackspaceMode, setTelnetBackspaceMode] = useState("del");
   const [telnetRawTcpCli, setTelnetRawTcpCli] = useState(false);
+  const [telnetKeepAliveInterval, setTelnetKeepAliveInterval] = useState(60);
   const [telnetEnterMode, setTelnetEnterMode] = useState<"crlf" | "cr" | "lf">("cr");
   const [telnetLocalEcho, setTelnetLocalEcho] = useState(false);
   const [telnetLocalLineEdit, setTelnetLocalLineEdit] = useState(false);
@@ -350,6 +372,7 @@ export default function NewSessionPage() {
     invoke<SavedAccount[]>("get_saved_passwords")
       .then(setSavedAccounts)
       .catch((e) => setError(getErrorMessage(e)));
+    setLoading(true);
     invoke<SavedConnection[]>("get_saved_connections")
       .then((conns) => {
         setSavedConnections(conns);
@@ -363,6 +386,7 @@ export default function NewSessionPage() {
           return;
         }
 
+        resetNavigation();
         setInitialData(found);
         setName(found.name);
         setGroupId(found.group_id || "");
@@ -371,7 +395,7 @@ export default function NewSessionPage() {
         setIconKey(found.icon || "");
         setIconAutoDetect(found.icon_auto_detect ?? !found.icon);
 
-        const tabMap: Record<string, string> = {
+        const tabMap: Record<string, EditorProtocol> = {
           ssh: "ssh",
           local_terminal: "local",
           telnet: "telnet",
@@ -428,6 +452,7 @@ export default function NewSessionPage() {
           setHasPassword(found.auth?.has_password || false);
           setTelnetBackspaceMode(found.backspace_mode || "del");
           setTelnetRawTcpCli(found.raw_tcp_cli ?? false);
+          setTelnetKeepAliveInterval(found.keep_alive_interval ?? 60);
           setTelnetEnterMode(found.enter_mode || "cr");
           setTelnetLocalEcho(found.local_echo ?? false);
           setTelnetLocalLineEdit(found.local_line_edit ?? false);
@@ -469,6 +494,8 @@ export default function NewSessionPage() {
           setRdpReconnectEnabled(found.reconnect?.enabled ?? true);
           setRdpReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
         } else if (found.type === "vnc") {
+          setProxyId(found.network?.proxy_id || "");
+          setJumpHostId(found.network?.proxy_jump_id || "");
           setHost(found.host || "");
           setVncPort(found.port || 5900);
           setVncUsername(found.username || "");
@@ -483,11 +510,18 @@ export default function NewSessionPage() {
           setVncReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
         }
       })
-      .catch((e) => setError(getErrorMessage(e)));
+      .catch((e) => setError(getErrorMessage(e)))
+      .finally(() => setLoading(false));
     invoke<ConnectionCustomIcon[]>("get_connection_custom_icons")
       .then(setCustomIcons)
       .catch((e) => setError(getErrorMessage(e)));
-  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, editId, t]);
+  }, [
+    appSettings.recording.auto_start,
+    appSettings.recording.default_mode,
+    editId,
+    t,
+    resetNavigation,
+  ]);
 
   useEffect(() => {
     if (initialData?.type === "local_terminal" && !initialData.shell_path?.trim()) {
@@ -523,6 +557,7 @@ export default function NewSessionPage() {
     setNewGroupNamePending("");
     setDescription("");
     setTags([]);
+    setTagDraft("");
     setHost("");
     setSshPort(22);
     setTelnetPort(23);
@@ -571,6 +606,7 @@ export default function NewSessionPage() {
     setSerialBackspaceMode("ctrl_h");
     setTelnetBackspaceMode("del");
     setTelnetRawTcpCli(false);
+    setTelnetKeepAliveInterval(60);
     setTelnetEnterMode("cr");
     setTelnetLocalEcho(false);
     setTelnetLocalLineEdit(false);
@@ -607,17 +643,21 @@ export default function NewSessionPage() {
     defaultLocalShell,
   ]);
 
-  const handleTabChange = useCallback((value: string) => {
-    setCurrentTab(value);
-    if (value === "telnet") {
-      setPasswordSource((current) => (current === "ask" ? "direct" : current));
-    }
-    if (value === "rdp") {
-      setUsername((current) =>
-        !current.trim() || current === "root" ? DEFAULT_RDP_USERNAME : current,
-      );
-    }
-  }, []);
+  const handleTabChange = useCallback(
+    (value: string) => {
+      resetNavigation();
+      setCurrentTab(value as EditorProtocol);
+      if (value === "telnet") {
+        setPasswordSource((current) => (current === "ask" ? "direct" : current));
+      }
+      if (value === "rdp") {
+        setUsername((current) =>
+          !current.trim() || current === "root" ? DEFAULT_RDP_USERNAME : current,
+        );
+      }
+    },
+    [resetNavigation],
+  );
 
   const serialPortOptions: { unavailable?: boolean; value: string }[] = serialPorts.map((port) => ({
     value: port,
@@ -836,142 +876,79 @@ export default function NewSessionPage() {
     }
   }, [agentForwardingConfig.sources.external_agent_endpoints, t]);
 
-  const getValidationError = useCallback(() => {
-    if (currentTab === "ssh") {
-      if (!host.trim()) {
-        return t("dialog.hostRequired");
-      }
-      if (!isValidPort(sshPort)) {
-        return t("dialog.portInvalid", "Port must be between 1 and 65535");
-      }
-      const accountUsername = savedAccounts.find((account) => account.id === accountId)?.username;
-      if (!(accountUsername?.trim() || username.trim())) {
-        return t("dialog.usernameRequired", "Username is required");
-      }
-      if (authAgentEndpointError) {
-        return authAgentEndpointError;
-      }
-      if (postLoginEnabled && !postLoginCommand.trim()) {
-        return t("dialog.postLoginCommandRequired");
-      }
-      if (!isValidPostLoginDelay(postLoginDelayMs)) {
-        return t("dialog.postLoginDelayInvalid", {
-          min: MIN_POST_LOGIN_DELAY_MS,
-          max: MAX_POST_LOGIN_DELAY_MS,
-          defaultValue: "Delay must be between {{min}} and {{max}} ms",
-        });
-      }
-      if (!isValidSftpShellDetectionTimeout(sftpSettings.shell_detection_timeout_ms)) {
-        return t("dialog.sftpShellDetectionTimeoutInvalid", {
-          min: MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,
-          max: MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
-          defaultValue: "Shell detection timeout must be between {{min}} and {{max}} ms",
-        });
-      }
-      if (agentForwardingEndpointError) {
-        return agentForwardingEndpointError;
-      }
-    }
-
-    if (currentTab === "telnet") {
-      if (!host.trim()) {
-        return t("dialog.hostRequired");
-      }
-      if (!isValidPort(telnetPort)) {
-        return t("dialog.portInvalid", "Port must be between 1 and 65535");
-      }
-    }
-
-    if (currentTab === "rdp") {
-      if (!host.trim()) {
-        return t("dialog.hostRequired");
-      }
-      if (!isValidPort(rdpPort)) {
-        return t("dialog.portInvalid", "Port must be between 1 and 65535");
-      }
-      if (!username.trim()) {
-        return t("dialog.usernameRequired", "Username is required");
-      }
-      if (
-        rdpDisplayMode === "fixed" &&
-        (!Number.isInteger(rdpDisplayWidth) || rdpDisplayWidth < 640 || rdpDisplayWidth > 7680)
-      ) {
-        return t("dialog.rdpDisplayWidthInvalid");
-      }
-      if (
-        rdpDisplayMode === "fixed" &&
-        (!Number.isInteger(rdpDisplayHeight) || rdpDisplayHeight < 480 || rdpDisplayHeight > 4320)
-      ) {
-        return t("dialog.rdpDisplayHeightInvalid");
-      }
-    }
-
-    if (currentTab === "vnc") {
-      if (!host.trim()) return t("dialog.hostRequired");
-      if (!isValidPort(vncPort)) {
-        return t("dialog.portInvalid", "Port must be between 1 and 65535");
-      }
-      if (
-        vncSecurityMode === "vnc-auth" &&
-        password &&
-        new TextEncoder().encode(password).length > 8
-      ) {
-        return t("dialog.vncPasswordTooLong");
-      }
-    }
-
-    if (currentTab === "serial") {
-      if (!serialPortName.trim()) {
-        return t("dialog.serialPortRequired", "Serial port is required");
-      }
-      if (!isValidSerialBaudRate(baudRate)) {
-        return t("dialog.baudRateInvalid", {
-          min: MIN_SERIAL_BAUD_RATE,
-          max: MAX_SERIAL_BAUD_RATE,
-          defaultValue: "Baud rate must be between {{min}} and {{max}}",
-        });
-      }
-    }
-
-    if (currentTab === "local" && !shellPath.trim()) {
-      return t("dialog.shellPathRequired", "Shell path is required");
-    }
-
-    return "";
-  }, [
-    baudRate,
-    agentForwardingEndpointError,
-    authAgentEndpointError,
-    accountId,
-    currentTab,
-    host,
-    postLoginCommand,
-    postLoginDelayMs,
-    postLoginEnabled,
-    rdpDisplayHeight,
-    rdpDisplayMode,
-    rdpDisplayWidth,
-    rdpPort,
-    serialPortName,
-    shellPath,
-    sshPort,
-    sftpSettings.shell_detection_timeout_ms,
-    telnetPort,
+  const validationIssues = validateConnectionEditor(
+    {
+      protocol: currentTab,
+      host,
+      port:
+        currentTab === "telnet"
+          ? telnetPort
+          : currentTab === "rdp"
+            ? rdpPort
+            : currentTab === "vnc"
+              ? vncPort
+              : sshPort,
+      username:
+        currentTab === "ssh"
+          ? savedAccounts.find((account) => account.id === accountId)?.username?.trim() || username
+          : username,
+      authType,
+      authAgentEndpoint,
+      forwardingEndpoints: agentForwardingConfig.sources.external_agent_endpoints,
+      postLoginEnabled,
+      postLoginCommand,
+      postLoginDelayMs,
+      sftpTimeout: sftpSettings.shell_detection_timeout_ms,
+      algorithms: sshAlgorithms,
+      supportedAlgorithms,
+      displayMode: rdpDisplayMode,
+      displayWidth: rdpDisplayWidth,
+      displayHeight: rdpDisplayHeight,
+      vncSecurityMode,
+      password,
+      serialPortName,
+      baudRate,
+      shellPath,
+    },
     t,
-    username,
-    savedAccounts,
-    vncPort,
-    vncSecurityMode,
-    password,
-  ]);
+  );
+  const validationError = validationIssues[0]?.message ?? "";
+  const saveDisabled = connecting || loading || (!!editId && !initialData);
 
-  const validationError = getValidationError();
-  const saveDisabled = connecting || !!validationError;
+  useEffect(() => {
+    if (category !== "basic") {
+      setShowIconPicker(false);
+      setShowGroupDropdown(false);
+    }
+  }, [category]);
+
+  const locateIssue = (issue: EditorIssue) => {
+    setCategory(issue.category);
+    if (issue.category === "algorithms" && issue.tab) setAlgorithmTab(issue.tab as AlgorithmTab);
+    if (issue.category === "forwarding" && issue.tab) setForwardingTab(issue.tab as ForwardingTab);
+    setFocusIssue({ ...issue });
+  };
+
+  const changeCategory = (nextCategory: EditorCategory) => {
+    flushSync(() => {
+      if (
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.closest("#connection-editor-content")
+      )
+        document.activeElement.blur();
+    });
+    setFocusIssue(null);
+    setShowIconPicker(false);
+    setShowGroupDropdown(false);
+    setCategory(nextCategory);
+  };
 
   const handleSave = async () => {
-    const nextValidationError = getValidationError();
-    if (nextValidationError) {
-      setError(nextValidationError);
+    if (saveDisabled) return;
+    setError("");
+    setValidationAttempted(true);
+    if (validationIssues[0]) {
+      locateIssue(validationIssues[0]);
       return;
     }
 
@@ -1184,6 +1161,7 @@ export default function NewSessionPage() {
               network,
               backspace_mode: telnetBackspaceMode,
               raw_tcp_cli: telnetRawTcpCli,
+              keep_alive_interval: telnetKeepAliveInterval,
               enter_mode: telnetEnterMode,
               local_echo: telnetLocalEcho,
               local_line_edit: telnetLocalLineEdit,
@@ -1281,9 +1259,24 @@ export default function NewSessionPage() {
     }
   };
 
+  saveAction.current = handleSave;
+  const requestSave = () => {
+    if (composing.current) return;
+    flushSync(() => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    });
+    void saveAction.current();
+  };
+
   return (
     <div
       className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground"
+      onCompositionStart={() => {
+        composing.current = true;
+      }}
+      onCompositionEnd={() => {
+        composing.current = false;
+      }}
       onKeyDown={(event) => {
         if (
           !editId ||
@@ -1300,7 +1293,7 @@ export default function NewSessionPage() {
         if (!event.currentTarget.contains(event.target)) return;
 
         event.preventDefault();
-        void handleSave();
+        requestSave();
       }}
     >
       <ChildWindowHeader
@@ -1329,319 +1322,341 @@ export default function NewSessionPage() {
           </TabsList>
         </div>
 
-        <div className="flex-1 min-h-0 w-full space-y-3 overflow-y-auto p-4 pb-20 sm:p-5 sm:pb-20">
-          <div className="flex flex-wrap items-end gap-3">
-            {/* Name + Group */}
-            <div className="shrink-0">
-              <Label className="mb-1 block text-xs font-medium text-foreground/80">
-                {t("dialog.icon")}
-              </Label>
-              <Popover open={showIconPicker} onOpenChange={setShowIconPicker}>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="flex h-8 w-8 items-center justify-center p-0"
-                    title={hasCustomIcon ? t("dialog.customIcon") : iconKey || t("dialog.none")}
+        <ConnectionEditor
+          key={editId ?? "new"}
+          protocol={currentTab}
+          category={category}
+          onCategoryChange={changeCategory}
+          algorithmTab={algorithmTab}
+          setAlgorithmTab={(tab) => {
+            setFocusIssue(null);
+            setAlgorithmTab(tab);
+          }}
+          forwardingTab={forwardingTab}
+          setForwardingTab={(tab) => {
+            setFocusIssue(null);
+            setForwardingTab(tab);
+          }}
+          onAlgorithmsLoaded={setSupportedAlgorithms}
+          issues={validationAttempted ? validationIssues : []}
+          focusIssue={focusIssue}
+        >
+          <ConnectionBasicInformation>
+            <div className="flex flex-wrap items-end gap-3">
+              {/* Name + Group */}
+              <div className="shrink-0">
+                <Label className="mb-1 block text-xs font-medium text-foreground/80">
+                  {t("dialog.icon")}
+                </Label>
+                <Popover open={showIconPicker} onOpenChange={setShowIconPicker}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex h-8 w-8 items-center justify-center p-0"
+                      title={hasCustomIcon ? t("dialog.customIcon") : iconKey || t("dialog.none")}
+                    >
+                      {(() => {
+                        const def = resolveConnectionIcon(iconKey);
+                        const IconComp = def.icon;
+                        return <IconComp style={{ color: def.color }} className="text-sm" />;
+                      })()}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    side="bottom"
+                    collisionPadding={16}
+                    className="w-56 max-w-[calc(100vw-2rem)] p-2"
                   >
-                    {(() => {
-                      const def = resolveConnectionIcon(iconKey);
-                      const IconComp = def.icon;
-                      return <IconComp style={{ color: def.color }} className="text-sm" />;
-                    })()}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  side="bottom"
-                  collisionPadding={16}
-                  className="w-56 max-w-[calc(100vw-2rem)] p-2"
-                >
-                  <div className="grid grid-cols-7 gap-0.5">
-                    {Object.entries(SERVER_ICONS).map(([key, def]) => {
-                      const IconComp = def.icon;
-                      const activeKey = iconKey || DEFAULT_CONNECTION_ICON;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${activeKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                          title={key === DEFAULT_CONNECTION_ICON ? t("dialog.none") : key}
-                          onClick={() => {
-                            setIconKey(key);
-                            setIconAutoDetect(false);
-                            setShowIconPicker(false);
-                          }}
-                        >
-                          <IconComp style={{ color: def.color }} className="text-sm" />
-                        </button>
-                      );
-                    })}
-                    {Object.entries(LINUX_ICONS).map(([key, def]) => {
-                      const IconComp = def.icon;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                          title={key}
-                          onClick={() => {
-                            setIconKey(key);
-                            setIconAutoDetect(false);
-                            setShowIconPicker(false);
-                          }}
-                        >
-                          <IconComp style={{ color: def.color }} className="text-sm" />
-                        </button>
-                      );
-                    })}
-                    {Object.entries(SYSTEM_ICONS).map(([key, def]) => {
-                      const IconComp = def.icon;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                          title={key}
-                          onClick={() => {
-                            setIconKey(key);
-                            setIconAutoDetect(false);
-                            setShowIconPicker(false);
-                          }}
-                        >
-                          <IconComp style={{ color: def.color }} className="text-sm" />
-                        </button>
-                      );
-                    })}
-                    {customIcons.map((customIcon) => {
-                      const def = resolveConnectionIcon(customIcon.data_url);
-                      const IconComp = def.icon;
-                      const isActive = iconKey === customIcon.data_url;
-                      return (
-                        <div
-                          key={customIcon.id}
-                          className="group relative h-7 w-7"
-                          title={customIcon.name || t("dialog.customIcon")}
-                        >
+                    <div className="grid grid-cols-7 gap-0.5">
+                      {Object.entries(SERVER_ICONS).map(([key, def]) => {
+                        const IconComp = def.icon;
+                        const activeKey = iconKey || DEFAULT_CONNECTION_ICON;
+                        return (
                           <button
+                            key={key}
                             type="button"
-                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${isActive ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                            aria-label={customIcon.name || t("dialog.customIcon")}
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${activeKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            title={key === DEFAULT_CONNECTION_ICON ? t("dialog.none") : key}
                             onClick={() => {
-                              setIconKey(customIcon.data_url);
+                              setIconKey(key);
                               setIconAutoDetect(false);
                               setShowIconPicker(false);
                             }}
                           >
-                            <IconComp
-                              style={{ color: def.color }}
-                              className="h-4 w-4 rounded-sm text-sm"
-                            />
+                            <IconComp style={{ color: def.color }} className="text-sm" />
                           </button>
-                          <button
-                            type="button"
-                            className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background text-[0.6rem] text-muted-foreground opacity-0 shadow ring-1 ring-border transition-opacity hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100"
-                            title={t("dialog.removeCustomIcon")}
-                            aria-label={t("dialog.removeCustomIcon")}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void handleDeleteCustomIcon(customIcon.id);
-                            }}
-                          >
-                            <MdClose />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-2 border-t pt-2">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-full justify-start text-xs"
-                      onClick={() => {
-                        void handleImportCustomIcon();
-                      }}
-                    >
-                      <MdImage className="text-sm" />
-                      <span className="truncate">{t("dialog.selectCustomIcon")}</span>
-                    </Button>
-                  </div>
-                  {currentTab === "ssh" && (
-                    <div className="mt-2 border-t pt-2">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div
-                            className={`flex items-center justify-between gap-3 rounded px-1.5 py-1 ${
-                              iconAutoDetectDisabled ? "cursor-not-allowed opacity-70" : ""
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-medium">
-                                {t("dialog.iconAutoDetect")}
-                              </div>
-                            </div>
-                            <Switch
-                              size="sm"
-                              checked={iconAutoDetect}
-                              disabled={iconAutoDetectDisabled}
-                              onCheckedChange={setIconAutoDetect}
-                              aria-label={t("dialog.iconAutoDetect")}
-                            />
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">{iconAutoDetectTooltip}</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  )}
-                </PopoverContent>
-              </Popover>
-            </div>
-            <div className="min-w-48 flex-1">
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.connectionName")}
-              </Label>
-              <Input
-                className="mt-1 text-xs h-8"
-                placeholder={t("dialog.serverPlaceholder")}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div className="min-w-48 flex-1 sm:max-w-[18rem]">
-              <Label className="text-xs font-medium text-foreground/80">{t("dialog.group")}</Label>
-              <Popover
-                open={showGroupDropdown}
-                onOpenChange={(open) => {
-                  setShowGroupDropdown(open);
-                  if (!open) {
-                    setNewGroupName("");
-                  }
-                }}
-              >
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="mt-1 h-8 w-full justify-between text-xs font-normal"
-                  >
-                    <span className={`truncate ${groupId ? "" : "text-muted-foreground"}`}>
-                      {selectedGroupLabel}
-                    </span>
-                    <MdExpandMore className="shrink-0 text-xs text-muted-foreground" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  side="bottom"
-                  sideOffset={4}
-                  collisionPadding={16}
-                  className="w-(--radix-popover-trigger-width) min-w-48 overflow-hidden p-0"
-                >
-                  <div className="max-h-48 overflow-y-auto">
-                    <button
-                      type="button"
-                      className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent ${!groupId ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
-                      onClick={() => {
-                        setGroupId("");
-                        setNewGroupNamePending("");
-                        setNewGroupParentId("");
-                        setShowGroupDropdown(false);
-                      }}
-                    >
-                      {t("dialog.none")}
-                    </button>
-                    {(() => {
-                      const getDepth = (g: Group): number => {
-                        let d = 0;
-                        let cur: string | undefined = g.parent_id;
-                        while (cur) {
-                          d++;
-                          const parent = groups.find((x) => x.id === cur);
-                          cur = parent?.parent_id;
-                        }
-                        return d;
-                      };
-                      const sorted = [...groups].sort((a, b) => a.sort_order - b.sort_order);
-                      const buildTree = (parentId: string | undefined): Group[] => {
-                        const children = sorted.filter(
-                          (g) => (g.parent_id || undefined) === parentId,
                         );
-                        return children.flatMap((g) => [g, ...buildTree(g.id)]);
-                      };
-                      const ordered = buildTree(undefined);
-                      return ordered.map((g) => {
-                        const depth = getDepth(g);
+                      })}
+                      {Object.entries(LINUX_ICONS).map(([key, def]) => {
+                        const IconComp = def.icon;
                         return (
                           <button
-                            key={g.id}
+                            key={key}
                             type="button"
-                            className={`w-full py-1.5 text-left text-xs transition-colors hover:bg-accent ${groupId === g.id ? "bg-primary/15 text-primary" : ""}`}
-                            style={{
-                              paddingLeft: `${12 + depth * 16}px`,
-                              paddingRight: "12px",
-                            }}
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            title={key}
                             onClick={() => {
-                              setGroupId(g.id);
-                              setNewGroupNamePending("");
-                              setNewGroupParentId("");
-                              setShowGroupDropdown(false);
+                              setIconKey(key);
+                              setIconAutoDetect(false);
+                              setShowIconPicker(false);
                             }}
                           >
-                            {g.name}
+                            <IconComp style={{ color: def.color }} className="text-sm" />
                           </button>
                         );
-                      });
-                    })()}
-                  </div>
-                  <div className="border-t p-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        className="flex-1 min-w-0 h-7 text-xs"
-                        placeholder={t("dialog.newGroupPlaceholder")}
-                        value={newGroupName}
-                        onChange={(e) => setNewGroupName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && newGroupName.trim()) {
-                            setGroupId("new");
-                            setNewGroupNamePending(newGroupName.trim());
-                            setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
-                            setNewGroupName("");
-                            setShowGroupDropdown(false);
-                          }
-                        }}
-                      />
+                      })}
+                      {Object.entries(SYSTEM_ICONS).map(([key, def]) => {
+                        const IconComp = def.icon;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            title={key}
+                            onClick={() => {
+                              setIconKey(key);
+                              setIconAutoDetect(false);
+                              setShowIconPicker(false);
+                            }}
+                          >
+                            <IconComp style={{ color: def.color }} className="text-sm" />
+                          </button>
+                        );
+                      })}
+                      {customIcons.map((customIcon) => {
+                        const def = resolveConnectionIcon(customIcon.data_url);
+                        const IconComp = def.icon;
+                        const isActive = iconKey === customIcon.data_url;
+                        return (
+                          <div
+                            key={customIcon.id}
+                            className="group relative h-7 w-7"
+                            title={customIcon.name || t("dialog.customIcon")}
+                          >
+                            <button
+                              type="button"
+                              className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${isActive ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                              aria-label={customIcon.name || t("dialog.customIcon")}
+                              onClick={() => {
+                                setIconKey(customIcon.data_url);
+                                setIconAutoDetect(false);
+                                setShowIconPicker(false);
+                              }}
+                            >
+                              <IconComp
+                                style={{ color: def.color }}
+                                className="h-4 w-4 rounded-sm text-sm"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background text-[0.6rem] text-muted-foreground opacity-0 shadow ring-1 ring-border transition-opacity hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100"
+                              title={t("dialog.removeCustomIcon")}
+                              aria-label={t("dialog.removeCustomIcon")}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void handleDeleteCustomIcon(customIcon.id);
+                              }}
+                            >
+                              <MdClose />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 border-t pt-2">
                       <Button
+                        type="button"
                         variant="ghost"
-                        size="icon-xs"
-                        disabled={!newGroupName.trim()}
+                        size="sm"
+                        className="h-7 w-full justify-start text-xs"
                         onClick={() => {
-                          if (newGroupName.trim()) {
-                            setGroupId("new");
-                            setNewGroupNamePending(newGroupName.trim());
-                            setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
-                            setNewGroupName("");
-                            setShowGroupDropdown(false);
-                          }
+                          void handleImportCustomIcon();
                         }}
                       >
-                        <MdAdd className="text-sm" />
+                        <MdImage className="text-sm" />
+                        <span className="truncate">{t("dialog.selectCustomIcon")}</span>
                       </Button>
                     </div>
-                    <p className="px-1 pt-1 text-[0.6875rem] leading-snug text-muted-foreground">
-                      {newGroupParentLabel
-                        ? t("dialog.newGroupParentHint", {
-                            group: newGroupParentLabel,
-                          })
-                        : t("dialog.newGroupRootHint")}
-                    </p>
-                  </div>
-                </PopoverContent>
-              </Popover>
+                    {currentTab === "ssh" && (
+                      <div className="mt-2 border-t pt-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              className={`flex items-center justify-between gap-3 rounded px-1.5 py-1 ${
+                                iconAutoDetectDisabled ? "cursor-not-allowed opacity-70" : ""
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-medium">
+                                  {t("dialog.iconAutoDetect")}
+                                </div>
+                              </div>
+                              <Switch
+                                size="sm"
+                                checked={iconAutoDetect}
+                                disabled={iconAutoDetectDisabled}
+                                onCheckedChange={setIconAutoDetect}
+                                aria-label={t("dialog.iconAutoDetect")}
+                              />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">{iconAutoDetectTooltip}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="min-w-48 flex-1">
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.connectionName")}
+                </Label>
+                <Input
+                  className="mt-1 text-xs h-8"
+                  placeholder={t("dialog.serverPlaceholder")}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <div className="min-w-48 flex-1 sm:max-w-[18rem]">
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.group")}
+                </Label>
+                <Popover
+                  open={showGroupDropdown}
+                  onOpenChange={(open) => {
+                    setShowGroupDropdown(open);
+                    if (!open) {
+                      setNewGroupName("");
+                    }
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mt-1 h-8 w-full justify-between text-xs font-normal"
+                    >
+                      <span className={`truncate ${groupId ? "" : "text-muted-foreground"}`}>
+                        {selectedGroupLabel}
+                      </span>
+                      <MdExpandMore className="shrink-0 text-xs text-muted-foreground" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    side="bottom"
+                    sideOffset={4}
+                    collisionPadding={16}
+                    className="w-(--radix-popover-trigger-width) min-w-48 overflow-hidden p-0"
+                  >
+                    <div className="max-h-48 overflow-y-auto">
+                      <button
+                        type="button"
+                        className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent ${!groupId ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
+                        onClick={() => {
+                          setGroupId("");
+                          setNewGroupNamePending("");
+                          setNewGroupParentId("");
+                          setShowGroupDropdown(false);
+                        }}
+                      >
+                        {t("dialog.none")}
+                      </button>
+                      {(() => {
+                        const getDepth = (g: Group): number => {
+                          let d = 0;
+                          let cur: string | undefined = g.parent_id;
+                          while (cur) {
+                            d++;
+                            const parent = groups.find((x) => x.id === cur);
+                            cur = parent?.parent_id;
+                          }
+                          return d;
+                        };
+                        const sorted = [...groups].sort((a, b) => a.sort_order - b.sort_order);
+                        const buildTree = (parentId: string | undefined): Group[] => {
+                          const children = sorted.filter(
+                            (g) => (g.parent_id || undefined) === parentId,
+                          );
+                          return children.flatMap((g) => [g, ...buildTree(g.id)]);
+                        };
+                        const ordered = buildTree(undefined);
+                        return ordered.map((g) => {
+                          const depth = getDepth(g);
+                          return (
+                            <button
+                              key={g.id}
+                              type="button"
+                              className={`w-full py-1.5 text-left text-xs transition-colors hover:bg-accent ${groupId === g.id ? "bg-primary/15 text-primary" : ""}`}
+                              style={{
+                                paddingLeft: `${12 + depth * 16}px`,
+                                paddingRight: "12px",
+                              }}
+                              onClick={() => {
+                                setGroupId(g.id);
+                                setNewGroupNamePending("");
+                                setNewGroupParentId("");
+                                setShowGroupDropdown(false);
+                              }}
+                            >
+                              {g.name}
+                            </button>
+                          );
+                        });
+                      })()}
+                    </div>
+                    <div className="border-t p-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          className="flex-1 min-w-0 h-7 text-xs"
+                          placeholder={t("dialog.newGroupPlaceholder")}
+                          value={newGroupName}
+                          onChange={(e) => setNewGroupName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && newGroupName.trim()) {
+                              setGroupId("new");
+                              setNewGroupNamePending(newGroupName.trim());
+                              setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
+                              setNewGroupName("");
+                              setShowGroupDropdown(false);
+                            }
+                          }}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          disabled={!newGroupName.trim()}
+                          onClick={() => {
+                            if (newGroupName.trim()) {
+                              setGroupId("new");
+                              setNewGroupNamePending(newGroupName.trim());
+                              setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
+                              setNewGroupName("");
+                              setShowGroupDropdown(false);
+                            }
+                          }}
+                        >
+                          <MdAdd className="text-sm" />
+                        </Button>
+                      </div>
+                      <p className="px-1 pt-1 text-[0.6875rem] leading-snug text-muted-foreground">
+                        {newGroupParentLabel
+                          ? t("dialog.newGroupParentHint", {
+                              group: newGroupParentLabel,
+                            })
+                          : t("dialog.newGroupRootHint")}
+                      </p>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
             </div>
-          </div>
+          </ConnectionBasicInformation>
 
           <TabsContent value="ssh" className="space-y-3 m-0 border-0 outline-none w-full">
             <SshForm
@@ -1772,6 +1787,8 @@ export default function NewSessionPage() {
               setBackspaceMode={setTelnetBackspaceMode}
               rawTcpCli={telnetRawTcpCli}
               setRawTcpCli={setTelnetRawTcpCli}
+              keepAliveInterval={telnetKeepAliveInterval}
+              setKeepAliveInterval={setTelnetKeepAliveInterval}
               enterMode={telnetEnterMode}
               setEnterMode={setTelnetEnterMode}
               localEcho={telnetLocalEcho}
@@ -1917,50 +1934,57 @@ export default function NewSessionPage() {
             />
           </TabsContent>
 
-          <div className="mt-5 space-y-3">
-            <ConnectionTagsField
-              value={tags}
-              suggestions={existingTagSuggestions}
-              onChange={setTags}
-            />
-
-            {/* Description */}
-            <div>
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.description")}
-              </Label>
-              <Textarea
-                rows={2}
-                placeholder={t("dialog.descriptionPlaceholder")}
-                className="mt-1 text-xs resize-none"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
+          <ConnectionBasicInformation>
+            <div className="mt-5 space-y-3">
+              <ConnectionTagsField
+                value={tags}
+                draft={tagDraft}
+                onDraftChange={setTagDraft}
+                suggestions={existingTagSuggestions}
+                onChange={setTags}
               />
-            </div>
 
-            {/* Messages */}
-            {error && (
-              <div className="p-2 bg-destructive/10 border border-destructive/30 rounded text-xs text-red-400">
-                {error}
+              {/* Description */}
+              <div>
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.description")}
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder={t("dialog.descriptionPlaceholder")}
+                  className="mt-1 text-xs resize-none"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          </ConnectionBasicInformation>
+        </ConnectionEditor>
       </Tabs>
 
       {/* Footer */}
-      <ActionFooter>
-        <ActionButton variant="outline" onClick={handleClose}>
-          {t("dialog.cancel")}
-        </ActionButton>
-        <ActionButton
-          onClick={handleSave}
-          disabled={saveDisabled}
-          title={validationError || undefined}
-        >
-          {connecting ? t("dialog.saving") : t("dialog.save")}
-        </ActionButton>
-      </ActionFooter>
+      <div className="shrink-0 border-t">
+        {(error || (validationAttempted && validationError)) && (
+          <div
+            role="alert"
+            className="max-h-24 overflow-y-auto break-words px-4 py-2 text-xs text-destructive"
+          >
+            {error || validationError}
+          </div>
+        )}
+        <ActionFooter>
+          <ActionButton variant="outline" onClick={handleClose}>
+            {t("dialog.cancel")}
+          </ActionButton>
+          <ActionButton
+            onClick={requestSave}
+            disabled={saveDisabled}
+            title={validationAttempted ? validationError || undefined : undefined}
+          >
+            {connecting ? t("dialog.saving") : t("dialog.save")}
+          </ActionButton>
+        </ActionFooter>
+      </div>
     </div>
   );
 }

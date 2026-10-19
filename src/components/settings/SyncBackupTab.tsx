@@ -16,6 +16,7 @@ import {
   formatTimestamp,
   getCloudSyncValidationErrors,
   isRemoteInconsistentConflict,
+  localizeCloudSyncMessage,
   needsGistCapacityRecovery,
   secretInputValue,
   secretPlaceholder,
@@ -1040,7 +1041,7 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
 
         {status.message ? (
           <div className="min-w-0 rounded-lg border border-border/70 bg-card/60 px-4 py-3 text-sm text-muted-foreground break-words [overflow-wrap:anywhere]">
-            {status.message}
+            {localizeCloudSyncMessage(status.message, (key) => t(key))}
           </div>
         ) : null}
 

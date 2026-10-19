@@ -1,6 +1,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import type { Terminal } from "@xterm/xterm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionType } from "@/types/global";
 import type { TerminalFitScheduler } from "./terminalFitScheduler";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 
@@ -46,6 +47,83 @@ describe("useTerminalRefreshEffects", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not schedule fits for unrelated rerenders but still fits readiness and padding changes", () => {
+    const schedule = vi.fn();
+    const { terminal } = createTerminal();
+    const params = {
+      terminalRef: { current: terminal },
+      fitSchedulerRef: {
+        current: { schedule } as unknown as TerminalFitScheduler,
+      },
+      active: false,
+      visible: true,
+      appLocked: false,
+      terminalReady: false,
+      sessionId: "session-1",
+      sessionType: "SSH" as const,
+      showGutter: true,
+      showContentPadding: false,
+      workspacePaddingSetting: false,
+    };
+    const { rerender } = renderHook(
+      (props) => useTerminalRefreshEffects(props),
+      { initialProps: params },
+    );
+    expect(schedule).not.toHaveBeenCalled();
+
+    const readyParams = { ...params, terminalReady: true };
+    rerender(readyParams);
+    expect(schedule.mock.calls.map(([request]) => request.reason)).toEqual(["ready", "padding"]);
+    for (const [request] of schedule.mock.calls) {
+      expect(request).toEqual(expect.objectContaining({ force: true, refresh: true }));
+    }
+    schedule.mockClear();
+
+    // XTerminal can rerender on output pressure changes without a layout change.
+    for (let i = 0; i < 4; i += 1) rerender({ ...readyParams });
+    expect(schedule).not.toHaveBeenCalled();
+
+    rerender({ ...readyParams, showContentPadding: true, workspacePaddingSetting: true });
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "padding", force: true, refresh: true }),
+    );
+  });
+
+  it.each([false, true])("refreshes the enabled gutter after layout fits (showGutter=%s)", (showGutter) => {
+    const schedule = vi.fn();
+    const dispatch = vi.spyOn(window, "dispatchEvent");
+    const { terminal } = createTerminal();
+    const params = {
+      terminalRef: { current: terminal },
+      fitSchedulerRef: {
+        current: { schedule } as unknown as TerminalFitScheduler,
+      },
+      active: false,
+      visible: true,
+      appLocked: false,
+      terminalReady: true,
+      sessionId: "session-1",
+      sessionType: "SSH" as const,
+      showGutter,
+      showContentPadding: false,
+    };
+    renderHook(() => useTerminalRefreshEffects(params));
+
+    const requests = schedule.mock.calls.map(([request]) => request);
+    expect(requests.map((request) => request.reason)).toEqual(["ready", "padding"]);
+    for (const request of requests) request.onComplete({ applied: true });
+
+    if (showGutter) {
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      for (const [event] of dispatch.mock.calls) {
+        expect(event.type).toBe("nyaterm:refresh-gutter");
+        expect((event as CustomEvent).detail).toEqual({ sessionId: "session-1" });
+      }
+    } else {
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  });
+
   it("restores the bottom viewport after an active terminal fit", () => {
     const schedule = vi.fn();
     const { terminal, scrollToBottom } = createTerminal(12, 12);
@@ -59,8 +137,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
@@ -90,8 +168,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
@@ -117,8 +195,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
@@ -149,8 +227,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
@@ -200,8 +278,8 @@ describe("useTerminalRefreshEffects", () => {
           visible: true,
           appLocked,
           terminalReady: true,
-          performanceMode: "normal",
           sessionId: "session-1",
+          sessionType: "SSH",
           showGutter: false,
           showContentPadding: false,
         }),
@@ -243,8 +321,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
@@ -286,8 +364,8 @@ describe("useTerminalRefreshEffects", () => {
           visible,
           appLocked: false,
           terminalReady: true,
-          performanceMode: "normal",
           sessionId: "session-1",
+          sessionType: "SSH",
           showGutter: false,
           showContentPadding: false,
         }),
@@ -320,8 +398,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
       }),
@@ -355,8 +433,8 @@ describe("useTerminalRefreshEffects", () => {
         visible: true,
         appLocked: false,
         terminalReady: true,
-        performanceMode: "normal",
         sessionId: "session-1",
+        sessionType: "SSH",
         showGutter: false,
         showContentPadding: false,
         snapshotRestoringRef,
@@ -371,5 +449,75 @@ describe("useTerminalRefreshEffects", () => {
     windowMocks.scaleChanged?.({ payload: { scaleFactor: 2 } });
 
     expect(schedule).not.toHaveBeenCalled();
+  });
+
+  it.each(["Serial", "SSH", "Telnet", "Local"] as const)(
+    "routes the global clear event safely for %s",
+    (sessionType: SessionType) => {
+      const terminal = {
+        clearSelection: vi.fn(),
+        write: vi.fn(),
+        input: vi.fn(),
+        focus: vi.fn(),
+        buffer: { active: { baseY: 0, viewportY: 0 } },
+      } as unknown as Terminal;
+      renderHook(() =>
+        useTerminalRefreshEffects({
+          terminalRef: { current: terminal },
+          fitSchedulerRef: { current: null },
+          active: true,
+          visible: true,
+          appLocked: false,
+          terminalReady: true,
+          sessionId: "session-1",
+          sessionType,
+          showGutter: false,
+          showContentPadding: false,
+        }),
+      );
+
+      window.dispatchEvent(new Event("nyaterm:clear-terminal"));
+      expect(terminal.clearSelection).toHaveBeenCalledOnce();
+      expect(terminal.focus).toHaveBeenCalledOnce();
+      if (sessionType === "Serial") {
+        expect(terminal.write).toHaveBeenCalledExactlyOnceWith("\x1b[2J");
+        expect(terminal.input).not.toHaveBeenCalled();
+      } else {
+        expect(terminal.input).toHaveBeenCalledExactlyOnceWith("\x0c", true);
+        expect(terminal.write).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { active: false, appLocked: false },
+    { active: true, appLocked: true },
+  ])("does not clear an inactive or locked Serial tab (%o)", ({ active, appLocked }) => {
+    const terminal = {
+      clearSelection: vi.fn(),
+      write: vi.fn(),
+      input: vi.fn(),
+      focus: vi.fn(),
+    } as unknown as Terminal;
+    renderHook(() =>
+      useTerminalRefreshEffects({
+        terminalRef: { current: terminal },
+        fitSchedulerRef: { current: null },
+        active,
+        visible: true,
+        appLocked,
+        terminalReady: true,
+        sessionId: "session-1",
+        sessionType: "Serial",
+        showGutter: false,
+        showContentPadding: false,
+      }),
+    );
+
+    window.dispatchEvent(new Event("nyaterm:clear-terminal"));
+    expect(terminal.clearSelection).not.toHaveBeenCalled();
+    expect(terminal.write).not.toHaveBeenCalled();
+    expect(terminal.input).not.toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
   });
 });

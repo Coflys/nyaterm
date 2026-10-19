@@ -237,14 +237,17 @@ it("follows real xterm alternate-screen escape sequences without losing normal-b
   Object.defineProperty(terminal, "element", { value: harness.terminal.element });
   const write = (data: string) => new Promise<void>((resolve) => terminal.write(data, resolve));
   const timestamps = new Map([[0, 1000]]);
-  const { container, unmount } = render(
+  const terminalRef = { current: terminal };
+  const gutterView = (suspended = false) => (
     <TerminalGutter
       {...harness.props}
-      terminalRef={{ current: terminal }}
+      terminalRef={terminalRef}
       lineTimestamps={timestamps}
       showTimestamps
-    />,
+      suspended={suspended}
+    />
   );
+  const { container, rerender, unmount } = render(gutterView());
 
   try {
     await act(async () => {
@@ -255,9 +258,14 @@ it("follows real xterm alternate-screen escape sequences without losing normal-b
     const normalContent = gutter.textContent;
     const width = gutter.style.width;
 
+    rerender(gutterView(true));
+    expect(container.firstElementChild).toBe(gutter);
+    expect(gutter.style.visibility).toBe("hidden");
+    expect(gutter.style.width).toBe(width);
     await act(async () => {
       await write("\x1b[?1049h\x1b[2J\x1b[HTUI");
     });
+    rerender(gutterView());
     expect(terminal.buffer.active.type).toBe("alternate");
     expect(harness.frames.size).toBe(0);
     expect(gutter.style.visibility).toBe("hidden");
@@ -269,9 +277,15 @@ it("follows real xterm alternate-screen escape sequences without losing normal-b
     harness.refresh();
     expect(harness.requestFrame).not.toHaveBeenCalled();
 
+    rerender(gutterView(true));
     await act(async () => {
       await write("\x1b[?1049l");
     });
+    expect(container.firstElementChild).toBe(gutter);
+    expect(gutter.style.visibility).toBe("hidden");
+    expect(gutter.style.width).toBe(width);
+    expect(harness.frames.size).toBe(0);
+    rerender(gutterView());
     harness.flush();
     expect(terminal.buffer.active.type).toBe("normal");
     expect(gutter.style.visibility).toBe("");
@@ -284,22 +298,53 @@ it("follows real xterm alternate-screen escape sequences without losing normal-b
   }
 });
 
-it("resumes with the current buffer after suspension and disposes all listeners on unmount", () => {
+it.each([
+  { showLineNumbers: true, showTimestamps: false },
+  { showLineNumbers: false, showTimestamps: true },
+  { showLineNumbers: true, showTimestamps: true },
+])("preserves gutter geometry through suspension and buffer switches (%o)", (settings) => {
   const harness = createHarness();
-  const { container, rerender, unmount } = render(<TerminalGutter {...harness.props} />);
+  const props = { ...harness.props, ...settings };
+  const { container, rerender, unmount } = render(<TerminalGutter {...props} />);
   harness.flush();
-  rerender(<TerminalGutter {...harness.props} suspended />);
-  expect(container.firstElementChild).toBeNull();
+  const gutter = container.firstElementChild as HTMLElement;
+  const width = gutter.style.width;
+  const content = gutter.textContent;
+  const border = gutter.style.borderColor;
+  harness.repaint();
+  expect(harness.frames.size).toBe(1);
+  rerender(<TerminalGutter {...props} suspended />);
+  expect(container.firstElementChild).toBe(gutter);
+  expect(gutter.style.width).toBe(width);
+  expect(gutter.style.borderColor).toBe(border);
+  expect(gutter.style.visibility).toBe("hidden");
   expect(harness.frames.size).toBe(0);
   for (const listeners of Object.values(harness.listeners)) expect(listeners.size).toBe(0);
+  harness.requestFrame.mockClear();
+  harness.buffer.getLine.mockClear();
+  harness.props.getLineOffset.mockClear();
+
+  harness.timestamps.set(98, 5000);
+  harness.repaint();
+  harness.refresh();
+  harness.flush();
+  expect(harness.requestFrame).not.toHaveBeenCalled();
+  expect(harness.buffer.getLine).not.toHaveBeenCalled();
+  expect(harness.props.getLineOffset).not.toHaveBeenCalled();
+  expect(gutter.textContent).toBe(content);
 
   harness.switchBuffer("alternate");
-  rerender(<TerminalGutter {...harness.props} />);
+  rerender(<TerminalGutter {...props} />);
   expect(harness.frames.size).toBe(0);
-  expect((container.firstElementChild as HTMLElement).style.visibility).toBe("hidden");
+  expect(container.firstElementChild).toBe(gutter);
+  expect(gutter.style.width).toBe(width);
+  expect(gutter.style.visibility).toBe("hidden");
   harness.switchBuffer("normal");
   harness.flush();
-  expect(container.textContent).toBe("99");
+  expect(gutter.style.width).toBe(width);
+  expect(gutter.style.visibility).toBe("");
+  if (settings.showLineNumbers) expect(gutter.textContent).toContain("99");
+  if (settings.showTimestamps) expect(gutter.textContent).not.toBe(content);
 
   harness.repaint();
   unmount();
@@ -308,4 +353,55 @@ it("resumes with the current buffer after suspension and disposes all listeners 
   harness.requestFrame.mockClear();
   harness.refresh();
   expect(harness.requestFrame).not.toHaveBeenCalled();
+});
+
+it("refreshes the current normal-buffer data after suspension", () => {
+  const harness = createHarness();
+  const { container, rerender } = render(<TerminalGutter {...harness.props} showTimestamps />);
+  harness.flush();
+  const gutter = container.firstElementChild as HTMLElement;
+  const width = gutter.style.width;
+  const content = gutter.textContent;
+
+  rerender(<TerminalGutter {...harness.props} showTimestamps suspended />);
+  harness.timestamps.set(98, 5000);
+  rerender(<TerminalGutter {...harness.props} showTimestamps />);
+  harness.flush();
+
+  expect(container.firstElementChild).toBe(gutter);
+  expect(gutter.style.visibility).toBe("");
+  expect(gutter.style.width).toBe(width);
+  expect(gutter.textContent).not.toBe(content);
+  for (const listeners of Object.values(harness.listeners)) expect(listeners.size).toBe(1);
+});
+
+it.each([
+  { showLineNumbers: true, showTimestamps: false },
+  { showLineNumbers: false, showTimestamps: true },
+  { showLineNumbers: true, showTimestamps: true },
+])("reserves initial gutter space without scheduling work while suspended (%o)", (settings) => {
+  const harness = createHarness();
+  const props = { ...harness.props, ...settings };
+  const { container, rerender } = render(<TerminalGutter {...props} suspended />);
+  const gutter = container.firstElementChild as HTMLElement;
+  expect(Number.parseFloat(gutter.style.width)).toBeGreaterThan(0);
+  expect(gutter.style.visibility).toBe("hidden");
+  harness.refresh();
+  expect(harness.requestFrame).not.toHaveBeenCalled();
+  expect(harness.buffer.getLine).not.toHaveBeenCalled();
+  for (const listeners of Object.values(harness.listeners)) expect(listeners.size).toBe(0);
+
+  rerender(<TerminalGutter {...props} />);
+  harness.flush();
+  expect(container.firstElementChild).toBe(gutter);
+  expect(gutter.style.visibility).toBe("");
+  expect(gutter.textContent).not.toBe("");
+});
+
+it.each([false, true])("omits gutter space when both columns are disabled (suspended=%s)", (suspended) => {
+  const harness = createHarness();
+  const { container } = render(
+    <TerminalGutter {...harness.props} showLineNumbers={false} showTimestamps={false} suspended={suspended} />,
+  );
+  expect(container.firstElementChild).toBeNull();
 });

@@ -1,6 +1,6 @@
-import { supports } from "@/lib/backend/runtime";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@/lib/invoke";
+import { supports } from "@/lib/backend/runtime";
+import { getRemoteStats } from "@/lib/remoteStats";
 import type { RemoteStats } from "@/types/global";
 
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -52,11 +52,7 @@ export function useRemoteStats(
 
   const fetchStats = useCallback(
     async (sessionId: string, generation: number, manual = false) => {
-      if (
-        !supports("remoteMonitoring") ||
-        !isCurrentRequest(sessionId, generation)
-      )
-        return null;
+      if (!supports("remoteMonitoring") || !isCurrentRequest(sessionId, generation)) return null;
       if (fetchingGenerationRef.current === generation) return null;
       fetchingGenerationRef.current = generation;
       if (manual) {
@@ -66,14 +62,8 @@ export function useRemoteStats(
       }
 
       try {
-        const data = await invoke<RemoteStats>("get_remote_stats", {
-          sessionId,
-        });
-        if (
-          !supports("remoteMonitoring") ||
-          !isCurrentRequest(sessionId, generation)
-        )
-          return null;
+        const data = await getRemoteStats(sessionId);
+        if (!supports("remoteMonitoring") || !isCurrentRequest(sessionId, generation)) return null;
 
         statsCacheRef.current.set(sessionId, data);
         setState((current) => ({
@@ -101,11 +91,7 @@ export function useRemoteStats(
         }
         return data;
       } catch {
-        if (
-          !supports("remoteMonitoring") ||
-          !isCurrentRequest(sessionId, generation)
-        )
-          return null;
+        if (!supports("remoteMonitoring") || !isCurrentRequest(sessionId, generation)) return null;
 
         failCountRef.current += 1;
         const clearStats = failCountRef.current >= MAX_CONSECUTIVE_FAILURES;

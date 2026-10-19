@@ -1,16 +1,29 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VncSessionPane } from "@/types/global";
 import VncPaneHost from "./VncPaneHost";
+import { createRemoteDesktopFramePatchBuffer } from "@/lib/remoteDesktopFrame";
 
-const { invokeMock, listenMock, listeners, readClipboardTextMock, writeClipboardTextMock } =
-  vi.hoisted(() => ({
-    invokeMock: vi.fn(),
-    listenMock: vi.fn(),
-    listeners: new Map<string, (event: { payload: unknown }) => void>(),
-    readClipboardTextMock: vi.fn(),
-    writeClipboardTextMock: vi.fn(),
-  }));
+const {
+  invokeMock,
+  listenMock,
+  listeners,
+  readClipboardTextMock,
+  writeClipboardTextMock,
+} = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  listenMock: vi.fn(),
+  listeners: new Map<string, (event: { payload: unknown }) => void>(),
+  readClipboardTextMock: vi.fn(),
+  writeClipboardTextMock: vi.fn(),
+}));
 
 vi.mock("@/lib/invoke", () => ({
   invoke: invokeMock,
@@ -62,14 +75,135 @@ describe("VncPaneHost", () => {
         frameChannel: expect.any(Object),
       });
     });
-    expect(listenMock).toHaveBeenCalledWith("vnc-state-vnc-session", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "vnc-state-vnc-session",
+      expect.any(Function),
+    );
+  });
+
+  it("survives StrictMode mounting, pane moves, and late frames from old owners", async () => {
+    const view = render(
+      <StrictMode>
+        <VncPaneHost pane={vncPane()} active visible />
+      </StrictMode>,
+    );
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.some(
+          ([name]) => name === "vnc_attach_frame_channel",
+        ),
+      ).toBe(true),
+    );
+    const oldChannel = invokeMock.mock.calls.find(
+      ([name]) => name === "vnc_attach_frame_channel",
+    )?.[1].frameChannel;
+    view.unmount();
+    const moved = render(
+      <VncPaneHost pane={vncPane()} active={false} visible />,
+    );
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter(
+          ([name]) => name === "vnc_attach_frame_channel",
+        ),
+      ).toHaveLength(2),
+    );
+    // An obsolete owner must not decode or update the newly mounted pane.
+    expect(() => oldChannel.onmessage(new ArrayBuffer(1))).not.toThrow();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "close_vnc_session",
+      expect.anything(),
+    );
+    moved.unmount();
+  });
+
+  it("detaches hidden Desktop panes without closing their VNC sessions", async () => {
+    const view = render(<VncPaneHost pane={vncPane()} active visible />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "vnc_attach_frame_channel",
+        expect.anything(),
+      ),
+    );
+    view.rerender(<VncPaneHost pane={vncPane()} active visible={false} />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("vnc_detach_frame_channel", {
+        sessionId: "vnc-session",
+      }),
+    );
+    view.rerender(<VncPaneHost pane={vncPane()} active={false} visible />);
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter(
+          ([name]) => name === "vnc_attach_frame_channel",
+        ),
+      ).toHaveLength(2),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "close_vnc_session",
+      expect.anything(),
+    );
+  });
+
+  it("ignores hidden data before decoding and clears desktop dimensions when the session changes", async () => {
+    const view = render(<VncPaneHost pane={vncPane()} active visible />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "vnc_attach_frame_channel",
+        expect.anything(),
+      ),
+    );
+    const channel = invokeMock.mock.calls.find(
+      ([name]) => name === "vnc_attach_frame_channel",
+    )?.[1].frameChannel;
+    view.rerender(<VncPaneHost pane={vncPane()} active visible={false} />);
+    act(() =>
+      channel.onmessage(
+        createRemoteDesktopFramePatchBuffer({
+          sequence: 1n,
+          desktopWidth: 2,
+          desktopHeight: 1,
+          x: 0,
+          y: 0,
+          width: 2,
+          height: 1,
+          stride: 8,
+          pixelFormat: "RGBA8888",
+          payload: new Uint8Array(8),
+        }),
+      ),
+    );
+    expect(screen.queryByText("2x1")).toBeNull();
+    view.rerender(
+      <VncPaneHost
+        pane={vncPane({ sessionId: "replacement" })}
+        active
+        visible
+      />,
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("vnc_attach_frame_channel", {
+        sessionId: "replacement",
+        frameChannel: expect.anything(),
+      }),
+    );
+    expect(screen.queryByText("2x1")).toBeNull();
   });
 
   it("forwards state failures", async () => {
     const onConnectionError = vi.fn();
-    render(<VncPaneHost pane={vncPane()} active visible onConnectionError={onConnectionError} />);
+    render(
+      <VncPaneHost
+        pane={vncPane()}
+        active
+        visible
+        onConnectionError={onConnectionError}
+      />,
+    );
 
-    await waitFor(() => expect(listeners.has("vnc-state-vnc-session")).toBe(true));
+    await waitFor(() =>
+      expect(listeners.has("vnc-state-vnc-session")).toBe(true),
+    );
     act(() => {
       listeners.get("vnc-state-vnc-session")?.({
         payload: {
@@ -81,7 +215,10 @@ describe("VncPaneHost", () => {
     });
 
     expect(screen.getByText("unsupported security")).not.toBeNull();
-    expect(onConnectionError).toHaveBeenCalledWith("vnc-session", "unsupported security");
+    expect(onConnectionError).toHaveBeenCalledWith(
+      "vnc-session",
+      "unsupported security",
+    );
   });
 
   it("sends keysym keyboard events only when active", async () => {
@@ -89,8 +226,11 @@ describe("VncPaneHost", () => {
     await activate();
     invokeMock.mockClear();
 
-    const root = document.querySelector('[data-remote-desktop-input-root="true"]');
-    if (!(root instanceof HTMLElement)) throw new Error("expected VNC input root");
+    const root = document.querySelector(
+      '[data-remote-desktop-input-root="true"]',
+    );
+    if (!(root instanceof HTMLElement))
+      throw new Error("expected VNC input root");
     fireEvent.keyDown(root, { key: "ArrowLeft", code: "ArrowLeft" });
     fireEvent.keyUp(root, { key: "ArrowLeft", code: "ArrowLeft" });
 
@@ -115,11 +255,17 @@ describe("VncPaneHost", () => {
     await activate();
     invokeMock.mockClear();
 
-    const root = document.querySelector('[data-remote-desktop-input-root="true"]');
-    if (!(root instanceof HTMLElement)) throw new Error("expected VNC input root");
+    const root = document.querySelector(
+      '[data-remote-desktop-input-root="true"]',
+    );
+    if (!(root instanceof HTMLElement))
+      throw new Error("expected VNC input root");
     fireEvent.keyDown(root, { key: "ArrowLeft", code: "ArrowLeft" });
 
-    expect(invokeMock).not.toHaveBeenCalledWith("vnc_input_batch", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "vnc_input_batch",
+      expect.anything(),
+    );
   });
 
   it("keeps reconnect and close controls wired", async () => {
@@ -133,23 +279,31 @@ describe("VncPaneHost", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Reconnect VNC session" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reconnect VNC session" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Close VNC session" }));
 
-    expect(invokeMock).toHaveBeenCalledWith("vnc_reconnect", { sessionId: "vnc-session" });
+    expect(invokeMock).toHaveBeenCalledWith("vnc_reconnect", {
+      sessionId: "vnc-session",
+    });
     expect(onDisconnectedCloseRequested).toHaveBeenCalledOnce();
   });
 
   it("writes remote clipboard events to the local clipboard when enabled and focused", async () => {
     render(
       <VncPaneHost
-        pane={vncPane({ display: { scaleMode: "fit", clipboardEnabled: true } })}
+        pane={vncPane({
+          display: { scaleMode: "fit", clipboardEnabled: true },
+        })}
         active
         visible
       />,
     );
     await activate();
-    await waitFor(() => expect(listeners.has("vnc-clipboard-vnc-session")).toBe(true));
+    await waitFor(() =>
+      expect(listeners.has("vnc-clipboard-vnc-session")).toBe(true),
+    );
 
     act(() => {
       listeners.get("vnc-clipboard-vnc-session")?.({
@@ -163,7 +317,9 @@ describe("VncPaneHost", () => {
   it("does not subscribe to remote clipboard events when clipboard is disabled", async () => {
     render(
       <VncPaneHost
-        pane={vncPane({ display: { scaleMode: "fit", clipboardEnabled: false } })}
+        pane={vncPane({
+          display: { scaleMode: "fit", clipboardEnabled: false },
+        })}
         active
         visible
       />,
@@ -177,7 +333,9 @@ describe("VncPaneHost", () => {
     readClipboardTextMock.mockResolvedValue("local");
     render(
       <VncPaneHost
-        pane={vncPane({ display: { scaleMode: "fit", clipboardEnabled: true } })}
+        pane={vncPane({
+          display: { scaleMode: "fit", clipboardEnabled: true },
+        })}
         active
         visible
       />,
@@ -208,12 +366,17 @@ describe("VncPaneHost", () => {
 
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(invokeMock).not.toHaveBeenCalledWith("vnc_set_clipboard_text", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "vnc_set_clipboard_text",
+      expect.anything(),
+    );
   });
 });
 
 async function activate() {
-  await waitFor(() => expect(listeners.has("vnc-state-vnc-session")).toBe(true));
+  await waitFor(() =>
+    expect(listeners.has("vnc-state-vnc-session")).toBe(true),
+  );
   act(() => {
     listeners.get("vnc-state-vnc-session")?.({
       payload: { sessionId: "vnc-session", state: "active" },

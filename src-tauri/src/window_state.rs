@@ -17,6 +17,9 @@ pub const MAIN_WINDOW_LABEL: &str = "main";
 pub const MAIN_WINDOW_PREFIX: &str = "main-";
 const SETTINGS_WINDOW_KEY: &str = "settings";
 const NEW_SESSION_WINDOW_KEY: &str = "new-session";
+// Keep the native label and IPC key stable, but remember sizes separately for the
+// classified editor so legacy narrow sizes are migrated only once.
+const CLASSIFIED_SESSION_WINDOW_STATE_KEY: &str = "new-session-classified";
 const QUICK_COMMAND_WINDOW_KEY: &str = "quick-command";
 const PROXY_WINDOW_KEY: &str = "proxy";
 const TUNNEL_WINDOW_KEY: &str = "tunnel";
@@ -121,7 +124,7 @@ impl ChildWindowStateKey {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Settings => SETTINGS_WINDOW_KEY,
-            Self::NewSession => NEW_SESSION_WINDOW_KEY,
+            Self::NewSession => CLASSIFIED_SESSION_WINDOW_STATE_KEY,
             Self::QuickCommand => QUICK_COMMAND_WINDOW_KEY,
             Self::Proxy => PROXY_WINDOW_KEY,
             Self::Tunnel => TUNNEL_WINDOW_KEY,
@@ -134,22 +137,13 @@ impl ChildWindowStateKey {
     fn default_size(self) -> (f64, f64) {
         match self {
             Self::Settings => (800.0, 560.0),
-            Self::NewSession => (520.0, 620.0),
+            Self::NewSession => (900.0, 680.0),
             Self::QuickCommand => (540.0, 640.0),
             Self::Proxy => (520.0, 560.0),
             Self::Tunnel => (680.0, 640.0),
             Self::FileEditor => (980.0, 720.0),
             Self::FilePreview => (1080.0, 760.0),
             Self::NoteEditor => (980.0, 760.0),
-        }
-    }
-
-    fn default_state(self) -> ChildWindowState {
-        let (width, height) = self.default_size();
-        ChildWindowState {
-            width,
-            height,
-            maximized: false,
         }
     }
 }
@@ -272,16 +266,65 @@ pub fn load_child_window_state(
     fallback_width: f64,
     fallback_height: f64,
 ) -> ChildWindowState {
-    load_window_state_doc()
+    restore_child_window_state(
+        &load_window_state_doc(),
+        key,
+        fallback_width,
+        fallback_height,
+    )
+}
+
+fn restore_child_window_state(
+    doc: &WindowStateDoc,
+    key: ChildWindowStateKey,
+    fallback_width: f64,
+    fallback_height: f64,
+) -> ChildWindowState {
+    let state = doc
         .children
         .get(key.as_str())
         .cloned()
+        .or_else(|| {
+            if key != ChildWindowStateKey::NewSession {
+                return None;
+            }
+            doc.children
+                .get(NEW_SESSION_WINDOW_KEY)
+                .cloned()
+                .map(|mut legacy| {
+                    // Wide custom windows already suit the new layout. Expand only
+                    // legacy narrow windows; later user-selected narrow sizes live
+                    // under the new key and are restored unchanged.
+                    if !legacy.width.is_finite() || legacy.width < 760.0 {
+                        legacy.width = 900.0;
+                        legacy.height = normalize_child_dimension(legacy.height, 680.0, 680.0);
+                    }
+                    legacy
+                })
+        })
         .unwrap_or(ChildWindowState {
             width: fallback_width,
             height: fallback_height,
             maximized: false,
         })
-        .normalized(fallback_width, fallback_height)
+        .normalized(fallback_width, fallback_height);
+    if key == ChildWindowStateKey::NewSession {
+        let (width, height) = connection_editor_size(state.width, state.height);
+        ChildWindowState {
+            width,
+            height,
+            ..state
+        }
+    } else {
+        state
+    }
+}
+
+pub(crate) fn connection_editor_size(width: f64, height: f64) -> (f64, f64) {
+    (
+        normalize_child_dimension(width, 420.0, 900.0),
+        normalize_child_dimension(height, 480.0, 680.0),
+    )
 }
 
 pub fn save_main_window_state(window: &tauri::Window) -> AppResult<()> {
@@ -393,12 +436,7 @@ fn save_child_window_state_values(
 ) -> AppResult<()> {
     storage::update_settings_doc::<WindowStateDoc, _, _>(SettingsDocKey::WindowState, |doc| {
         let (fallback_width, fallback_height) = key.default_size();
-        let mut state = doc
-            .children
-            .get(key.as_str())
-            .cloned()
-            .unwrap_or_else(|| key.default_state())
-            .normalized(fallback_width, fallback_height);
+        let mut state = restore_child_window_state(doc, key, fallback_width, fallback_height);
         state.maximized = maximized;
 
         if !maximized {
@@ -543,6 +581,98 @@ pub fn placement_to_position(placement: ChildWindowPlacement) -> Position {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn restored_editor(doc: &WindowStateDoc) -> ChildWindowState {
+        let key = ChildWindowStateKey::NewSession;
+        let (width, height) = key.default_size();
+        restore_child_window_state(doc, key, width, height)
+    }
+
+    #[test]
+    fn upgrades_legacy_narrow_editor_without_affecting_other_windows() {
+        let doc: WindowStateDoc = serde_json::from_str(
+            r#"{"children": {
+                "new-session": {"width": 520, "height": 620, "maximized": true},
+                "settings": {"width": 600, "height": 500, "maximized": false}
+            }}"#,
+        )
+        .unwrap();
+        let editor = restored_editor(&doc);
+        assert_eq!((editor.width, editor.height), (900.0, 680.0));
+        assert!(editor.maximized);
+        let settings =
+            restore_child_window_state(&doc, ChildWindowStateKey::Settings, 800.0, 560.0);
+        assert_eq!((settings.width, settings.height), (600.0, 500.0));
+    }
+
+    #[test]
+    fn preserves_legacy_wide_editor_and_taller_custom_height() {
+        let mut doc = WindowStateDoc::default();
+        doc.children.insert(
+            NEW_SESSION_WINDOW_KEY.into(),
+            ChildWindowState {
+                width: 1000.0,
+                height: 800.0,
+                maximized: false,
+            },
+        );
+        let editor = restored_editor(&doc);
+        assert_eq!((editor.width, editor.height), (1000.0, 800.0));
+        doc.children.get_mut(NEW_SESSION_WINDOW_KEY).unwrap().width = 600.0;
+        let editor = restored_editor(&doc);
+        assert_eq!((editor.width, editor.height), (900.0, 800.0));
+    }
+
+    #[test]
+    fn restores_post_upgrade_narrow_choice_instead_of_migrating_again() {
+        let mut doc = WindowStateDoc::default();
+        doc.children.insert(
+            NEW_SESSION_WINDOW_KEY.into(),
+            ChildWindowState {
+                width: 520.0,
+                height: 620.0,
+                maximized: false,
+            },
+        );
+        doc.children.insert(
+            ChildWindowStateKey::NewSession.as_str().into(),
+            ChildWindowState {
+                width: 450.0,
+                height: 500.0,
+                maximized: false,
+            },
+        );
+        // A storage round trip retains the new size key, including after restarting.
+        let doc = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        let editor = restored_editor(&doc);
+        assert_eq!((editor.width, editor.height), (450.0, 500.0));
+    }
+
+    #[test]
+    fn fresh_editor_uses_classified_layout_defaults_and_stable_ipc_key() {
+        let editor = restored_editor(&WindowStateDoc::default());
+        assert_eq!((editor.width, editor.height), (900.0, 680.0));
+        assert_eq!(
+            serde_json::to_string(&ChildWindowStateKey::NewSession).unwrap(),
+            "\"new-session\""
+        );
+    }
+
+    #[test]
+    fn connection_editor_preserves_sizes_and_clamps_legacy_small_windows() {
+        assert_eq!(connection_editor_size(520.0, 620.0), (520.0, 620.0));
+        assert_eq!(connection_editor_size(1000.0, 800.0), (1000.0, 800.0));
+        assert_eq!(connection_editor_size(360.0, 240.0), (420.0, 480.0));
+        assert_eq!(connection_editor_size(f64::NAN, 0.0), (900.0, 680.0));
+        // Other child windows retain their existing normalization limits.
+        let other = ChildWindowState {
+            width: 360.0,
+            height: 240.0,
+            maximized: false,
+        }
+        .normalized(520.0, 620.0);
+        assert_eq!((other.width, other.height), (360.0, 240.0));
+    }
 
     fn rect(x: i32, y: i32, width: u32, height: u32) -> PhysicalRect<i32, u32> {
         PhysicalRect {

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VncServerKeyVerifyRequest } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { createTerminalWindowLeaf, type TerminalWindowNode } from "@/lib/tabWindows";
+import type { TmuxSessionState } from "@/lib/tmux/types";
 import { setOwnerMainWindowLabel } from "@/lib/windowManager";
 import { useAppWindowEvents } from "./useAppWindowEvents";
 
@@ -29,6 +30,7 @@ vi.mock("@/i18n", () => ({ default: { t: (key: string) => key } }));
 function eventOptions(): Parameters<typeof useAppWindowEvents>[0] {
   return {
     addTab: vi.fn().mockReturnValue("created-tab"),
+    applyTmuxState: vi.fn(),
     replaceAppSettings: vi.fn(),
     setTerminalWindows: vi.fn(),
     queueSecurityPrompt: vi.fn(),
@@ -271,6 +273,25 @@ describe("useAppWindowEvents", () => {
     expect(mocks.setBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
   });
 
+  it("keeps tmux state events and duplicate prompt completion independent", async () => {
+    const { options } = renderEvents();
+    const state: TmuxSessionState = {
+      controlSessionId: "tmux-1",
+      exited: false,
+      windows: [],
+    };
+    await receive("tmux-session-state", state);
+    expect(options.applyTmuxState).toHaveBeenCalledExactlyOnceWith(state);
+    expect(mocks.removeBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
+
+    await receive("transfer-duplicate-resolved", {
+      requestId: "ended",
+      targetWindowLabel: "main-test",
+    });
+    expect(mocks.removeBackendTransferDuplicatePrompt).toHaveBeenCalledExactlyOnceWith("ended");
+    expect(options.applyTmuxState).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates cloud conflicts across subscription updates", async () => {
     const { options, rerender } = renderEvents();
     await receive("cloud-sync-conflict", null);
@@ -304,7 +325,7 @@ describe("useAppWindowEvents", () => {
     );
     const options = eventOptions();
     const { unmount } = renderHook(() => useAppWindowEvents(options), { wrapper: StrictMode });
-    expect(registrations).toHaveLength(36);
+    expect(registrations).toHaveLength(40);
     unmount();
     await act(async () => {
       for (const registration of registrations) registration.resolve(registration.dispose);

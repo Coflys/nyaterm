@@ -81,6 +81,7 @@ fn serial_session_thread(
     port: Box<dyn SerialPort>,
     mut reader_port: Box<dyn SerialPort>,
 ) {
+    let mut encoding = nyaterm_core::terminal_encoding::session_encoding_label(&encoding);
     let backspace_as_bs = config.backspace_mode == "ctrl_h";
     let port_writer = Arc::new(Mutex::new(port));
     let output_event = format!("terminal-output-{}", session_id);
@@ -115,7 +116,8 @@ fn serial_session_thread(
     let port_writer_reader = port_writer.clone();
     let output_reader = output.clone();
     let recording_mgr_reader = recording_mgr.clone();
-    let encoding_reader = encoding.clone();
+    let output_decoder = Arc::new(Mutex::new(TerminalOutputDecoder::new(&encoding)));
+    let output_decoder_reader = output_decoder.clone();
 
     let reader_running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let reader_flag = reader_running.clone();
@@ -123,7 +125,6 @@ fn serial_session_thread(
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         let mut zmodem_detector = ZmodemDetector::new();
-        let mut output_decoder = TerminalOutputDecoder::new(&encoding_reader);
         while reader_flag.load(std::sync::atomic::Ordering::Relaxed) {
             {
                 let (lock, cvar) = &*output_pause_reader;
@@ -205,7 +206,7 @@ fn serial_session_thread(
                                 if let Some(ref recorder) = recording_mgr_reader {
                                     recorder.write_raw_output(&sid_reader, &passthrough);
                                 }
-                                let pre = output_decoder.decode(&passthrough);
+                                let pre = output_decoder_reader.lock().unwrap().decode(&passthrough);
                                 if !pre.is_empty() {
                                     if let Some(ref recorder) = recording_mgr_reader {
                                         recorder.write_output(&sid_reader, &pre);
@@ -259,7 +260,7 @@ fn serial_session_thread(
                         }
                     };
 
-                    let mut text = output_decoder.decode(&process_raw);
+                    let mut text = output_decoder_reader.lock().unwrap().decode(&process_raw);
                     if let Ok(mut proc) = capture_for_reader.lock() {
                         if proc.has_active() {
                             text = proc.process(&text);
@@ -320,6 +321,19 @@ fn serial_session_thread(
             }
             SessionCommand::DetachRenderer => {
                 output.detach();
+            }
+            SessionCommand::GetEncoding { reply } => {
+                let _ = reply.send(encoding.clone());
+            }
+            SessionCommand::SetEncoding { encoding: requested, reply } => {
+                let result = if let Some(next) = nyaterm_core::terminal_encoding::supported_session_encoding(&requested) {
+                    output_decoder.lock().unwrap().reset(next);
+                    encoding = next.to_string();
+                    Ok(encoding.clone())
+                } else {
+                    Err(format!("Unsupported terminal encoding: {requested}"))
+                };
+                let _ = reply.send(result);
             }
             SessionCommand::Write { data, raw, .. } => {
                 if zmodem_state.lock().unwrap().is_some() || xymodem_state.lock().unwrap().is_some()
@@ -527,6 +541,7 @@ fn serial_session_thread(
                 };
                 let _ = result_tx.send(result);
             }
+            SessionCommand::TmuxCommand { .. } | SessionCommand::TmuxDetach => {}
             SessionCommand::Close => {
                 break;
             }

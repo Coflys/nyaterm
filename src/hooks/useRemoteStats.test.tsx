@@ -5,7 +5,9 @@ import { useRemoteStats } from "./useRemoteStats";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 
-vi.mock("@/lib/invoke", () => ({ invoke: mocks.invoke }));
+vi.mock("@/lib/remoteStats", () => ({
+  getRemoteStats: (sessionId: string) => mocks.invoke("get_remote_stats", { sessionId }),
+}));
 
 interface Deferred<T> {
   promise: Promise<T>;

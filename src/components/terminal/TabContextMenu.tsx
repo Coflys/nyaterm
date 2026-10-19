@@ -131,6 +131,8 @@ export default function TabContextMenu({
   const supportsDisconnect = !!activePane && isTerminalPane;
   const supportsAI = !!activePane && isTerminalPane;
   const supportsSplit = supportsSessionSpawn;
+  // Native splits remain available around a host leaf; remote splits use its tmux strip.
+  const isTmuxWindowTab = !!tab.tmux;
   const supportsSessionInfo = !!activePane?.connectionId && isTerminalPane;
   const showSessionActionsGroup =
     supportsSessionSpawn ||
@@ -149,7 +151,7 @@ export default function TabContextMenu({
     !!activePane.sessionId;
   const canDisconnect =
     supportsDisconnect && !activePane.connecting && !activePane.connectError;
-  const canSplit = supportsSplit;
+  const canSplit = supportsSplit && !isTmuxWindowTab;
   const canUseAI =
     supportsAI && !activePane.connecting && !activePane.connectError && !sftpOnly;
   const canCloseInactive = tabs.length > 1;

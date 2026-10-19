@@ -539,7 +539,9 @@ export function reconcileTerminalWindows(
   activeTabId: string | null,
   anchorTabId: string | null,
 ): TerminalWindowNode | null {
-  const tabIds = tabs.map((tab) => tab.id);
+  // tmux window tabs are data-only: they render as sub-tabs inside their
+  // host tab's container (WindTerm-style), never as top-level window tabs.
+  const tabIds = tabs.filter((tab) => !tab.tmux).map((tab) => tab.id);
   if (tabIds.length === 0) {
     return null;
   }

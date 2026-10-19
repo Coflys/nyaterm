@@ -26,6 +26,7 @@ interface CreateXTerminalHibernationControllerParams {
   terminal: Terminal;
   outputDrain: TerminalOutputDrain<{ beforeLine: number; ts: number }>;
   visibleRef: MutableRef<boolean>;
+  suspendHibernationRef?: MutableRef<boolean>;
   sessionTypeRef: MutableRef<SessionType>;
   aiCapturingRef: MutableRef<boolean>;
   zmodemActiveRef: MutableRef<boolean>;
@@ -82,6 +83,7 @@ export function createXTerminalHibernationController({
   terminal,
   outputDrain,
   visibleRef,
+  suspendHibernationRef,
   sessionTypeRef,
   aiCapturingRef,
   zmodemActiveRef,
@@ -136,6 +138,8 @@ export function createXTerminalHibernationController({
       return false;
     }
     if (sessionTypeRef.current === "Local") return false;
+    if (sessionId.includes("::pane")) return false;
+    if (suspendHibernationRef?.current) return false;
     if (!["SSH", "Telnet", "Serial"].includes(sessionTypeRef.current)) return false;
     if (terminal.buffer.active.type === "alternate") return false;
     if (showSearchBar || activeMode === "history") return false;
