@@ -1571,7 +1571,7 @@ impl NyaTermApp {
         }
     }
 
-    fn apply_terminal_effects(
+    pub(in crate::features) fn apply_terminal_effects(
         &mut self,
         session_id: &str,
         effects: TerminalEffects,
@@ -1598,7 +1598,7 @@ impl NyaTermApp {
             );
         }
         if let Some(cwd) = effects.cwd {
-            self.apply_session_cwd(session_id, cwd);
+            self.apply_session_cwd(session_id, cwd, cx);
         }
     }
 

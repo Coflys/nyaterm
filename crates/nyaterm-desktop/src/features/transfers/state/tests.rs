@@ -841,17 +841,10 @@ fn transfer_session_id_migration_preserves_reconnected_sftp_state() {
             .as_deref(),
         Some("/srv")
     );
-    assert_eq!(
-        transfer
-            .browser
-            .navigation_jobs
-            .get("new-session")
-            .map(String::as_str),
-        Some("sftp-list-1")
-    );
+    assert!(!transfer.browser.navigation_jobs.contains_key("new-session"));
     assert!(!transfer.browser.navigation_jobs.contains_key("old-session"));
     assert!(
-        transfer
+        !transfer
             .browser
             .pending_navigations
             .contains_key("sftp-list-1")

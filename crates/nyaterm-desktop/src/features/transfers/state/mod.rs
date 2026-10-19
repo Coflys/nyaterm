@@ -190,7 +190,9 @@ pub(super) struct TransferBrowserState {
     /// Latest SFTP navigation job per session; older results must not rewind the browser.
     pub(super) navigation_jobs: HashMap<String, String>,
     pub(super) pending_navigations: HashMap<String, TransferBrowserNavigationSnapshot>,
-    pub(super) auto_sync_cwd_last_at: Option<Instant>,
+    pub(super) pending_cwd_sync: bool,
+    #[cfg(test)]
+    pub(super) directory_requests: Option<Vec<(String, nyaterm_transport::RemoteFilePath)>>,
     pub(super) favorites: VecDeque<String>,
     pub(super) sort_column: TransferBrowserSortColumn,
     pub(super) sort_direction: TransferBrowserSortDirection,
@@ -366,7 +368,9 @@ impl TransferFeatureState {
                 session_cache: HashMap::new(),
                 navigation_jobs: HashMap::new(),
                 pending_navigations: HashMap::new(),
-                auto_sync_cwd_last_at: None,
+                pending_cwd_sync: false,
+                #[cfg(test)]
+                directory_requests: None,
                 favorites: VecDeque::new(),
                 sort_column: TransferBrowserSortColumn::Name,
                 sort_direction: TransferBrowserSortDirection::Ascending,
@@ -1283,24 +1287,14 @@ impl TransferFeatureState {
         }
 
         if let Some(job_id) = self.browser.navigation_jobs.remove(old_id) {
-            if let Some(replaced_job_id) = self
-                .browser
-                .navigation_jobs
-                .insert(new_id.to_string(), job_id)
-            {
-                self.browser.pending_navigations.remove(&replaced_job_id);
-            }
+            self.browser.pending_navigations.remove(&job_id);
             changed = true;
         }
         self.prune_unreferenced_browser_navigation_snapshots();
 
         for job in &mut self.queue.jobs {
             if (job.is_user_transfer()
-                || matches!(
-                    job.kind,
-                    crate::models::TransferJobKind::ListTree { .. }
-                        | crate::models::TransferJobKind::Delete { .. }
-                ))
+                || matches!(job.kind, crate::models::TransferJobKind::Delete { .. }))
                 && job.session_id.as_deref() == Some(old_id)
             {
                 job.session_id = Some(new_id.to_string());

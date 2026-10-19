@@ -637,6 +637,7 @@ impl NyaTermApp {
     }
 
     fn finish_settings_page(&mut self, cx: &mut Context<Self>) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         self.hide_secret_inputs(cx);
         self.settings.theme_designer_mut().reset();
         self.forget_text_inputs("theme.designer.");
@@ -651,6 +652,7 @@ impl NyaTermApp {
         if self.shell.finish_settings_navigation() {
             self.persist_ui_layout();
         }
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
         self.shell
             .set_status(t!("settings.settingsClosed").to_string());
         cx.notify();

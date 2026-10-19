@@ -191,6 +191,12 @@ impl NyaTermApp {
         self.flush_ai_panel_snapshot(cx);
         self.ensure_visible_notes_loaded(cx);
         self.refresh_window_render_inputs(window, cx);
+        cx.observe_window_bounds(window, |this, window, cx| {
+            let browser_was_visible = this.transfer_browser_is_visible();
+            this.refresh_window_render_inputs(window, cx);
+            this.transfer_browser_visibility_changed(browser_was_visible, cx);
+        })
+        .detach();
         self.ensure_shortcut_interceptor(cx);
         self.queue_cloud_sync_history_refresh(None, cx);
         self.queue_wallpaper_refresh(cx);
@@ -613,7 +619,9 @@ impl NyaTermApp {
                     full_window_input_layer("mobile-panel-backdrop")
                         .bg(rgba(0x00000080))
                         .on_click(cx.listener(|this, _, _, cx| {
+                            let browser_was_visible = this.transfer_browser_is_visible();
                             this.shell.close_mobile_panels();
+                            this.transfer_browser_visibility_changed(browser_was_visible, cx);
                             cx.notify();
                         })),
                 );
@@ -720,11 +728,13 @@ impl NyaTermApp {
                             .text_color(rgb(palette.text_muted)),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        let browser_was_visible = this.transfer_browser_is_visible();
                         if left {
                             this.shell.close_mobile_panel(PanelSide::Left);
                         } else {
                             this.shell.close_mobile_panel(PanelSide::Right);
                         }
+                        this.transfer_browser_visibility_changed(browser_was_visible, cx);
                         cx.notify();
                     })),
             )

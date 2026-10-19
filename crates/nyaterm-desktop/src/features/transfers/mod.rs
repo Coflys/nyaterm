@@ -1,6 +1,6 @@
 //! Transfer jobs, transfer options, path prompts and transfer widgets.
 
-mod cwd_sync_clock;
+mod cwd_sync;
 mod delete_runtime;
 mod drag_aggregate;
 mod drag_download;
@@ -207,7 +207,6 @@ impl NyaTermApp {
     }
 }
 
-pub(in crate::features) use cwd_sync_clock::TRANSFER_CWD_SYNC_POLL_INTERVAL;
 pub(in crate::features) use remote_text_editor::RemoteTextEditor;
 pub(in crate::features) use state::natural_compare_ascii;
 #[cfg(test)]

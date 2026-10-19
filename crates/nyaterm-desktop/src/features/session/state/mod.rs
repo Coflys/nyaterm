@@ -1822,6 +1822,10 @@ impl SessionFeatureState {
         self.cwds.get(session_id).map(String::as_str)
     }
 
+    pub(in crate::features) fn clear_cwd(&mut self, session_id: &str) {
+        self.cwds.remove(session_id);
+    }
+
     pub(in crate::features) fn update_cwd(&mut self, session_id: &str, cwd: String) -> bool {
         let changed = self.cwds.get(session_id) != Some(&cwd);
         self.cwds.insert(session_id.to_string(), cwd);

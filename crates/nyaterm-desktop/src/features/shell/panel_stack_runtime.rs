@@ -35,6 +35,45 @@ fn side_panel_stack_render_mode(overlay: Option<NavItem>) -> SidePanelStackRende
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn transfer_browser_is_visible(&self) -> bool {
+        if self.shell.main_mode() != MainMode::Workspace {
+            return false;
+        }
+        [PanelSide::Left, PanelSide::Right].into_iter().any(|side| {
+            if self.shell.panel_is_floating() {
+                return self.shell.panels.floating_panel(side) == Some(NavItem::Transfers);
+            }
+            let viewport_width = self.shell.viewport_size().0;
+            if !cfg!(target_os = "macos") && viewport_width > 0. {
+                let (overlay_threshold, drawer_open) = match side {
+                    PanelSide::Left => (1024., self.shell.mobile_left_panel_open()),
+                    PanelSide::Right => (768., self.shell.mobile_right_panel_open()),
+                };
+                if viewport_width < overlay_threshold && !drawer_open {
+                    return false;
+                }
+            }
+            let collapsed = match side {
+                PanelSide::Left => self.shell.panels.left_collapsed,
+                PanelSide::Right => self.shell.panels.right_collapsed,
+            };
+            !collapsed
+                && if self.shell.panels.multi_open {
+                    self.side_overlay_panel(side) == Some(NavItem::Transfers)
+                        || (self.side_overlay_panel(side).is_none()
+                            && self
+                                .side_open_panel_ids(side)
+                                .iter()
+                                .any(|id| id == NavItem::Transfers.persistence_id()))
+                } else {
+                    (match side {
+                        PanelSide::Left => self.current_left_panel(),
+                        PanelSide::Right => self.current_right_panel(),
+                    }) == Some(NavItem::Transfers)
+                }
+        })
+    }
+
     pub(in crate::features) fn is_exclusive_panel_id(id: &str) -> bool {
         EXCLUSIVE_PANEL_IDS.contains(&id)
     }
@@ -57,6 +96,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn toggle_panel_multi_open(&mut self, cx: &mut Context<Self>) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         let next = !self.shell.panels.multi_open;
         self.shell.panels.multi_open = next;
         if !self.shell.panels.open_mode.is_floating() {
@@ -104,6 +144,7 @@ impl NyaTermApp {
             "multi-open panels disabled"
         });
         self.persist_ui_layout();
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
         cx.notify();
     }
 
@@ -115,6 +156,7 @@ impl NyaTermApp {
         mode: PanelOpenMode,
         cx: &mut Context<Self>,
     ) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         if self.shell.panels.open_mode == mode {
             return;
         }
@@ -134,6 +176,7 @@ impl NyaTermApp {
             "docked panels enabled"
         });
         self.persist_ui_layout();
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
         cx.notify();
     }
 
@@ -143,6 +186,7 @@ impl NyaTermApp {
         side: PanelSide,
         cx: &mut Context<Self>,
     ) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         let next = (self.shell.panels.floating_panel(side) != Some(item)).then_some(item);
         self.shell.panels.set_floating_panel(side, next);
         self.shell.set_status(if next.is_some() {
@@ -150,6 +194,7 @@ impl NyaTermApp {
         } else {
             format!("{} floating panel closed", item.persistence_id())
         });
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
         cx.notify();
     }
 
@@ -158,8 +203,10 @@ impl NyaTermApp {
         side: PanelSide,
         cx: &mut Context<Self>,
     ) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         if self.shell.panels.floating_panel(side).is_some() {
             self.shell.panels.set_floating_panel(side, None);
+            self.transfer_browser_visibility_changed(browser_was_visible, cx);
             cx.notify();
         }
     }
@@ -297,6 +344,7 @@ impl NyaTermApp {
         item: NavItem,
         cx: &mut Context<Self>,
     ) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         if item == NavItem::Settings || item.opens_settings() {
             self.open_page(NavItem::Settings, cx);
             return;
@@ -362,6 +410,7 @@ impl NyaTermApp {
                 self.shell.set_status(format!("{} opened", item.label()));
             }
             self.persist_ui_layout();
+            self.transfer_browser_visibility_changed(browser_was_visible, cx);
             cx.notify();
             return;
         }
@@ -394,6 +443,7 @@ impl NyaTermApp {
             }
             self.shell.set_status(format!("{} focused", item.label()));
             self.persist_ui_layout();
+            self.transfer_browser_visibility_changed(browser_was_visible, cx);
             cx.notify();
             return;
         }
@@ -440,16 +490,22 @@ impl NyaTermApp {
             self.shell.set_status(format!("{} opened", item.label()));
         }
         self.persist_ui_layout();
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
         cx.notify();
-        // Revealing or hiding the browser changes the panel's cwd-poll demand.
+        // Publish the new panel visibility and browser state.
         self.flush_transfer_panel_snapshot(cx);
     }
 
-    pub(in crate::features) fn ensure_panel_in_stack(&mut self, item: NavItem) {
+    pub(in crate::features) fn ensure_panel_in_stack(
+        &mut self,
+        item: NavItem,
+        cx: &mut Context<Self>,
+    ) {
+        let browser_was_visible = self.transfer_browser_is_visible();
         self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell.navigation.selected_nav = item;
         if !self.shell.panels.multi_open {
-            self.ensure_panel_open(item);
+            self.ensure_panel_open(item, cx);
             return;
         }
         let id = item.persistence_id().to_string();
@@ -489,6 +545,7 @@ impl NyaTermApp {
             }
             None => {}
         }
+        self.transfer_browser_visibility_changed(browser_was_visible, cx);
     }
 
     pub(in crate::features) fn start_panel_stack_resize(

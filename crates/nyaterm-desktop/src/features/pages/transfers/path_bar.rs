@@ -548,11 +548,16 @@ impl NyaTermApp {
         }
     }
 
-    pub(super) fn begin_transfer_browser_path_edit(
+    pub(in crate::features) fn begin_transfer_browser_path_edit(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session_id) = self.session.active_id_owned()
+            && self.transfer.cancel_browser_auto_cwd_sync(&session_id)
+        {
+            self.transfer.defer_browser_cwd_sync();
+        }
         let path = normalized_transfer_browser_path(self.transfer.browser_view().path);
         self.transfer.begin_browser_path_edit(path);
         self.forget_text_inputs("transfer.browser.path");
@@ -572,7 +577,7 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(super) fn cancel_transfer_browser_path_edit(
+    pub(in crate::features) fn cancel_transfer_browser_path_edit(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -581,6 +586,9 @@ impl NyaTermApp {
             return;
         }
         self.transfer.cancel_browser_path_edit();
+        if self.transfer.take_pending_cwd_sync() {
+            self.sync_transfer_browser_to_cwd(crate::models::TransferCwdSyncReason::Automatic, cx);
+        }
         self.forget_text_inputs("transfer.browser.path");
         self.focus_transfer_browser_after_path_edit(window, cx);
         cx.notify();
@@ -610,7 +618,7 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(super) fn submit_transfer_browser_path_edit(
+    pub(in crate::features) fn submit_transfer_browser_path_edit(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,

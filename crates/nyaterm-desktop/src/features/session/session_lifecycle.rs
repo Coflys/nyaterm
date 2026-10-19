@@ -289,6 +289,14 @@ impl NyaTermApp {
         self.terminal.invalidate_shell_editing_session(session_id);
         self.clear_terminal_mouse_report_for_session(session_id);
         self.transfer.clear_file_clipboard_for_session(session_id);
+        let rollback = self.transfer.invalidate_browser_navigation(session_id);
+        if self.session.active_id() == Some(session_id) {
+            if let Some(snapshot) = rollback {
+                self.restore_transfer_browser_navigation(snapshot);
+            }
+            self.transfer.clear_pending_cwd_sync();
+            self.defer_transfer_panel_snapshot_flush(cx);
+        }
         self.session.remove_remote_file_service(session_id);
         let Some(update) = self.session.mark_session_disconnected(session_id) else {
             return;
@@ -362,6 +370,16 @@ impl NyaTermApp {
             .then(|| self.session.cwd(&old_id))
             .flatten()
             .and_then(nyaterm_transport::build_ssh_reconnect_cwd_command);
+        self.session.clear_cwd(&old_id);
+        if let Some(snapshot) = self.transfer.invalidate_browser_navigation(&old_id)
+            && self.session.active_id() == Some(old_id.as_str())
+        {
+            self.restore_transfer_browser_navigation(snapshot);
+        }
+        if self.session.active_id() == Some(old_id.as_str()) {
+            self.transfer.clear_pending_cwd_sync();
+            self.defer_transfer_panel_snapshot_flush(cx);
+        }
         // Tauri: write cyan reconnecting line into the buffer before recreating.
         self.terminal
             .append_existing_session_text(&old_id, RECONNECTING_BANNER);
@@ -495,6 +513,13 @@ impl NyaTermApp {
             .move_session_surface_bounds(old_id, new_id.to_string());
         self.terminal.move_search_session_state(old_id, new_id);
         self.session.replace_session_order_id(old_id, new_id);
+        self.session.clear_cwd(old_id);
+        if let Some(snapshot) = self.transfer.invalidate_browser_navigation(old_id)
+            && self.session.active_id() == Some(old_id)
+        {
+            self.restore_transfer_browser_navigation(snapshot);
+        }
+        self.transfer.replace_session_id(old_id, new_id);
         self.session.migrate_session_presentation(old_id, new_id);
 
         self.shell.replace_workspace_session_id(old_id, new_id);
@@ -502,12 +527,14 @@ impl NyaTermApp {
         self.sync_input.replace_session_id(old_id, new_id);
         if self.session.active_id() == Some(old_id) {
             self.activate_session_id(new_id, cx);
-        }
-        self.transfer.replace_session_id(old_id, new_id);
-        if self.session.active_id() == Some(new_id)
-            && self.transfer.has_browser_session_cache(new_id)
-        {
+        } else if self.session.active_id() == Some(new_id) {
             self.restore_transfer_browser_session_cache(new_id, cx);
+            if self.transfer_browser_is_visible() {
+                self.sync_transfer_browser_to_cwd(
+                    crate::models::TransferCwdSyncReason::Automatic,
+                    cx,
+                );
+            }
         }
         self.sync_workspace_split_from_active_tab();
     }

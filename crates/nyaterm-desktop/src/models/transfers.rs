@@ -10,6 +10,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransferCwdSyncReason {
+    Automatic,
+    Explicit,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TransferJobKind {
     InitialDirectory,
@@ -25,7 +31,9 @@ pub(crate) enum TransferJobKind {
         generation: u64,
     },
     ResolveHome,
-    SyncCwd,
+    SyncCwd {
+        reason: TransferCwdSyncReason,
+    },
     /// Native consumer owns the destination; there is no local target path.
     DragExport {
         remote_path: String,
@@ -266,7 +274,7 @@ impl TransferJobState {
             | TransferJobKind::TrzszUpload { file_name, .. } => file_name.clone(),
             TransferJobKind::InitialDirectory
             | TransferJobKind::ResolveHome
-            | TransferJobKind::SyncCwd => String::new(),
+            | TransferJobKind::SyncCwd { .. } => String::new(),
             TransferJobKind::ZmodemConflictProbe { remote_dir, .. } => remote_file_name(remote_dir),
         }
     }

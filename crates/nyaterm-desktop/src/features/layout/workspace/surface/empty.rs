@@ -61,7 +61,7 @@ impl NyaTermApp {
                                 temporary_ssh_label,
                                 temporary_ssh,
                                 cx.listener(|this, _, window, cx| {
-                                    this.ensure_panel_open(NavItem::Connections);
+                                    this.ensure_panel_open(NavItem::Connections, cx);
                                     this.open_temporary_ssh_link_dialog(window, cx);
                                 }),
                             ))
@@ -70,7 +70,7 @@ impl NyaTermApp {
                                 open_chat_label,
                                 open_chat,
                                 cx.listener(|this, _, window, cx| {
-                                    this.ensure_panel_open(NavItem::AiAssistant);
+                                    this.ensure_panel_open(NavItem::AiAssistant, cx);
                                     window.focus(this.ai.chat_focus(), cx);
                                     this.ai.set_panel_status("AI assistant focused");
                                     cx.notify();
