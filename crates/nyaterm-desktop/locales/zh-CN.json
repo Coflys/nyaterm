@@ -3141,6 +3141,12 @@
     "windowBelow": "在下方新建窗口",
     "windowRight": "在右侧新建窗口"
   },
+  "workspaceTabs": {
+    "closeOthers": "关闭其他标签",
+    "closeRight": "关闭右侧标签",
+    "closeGroup": "关闭分组",
+    "closeAll": "关闭全部标签"
+  },
   "tabCtx": {
     "close": "关闭会话",
     "closeAll": "关闭所有会话",

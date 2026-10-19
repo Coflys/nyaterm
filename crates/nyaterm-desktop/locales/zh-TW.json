@@ -3141,6 +3141,12 @@
     "windowBelow": "在下方新建視窗",
     "windowRight": "在右側新建視窗"
   },
+  "workspaceTabs": {
+    "closeOthers": "關閉其他分頁",
+    "closeRight": "關閉右側分頁",
+    "closeGroup": "關閉分組",
+    "closeAll": "關閉全部分頁"
+  },
   "tabCtx": {
     "close": "關閉工作階段",
     "closeAll": "關閉所有工作階段",

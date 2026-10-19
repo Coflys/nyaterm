@@ -3141,6 +3141,12 @@
     "windowBelow": "아래에 새 창",
     "windowRight": "오른쪽에 새 창"
   },
+  "workspaceTabs": {
+    "closeOthers": "다른 탭 닫기",
+    "closeRight": "오른쪽 탭 닫기",
+    "closeGroup": "그룹 닫기",
+    "closeAll": "모든 탭 닫기"
+  },
   "tabCtx": {
     "close": "닫기",
     "closeAll": "모든 세션 닫기",

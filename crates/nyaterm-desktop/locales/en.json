@@ -3141,6 +3141,12 @@
     "windowBelow": "New Window Below",
     "windowRight": "New Window Right"
   },
+  "workspaceTabs": {
+    "closeOthers": "Close Other Tabs",
+    "closeRight": "Close Tabs to the Right",
+    "closeGroup": "Close Group",
+    "closeAll": "Close All Tabs"
+  },
   "tabCtx": {
     "close": "Close",
     "closeAll": "Close All Sessions",

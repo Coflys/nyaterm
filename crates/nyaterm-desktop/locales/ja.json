@@ -3141,6 +3141,12 @@
     "windowBelow": "下に新規ウィンドウ",
     "windowRight": "右に新規ウィンドウ"
   },
+  "workspaceTabs": {
+    "closeOthers": "他のタブを閉じる",
+    "closeRight": "右側のタブを閉じる",
+    "closeGroup": "グループを閉じる",
+    "closeAll": "すべてのタブを閉じる"
+  },
   "tabCtx": {
     "close": "閉じる",
     "closeAll": "すべてのセッションを閉じる",
