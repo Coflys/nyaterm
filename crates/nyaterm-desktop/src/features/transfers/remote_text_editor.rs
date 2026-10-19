@@ -210,24 +210,8 @@ impl Render for RemoteTextEditor {
 }
 
 fn language_for_path(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("") {
-        "json" => "json",
-        "yaml" | "yml" => "yaml",
-        "toml" => "toml",
-        "rs" => "rust",
-        "py" => "python",
-        "js" | "jsx" => "javascript",
-        "ts" | "tsx" => "typescript",
-        "sh" => "bash",
-        "go" => "go",
-        "c" | "h" => "c",
-        "cpp" | "hpp" => "cpp",
-        "css" => "css",
-        "html" | "htm" => "html",
-        "xml" | "svg" => "xml",
-        "md" => "markdown",
-        _ => "plain",
-    }
+    nyaterm_core::document_language::document_language_for_path(path)
+        .map_or("plain", |language| language.id)
 }
 
 #[cfg(test)]
@@ -238,6 +222,9 @@ mod tests {
     fn remote_editor_chooses_supported_syntax_from_extension() {
         assert_eq!(language_for_path("/home/user/main.rs"), "rust");
         assert_eq!(language_for_path("/home/user/config.yaml"), "yaml");
+        assert_eq!(language_for_path("/home/user/component.tsx"), "tsx");
+        assert_eq!(language_for_path("/home/user/query.SQL"), "sql");
+        assert_eq!(language_for_path("/home/user/image.svg"), "plain");
         assert_eq!(language_for_path("/home/user/unknown.bin"), "plain");
     }
 }
