@@ -168,7 +168,7 @@ impl NyaTermApp {
     pub(in crate::features) fn multiplex_active_ssh_session_with_startup(
         &mut self,
         startup_command: Option<StartupCommandRequest>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.session.start_has_active_pending() || self.session.start_has_active_failed() {
@@ -221,6 +221,9 @@ impl NyaTermApp {
             cx,
         );
         self.shell.show_workspace();
+        if self.session.start_has_active_pending() {
+            self.focus_user_started_session_surface(SessionStartFocusTarget::Terminal, window, cx);
+        }
         cx.notify();
     }
 
@@ -320,7 +323,7 @@ impl NyaTermApp {
     pub(in crate::features) fn reconnect_session(
         &mut self,
         session_id: String,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.session.session_is_busy(&session_id) {
@@ -466,6 +469,11 @@ impl NyaTermApp {
         self.session.finish_busy_action(&old_id);
         self.session.retain_busy_actions_for_live_sessions();
         self.shell.show_workspace();
+        if self.session.active_id() == Some(old_id.as_str())
+            && self.session.start_reconnect_is_pending(&old_id)
+        {
+            self.focus_user_started_session_surface(SessionStartFocusTarget::Terminal, window, cx);
+        }
         cx.notify();
     }
 
@@ -509,12 +517,13 @@ impl NyaTermApp {
 mod tests {
     use gpui::TestAppContext;
     use nyaterm_terminal::TerminalScreen;
+    use nyaterm_transport::SshSessionConfig;
 
     use super::RECONNECTING_BANNER;
     use crate::features::test_support::{
         app_with_visible_local_session, session_focus_test_window,
     };
-    use crate::models::SessionLaunchConfig;
+    use crate::models::{SessionLaunchConfig, StartupCommandRequest};
     use crate::test_support::TestConfigDir;
 
     #[test]
@@ -586,6 +595,141 @@ mod tests {
                         .session
                         .prompt_credential_focus()
                         .is_focused(window)
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn multiplex_session_focus_handoff_survives_menu_or_dialog_dismissal() {
+        for with_startup_command in [false, true] {
+            let root = TestConfigDir::new("nyaterm-multiplex-focus");
+            let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+            let cx = session_focus_test_window(&mut cx, &app);
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let mut metadata = app.session.metadata("source").unwrap().clone();
+                    // Port zero fails locally; focus must not depend on SSH I/O.
+                    metadata.launch_config = SessionLaunchConfig::Ssh(Box::new(SshSessionConfig {
+                        host: "127.0.0.1".into(),
+                        port: 0,
+                        ..SshSessionConfig::default()
+                    }));
+                    app.session.register_session_metadata("source", metadata);
+                    window.focus(app.session.dialog_tab_actions_focus(), cx);
+
+                    if with_startup_command {
+                        app.multiplex_active_ssh_session_with_startup(
+                            Some(StartupCommandRequest {
+                                command: "pwd".into(),
+                                delay_ms: 0,
+                            }),
+                            window,
+                            cx,
+                        );
+                    } else {
+                        app.multiplex_active_ssh_session(window, cx);
+                    }
+                    assert!(app.session.start_has_active_pending());
+                    assert!(app.terminal.input_focus().is_focused(window));
+                    window.focus(app.session.dialog_tab_actions_focus(), cx);
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(app.read(cx).terminal.input_focus().is_focused(window));
+            });
+        }
+    }
+
+    #[test]
+    fn multiplex_without_an_ssh_source_preserves_existing_input_focus() {
+        for missing_source in [true, false] {
+            let root = TestConfigDir::new("nyaterm-multiplex-invalid-focus");
+            let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+            let cx = session_focus_test_window(&mut cx, &app);
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    if missing_source {
+                        app.session.clear_active_session();
+                    }
+                    window.focus(app.session.prompt_credential_focus(), cx);
+                    app.multiplex_active_ssh_session(window, cx);
+                    assert!(!app.session.start_has_active_pending());
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(
+                    app.read(cx)
+                        .session
+                        .prompt_credential_focus()
+                        .is_focused(window)
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn reconnect_focus_handoff_requires_an_active_session_and_accepted_start() {
+        for (active, valid_encoding) in [(true, true), (false, true), (true, false)] {
+            let root = TestConfigDir::new("nyaterm-reconnect-focus");
+            let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+            let cx = session_focus_test_window(&mut cx, &app);
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let mut metadata = app.session.metadata("source").unwrap().clone();
+                    let SessionLaunchConfig::Local(config) = &mut metadata.launch_config else {
+                        panic!("expected local fixture");
+                    };
+                    config.shell_path = Some(
+                        root.path()
+                            .join("missing-test-shell")
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                    if !valid_encoding {
+                        config.encoding = "invalid-test-encoding".into();
+                    }
+                    app.session.register_session_metadata("source", metadata);
+                    if !active {
+                        let metadata = app.session.metadata("source").unwrap().clone();
+                        app.session.register_session_metadata("other", metadata);
+                        app.session.select_active_session("other");
+                    }
+                    window.focus(app.session.dialog_tab_actions_focus(), cx);
+                    app.reconnect_session("source".into(), window, cx);
+                    assert_eq!(
+                        app.session.active_id(),
+                        Some(if active { "source" } else { "other" })
+                    );
+                    assert_eq!(
+                        app.session.start_reconnect_is_pending("source"),
+                        valid_encoding
+                    );
+                    assert_eq!(
+                        app.terminal.input_focus().is_focused(window),
+                        active && valid_encoding
+                    );
+                    window.focus(app.session.dialog_tab_actions_focus(), cx);
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let app = app.read(cx);
+                assert_eq!(
+                    app.terminal.input_focus().is_focused(window),
+                    active && valid_encoding
+                );
+                assert_eq!(
+                    app.session.dialog_tab_actions_focus().is_focused(window),
+                    !(active && valid_encoding)
                 );
             });
         }
