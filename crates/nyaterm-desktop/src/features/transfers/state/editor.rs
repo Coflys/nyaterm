@@ -619,7 +619,7 @@ impl TransferFeatureState {
         true
     }
 
-    pub(in crate::features::transfers) fn editor_window(&self) -> Option<NyaWindowHandle> {
+    pub(in crate::features) fn editor_window(&self) -> Option<NyaWindowHandle> {
         self.editor.window.handle()
     }
 

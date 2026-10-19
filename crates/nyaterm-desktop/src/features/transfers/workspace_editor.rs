@@ -2,7 +2,7 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, Render, Subscription, Window, div, prelude::*,
     px, rgb,
 };
-use nyaterm_ui::NyaButton;
+use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
 use super::remote_text_editor::RemoteTextEditor;
@@ -115,6 +115,12 @@ impl Render for WorkspaceEditorView {
             self.focus(window, cx);
         }
         let palette = app.read(cx).theme_palette();
+        let font_size = app
+            .read(cx)
+            .settings
+            .summary()
+            .transfer_internal_editor_font_size;
+        let font_app = app.clone();
         let (line, column) = editor.read(cx).cursor_position(cx);
         let save_id = self.id.clone();
         let reload_id = self.id.clone();
@@ -248,11 +254,11 @@ impl Render for WorkspaceEditorView {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(editor),
+                    .child(editor.clone()),
             )
             .child(
                 div()
-                    .h(px(24.))
+                    .h(px(28.))
                     .flex_none()
                     .px_3()
                     .flex()
@@ -262,6 +268,74 @@ impl Render for WorkspaceEditorView {
                     .border_t_1()
                     .border_color(rgb(palette.border))
                     .child(t!("fileEditor.lineColumn", line = line, column = column).to_string())
+                    .child(
+                        div().flex().items_center().gap_1().children(
+                            [
+                                (
+                                    "editor-font-decrease",
+                                    "−".to_string(),
+                                    t!("fileEditor.fontDecrease").to_string(),
+                                    font_size <= 8,
+                                    -1,
+                                ),
+                                (
+                                    "editor-font-increase",
+                                    "+".to_string(),
+                                    t!("fileEditor.fontIncrease").to_string(),
+                                    font_size >= 72,
+                                    1,
+                                ),
+                                (
+                                    "editor-font-reset",
+                                    t!("fileEditor.fontResetLabel").to_string(),
+                                    t!("fileEditor.fontReset").to_string(),
+                                    false,
+                                    0,
+                                ),
+                            ]
+                            .into_iter()
+                            .map(
+                                |(id, label, tooltip, disabled, delta)| {
+                                    let app = font_app.clone();
+                                    let editor = editor.clone();
+                                    let button = NyaButton::new(id, label)
+                                        .variant(NyaButtonVariant::Ghost)
+                                        .compact()
+                                        .height(px(24.))
+                                        .tooltip(tooltip)
+                                        .disabled(disabled)
+                                        .on_click(move |_, window, cx| {
+                                            app.update(cx, |app, cx| {
+                                                if delta == 0 {
+                                                    app.reset_transfer_internal_editor_font_size(
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    app.adjust_transfer_internal_editor_font_size(
+                                                        delta, cx,
+                                                    );
+                                                }
+                                            });
+                                            window.focus(&editor.read(cx).focus_handle(cx), cx);
+                                        });
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .when(delta == 1, |this| {
+                                            this.child(
+                                                div().text_xs().child(format!("{font_size} px")),
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .debug_selector(move || id.to_string())
+                                                .child(button),
+                                        )
+                                },
+                            ),
+                        ),
+                    )
                     .child(if document.loading {
                         t!("common.loading").to_string()
                     } else if document.saving {
@@ -392,6 +466,214 @@ mod tests {
             let _ = window.draw(cx);
         });
         cx.run_until_parked();
+    }
+
+    struct EditorHost {
+        app: Entity<NyaTermApp>,
+        id: String,
+    }
+
+    impl Render for EditorHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                self.app
+                    .update(cx, |app, cx| app.workspace_editor_content(&self.id, cx)),
+            )
+        }
+    }
+
+    #[test]
+    fn editor_font_controls_restore_focus_preserve_undo_and_ignore_modified_wheels() {
+        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, point, px};
+
+        for display in [
+            InternalEditorDisplay::Workspace,
+            InternalEditorDisplay::Window,
+        ] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let root = TestTempDir::new("nyaterm-editor-font-controls");
+            let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+            let (id, terminal_size) = app.update(&mut cx, |app, cx| {
+                app.sync_component_theme(cx);
+                app.begin_settings_draft(cx);
+                let mut doc = editor_document("local", "/font.txt", display);
+                doc.content = "line\n".repeat(500).into();
+                let id = doc.id.clone();
+                app.transfer.open_editor_tab(doc);
+                if display == InternalEditorDisplay::Workspace {
+                    app.open_workspace_editor_tab(&id, cx);
+                }
+                (id, app.settings.summary().terminal_font_size)
+            });
+            let host_app = app.clone();
+            let host_id = id.clone();
+            let (_, cx) = cx.add_window_view(move |window, cx| {
+                let host = cx.new(|_| EditorHost {
+                    app: host_app,
+                    id: host_id,
+                });
+                nyaterm_ui::nya_root(host, window, cx)
+            });
+            draw(cx);
+            let view = app.read_with(cx, |app, _| {
+                app.transfer.workspace_editor_view(&id).unwrap()
+            });
+            let editor = view.read_with(cx, |view, _| view.editor.clone().unwrap());
+            let state = editor.read_with(cx, |editor, _| editor.document_for_test());
+            cx.update(|window, cx| {
+                state.update(cx, |doc, cx| {
+                    doc.apply_edit("猫".into(), 11..11, window, cx)
+                })
+            });
+            draw(cx);
+            let selection = state.read_with(cx, |doc, cx| doc.selected_range(cx));
+            for (id, expected) in [
+                ("editor-font-increase", 14),
+                ("editor-font-decrease", 13),
+                ("editor-font-reset", 13),
+            ] {
+                let bounds = cx.debug_bounds(id).unwrap();
+                cx.simulate_click(bounds.center(), Modifiers::default());
+                draw(cx);
+                cx.update(|window, cx| {
+                    assert_eq!(
+                        app.read(cx)
+                            .settings
+                            .summary()
+                            .transfer_internal_editor_font_size,
+                        expected
+                    );
+                    assert_eq!(
+                        app.read(cx).settings.summary().terminal_font_size,
+                        terminal_size
+                    );
+                    assert!(editor.read(cx).focus_handle(cx).is_focused(window));
+                    assert_eq!(state.read(cx).selected_range(cx), selection);
+                });
+            }
+            // Include both boundaries, where the old bubbling handler changed
+            // the font, as well as scrolling through the middle of the document.
+            for modifiers in [
+                Modifiers::default(),
+                Modifiers {
+                    control: true,
+                    ..Modifiers::default()
+                },
+                Modifiers {
+                    platform: true,
+                    ..Modifiers::default()
+                },
+            ] {
+                for delta in [100_000., -100., -100., -100_000., -100., 100_000.] {
+                    cx.simulate_event(ScrollWheelEvent {
+                        position: point(px(120.), px(120.)),
+                        delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
+                        modifiers,
+                        ..Default::default()
+                    });
+                    draw(cx);
+                    assert_eq!(
+                        app.read_with(cx, |app, _| app
+                            .settings
+                            .summary()
+                            .transfer_internal_editor_font_size),
+                        13
+                    );
+                }
+            }
+            cx.update(|window, cx| state.update(cx, |doc, cx| doc.undo(window, cx)));
+            draw(cx);
+            assert_eq!(
+                state.read_with(cx, |doc, cx| doc.value(cx)),
+                "line\n".repeat(500)
+            );
+            if display == InternalEditorDisplay::Workspace {
+                cx.update(|window, cx| app.update(cx, |app, cx| {
+                    app.set_transfer_internal_editor_font_size(21, cx);
+                    app.execute_title_menu_command(&crate::features::layout::title_bar::definition::TitleMenuCommand::ResetZoom, window, cx);
+                    assert_eq!(app.settings.summary().transfer_internal_editor_font_size, 13);
+                    assert_eq!(app.settings.summary().terminal_font_size, terminal_size);
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn child_editor_font_shortcuts_honor_custom_bindings_without_changing_the_main_terminal() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-editor-font-shortcuts");
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+        let terminal_size = app.read_with(&cx, |app, _| app.settings.summary().terminal_font_size);
+        let (_, main_cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| WorkspaceHost { app: app.clone() });
+            nyaterm_ui::nya_root(host, window, cx)
+        });
+        let main = main_cx.update(|window, _| window.window_handle().downcast().unwrap());
+        let id = app.update(&mut cx, |app, cx| {
+            app.shell.remember_main_window(main);
+            app.ensure_shortcut_interceptor(cx);
+            app.sync_component_theme(cx);
+            app.begin_settings_draft(cx);
+            let doc = editor_document("local", "/font.txt", InternalEditorDisplay::Window);
+            let id = doc.id.clone();
+            app.transfer.open_editor_tab(doc);
+            id
+        });
+        let (_, vcx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| EditorHost {
+                app: app.clone(),
+                id: id.clone(),
+            });
+            nyaterm_ui::nya_root(host, window, cx)
+        });
+        let child = vcx.update(|window, _| window.window_handle().downcast().unwrap());
+        app.update(vcx, |app, _| app.transfer.finish_editor_window_open(child));
+        draw(vcx);
+        let primary = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        for (keys, expected) in [
+            ("equal", 14),
+            ("-", 13),
+            ("equal", 14),
+            ("0", 13),
+            ("shift-equal", 14),
+        ] {
+            vcx.simulate_keystrokes(&format!("{primary}-{keys}"));
+            draw(vcx);
+            assert_eq!(
+                app.read_with(vcx, |app, _| app
+                    .settings
+                    .summary()
+                    .transfer_internal_editor_font_size),
+                expected
+            );
+        }
+        vcx.update(|_, cx| {
+            crate::shortcuts::rebuild_keymap(
+                &std::collections::HashMap::from([("view.zoomIn".into(), "Ctrl+Alt+U".into())]),
+                cx,
+            )
+        });
+        vcx.simulate_keystrokes("ctrl-equal");
+        vcx.simulate_keystrokes("ctrl-alt-u");
+        draw(vcx);
+        assert_eq!(
+            app.read_with(vcx, |app, _| app
+                .settings
+                .summary()
+                .transfer_internal_editor_font_size),
+            15
+        );
+        assert_eq!(
+            app.read_with(vcx, |app, _| app.settings.summary().terminal_font_size),
+            terminal_size
+        );
     }
 
     #[test]

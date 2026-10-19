@@ -665,6 +665,9 @@ impl NyaTermApp {
             "transfer-upload-threads" => self.set_transfer_upload_threads(value, cx),
             "transfer-max-retries" => self.set_transfer_max_retries(value, cx),
             "transfer-buffer-size" => self.set_transfer_buffer_size(value, cx),
+            "transfer-internal-editor-font-size" => {
+                self.set_transfer_internal_editor_font_size(value.clamp(8, 72) as u16, cx)
+            }
             _ => {}
         }
     }

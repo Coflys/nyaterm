@@ -464,6 +464,13 @@ impl NyaTermApp {
         let summary = self.settings.summary().clone();
         for (id, value, min, max, step) in [
             (
+                "settings.number.transfer-internal-editor-font-size",
+                summary.transfer_internal_editor_font_size as f64,
+                8.0,
+                72.0,
+                1.0,
+            ),
+            (
                 "settings.number.transfer-download-threads",
                 summary.transfer_download_threads as f64,
                 1.0,

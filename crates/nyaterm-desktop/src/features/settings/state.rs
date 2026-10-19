@@ -752,15 +752,23 @@ impl SettingsFeatureState {
         self.summary.transfer_internal_editor_display = display;
     }
 
+    pub(in crate::features) fn set_transfer_internal_editor_font_size(
+        &mut self,
+        size: u16,
+    ) -> bool {
+        let next = size.clamp(8, 72);
+        let changed = next != self.summary.transfer_internal_editor_font_size;
+        self.summary.transfer_internal_editor_font_size = next;
+        changed
+    }
+
     pub(in crate::features) fn adjust_transfer_internal_editor_font_size(
         &mut self,
         delta: i16,
     ) -> bool {
-        let current = self.summary.transfer_internal_editor_font_size as i16;
-        let next = current.saturating_add(delta).clamp(8, 72) as u16;
-        let changed = next != self.summary.transfer_internal_editor_font_size;
-        self.summary.transfer_internal_editor_font_size = next;
-        changed
+        let next = (i32::from(self.summary.transfer_internal_editor_font_size) + i32::from(delta))
+            .clamp(8, 72) as u16;
+        self.set_transfer_internal_editor_font_size(next)
     }
 
     pub(in crate::features) fn toggle_transfer_ask_save_location(&mut self) {
@@ -1965,6 +1973,14 @@ mod tests {
         assert!(!state.adjust_transfer_internal_editor_font_size(1));
         assert!(state.adjust_transfer_internal_editor_font_size(-100));
         assert_eq!(state.summary().transfer_internal_editor_font_size, 8);
+        assert!(!state.set_transfer_internal_editor_font_size(0));
+        assert!(state.set_transfer_internal_editor_font_size(u16::MAX));
+        assert_eq!(state.summary().transfer_internal_editor_font_size, 72);
+        assert!(!state.set_transfer_internal_editor_font_size(72));
+        assert!(state.set_transfer_internal_editor_font_size(
+            nyaterm_core::models::settings::default_internal_editor_font_size()
+        ));
+        assert_eq!(state.summary().transfer_internal_editor_font_size, 13);
     }
 
     #[test]

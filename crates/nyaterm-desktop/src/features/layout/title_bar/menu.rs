@@ -83,6 +83,10 @@ impl NyaTermApp {
                     self.adjust_transfer_internal_editor_font_size(-1, cx);
                     return;
                 }
+                TitleMenuCommand::ResetZoom => {
+                    self.reset_transfer_internal_editor_font_size(cx);
+                    return;
+                }
                 _ => {}
             }
         }

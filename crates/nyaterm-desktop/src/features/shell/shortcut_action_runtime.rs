@@ -37,10 +37,20 @@ impl NyaTermApp {
             let handled = app
                 .update(cx, |this, cx| {
                     if this.settings.keybinding_recording_id().is_some()
-                        || this.shell.main_window().is_none_or(|main| {
-                            main.window_id() != window.window_handle().window_id()
-                        })
+                        || this.security.screen_locked()
                     {
+                        return false;
+                    }
+                    let window_id = window.window_handle().window_id();
+                    let editor_window = this
+                        .transfer
+                        .editor_window()
+                        .is_some_and(|editor| editor.window_id() == window_id);
+                    let main_window = this
+                        .shell
+                        .main_window()
+                        .is_some_and(|main| main.window_id() == window_id);
+                    if !main_window && !editor_window {
                         return false;
                     }
                     let Some(invocation) = crate::shortcuts::resolve_shortcut_invocation(
@@ -50,6 +60,11 @@ impl NyaTermApp {
                     ) else {
                         return false;
                     };
+                    // The child editor has no workspace keymap. Resolve only its
+                    // font commands here, without consulting the main window tab.
+                    if editor_window {
+                        return this.execute_editor_font_shortcut(invocation.id, cx);
+                    }
                     if !shortcut_interceptor_dispatches(invocation.id) {
                         return false;
                     }
@@ -61,6 +76,19 @@ impl NyaTermApp {
             }
         });
         self.shell.runtime.shortcut_interceptor = Some(subscription);
+    }
+
+    fn execute_editor_font_shortcut(&mut self, id: ShortcutId, cx: &mut Context<Self>) -> bool {
+        if self.security.screen_locked() {
+            return false;
+        }
+        match id {
+            ShortcutId::ZoomIn => self.adjust_transfer_internal_editor_font_size(1, cx),
+            ShortcutId::ZoomOut => self.adjust_transfer_internal_editor_font_size(-1, cx),
+            ShortcutId::ResetZoom => self.reset_transfer_internal_editor_font_size(cx),
+            _ => return false,
+        }
+        true
     }
 
     pub(in crate::features) fn execute_shortcut_invocation(

@@ -739,7 +739,7 @@ fn default_terminal_keep_alive_mode() -> String {
     "compatible".to_string()
 }
 
-fn default_internal_editor_font_size() -> u16 {
+pub fn default_internal_editor_font_size() -> u16 {
     13
 }
 

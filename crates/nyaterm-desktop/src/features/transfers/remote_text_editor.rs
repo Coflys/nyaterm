@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    Render, ScrollDelta, ScrollWheelEvent, Subscription, Window, div, prelude::*, px,
+    Render, ScrollWheelEvent, Subscription, Window, div, prelude::*, px,
 };
 use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
 use nyaterm_ui::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
@@ -187,22 +187,8 @@ impl Render for RemoteTextEditor {
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
                 let _ = this.app.update(cx, |app, _| app.mark_user_activity());
             }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
                 let _ = this.app.update(cx, |app, _| app.mark_user_activity());
-                if !event.modifiers.control && !event.modifiers.platform {
-                    return;
-                }
-                let delta_y = match event.delta {
-                    ScrollDelta::Pixels(delta) => f32::from(delta.y),
-                    ScrollDelta::Lines(delta) => delta.y,
-                };
-                if delta_y != 0.0 {
-                    let step = if delta_y < 0.0 { 1 } else { -1 };
-                    let _ = this.app.update(cx, |app, cx| {
-                        app.adjust_transfer_internal_editor_font_size(step, cx);
-                    });
-                    cx.stop_propagation();
-                }
             }))
             .child(NyaDocumentEditor::new(&self.document))
             .into_any_element()
