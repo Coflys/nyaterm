@@ -1050,6 +1050,10 @@
     "somethingWentWrong": "出现错误"
   },
   "fileEditor": {
+    "fontDecrease": "缩小编辑器字号",
+    "fontIncrease": "放大编辑器字号",
+    "fontReset": "恢复默认字号 (13 px)",
+    "fontResetLabel": "恢复默认",
     "backupCleanupWarning": "文件已保存，但无法删除备份：%{path}",
     "bytes": "字节",
     "clearSearch": "清除搜索",
@@ -2188,6 +2192,8 @@
     "unread": "未读"
   },
   "settings": {
+    "internalEditorFontSize": "内置编辑器字号 (px)",
+    "internalEditorFontSizeDesc": "适用于所有内置文件编辑器；滚轮仅用于滚动。",
     "windowBackgroundOpacityDesc": "壁纸和内容背景下方的主题色着色层。数值越高，桌面越不明显。",
     "windowBackgroundOpacity": "窗口背景不透明度",
     "windowMaterialFallback": "当前环境无法使用所选材质，已回退为不透明背景，原有选择仍保留。",

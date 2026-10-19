@@ -1050,6 +1050,10 @@
     "somethingWentWrong": "Something went wrong"
   },
   "fileEditor": {
+    "fontDecrease": "Decrease editor font size",
+    "fontIncrease": "Increase editor font size",
+    "fontReset": "Reset font size (13 px)",
+    "fontResetLabel": "Reset",
     "backupCleanupWarning": "File saved, but the backup could not be removed: %{path}",
     "bytes": "bytes",
     "clearSearch": "Clear search",
@@ -2188,6 +2192,8 @@
     "unread": "Unread"
   },
   "settings": {
+    "internalEditorFontSize": "Built-in editor font size (px)",
+    "internalEditorFontSizeDesc": "Applies to all built-in file editors; the mouse wheel only scrolls.",
     "windowBackgroundOpacityDesc": "Theme color tint beneath the wallpaper and content backgrounds. Higher values obscure more of the desktop.",
     "windowBackgroundOpacity": "Window Background Opacity",
     "windowMaterialFallback": "The selected material is unavailable here. An opaque background is being used; your preference is retained.",

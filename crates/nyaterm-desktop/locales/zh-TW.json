@@ -1050,6 +1050,10 @@
     "somethingWentWrong": "出現錯誤"
   },
   "fileEditor": {
+    "fontDecrease": "縮小編輯器字級",
+    "fontIncrease": "放大編輯器字級",
+    "fontReset": "還原預設字級 (13 px)",
+    "fontResetLabel": "還原預設",
     "backupCleanupWarning": "檔案已儲存，但無法刪除備份：%{path}",
     "bytes": "位元組",
     "clearSearch": "清除搜尋",
@@ -2188,6 +2192,8 @@
     "unread": "未讀"
   },
   "settings": {
+    "internalEditorFontSize": "內建編輯器字級 (px)",
+    "internalEditorFontSizeDesc": "套用至所有內建檔案編輯器；滾輪僅用於捲動。",
     "windowBackgroundOpacityDesc": "桌布和內容背景下方的佈景主題著色層。數值越高，桌面越不明顯。",
     "windowBackgroundOpacity": "視窗背景不透明度",
     "windowMaterialFallback": "目前環境無法使用所選材質，已退回不透明背景，原有選擇仍保留。",

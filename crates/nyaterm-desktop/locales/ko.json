@@ -1050,6 +1050,10 @@
     "somethingWentWrong": "문제가 발생했습니다"
   },
   "fileEditor": {
+    "fontDecrease": "편집기 글꼴 축소",
+    "fontIncrease": "편집기 글꼴 확대",
+    "fontReset": "기본 글꼴 크기로 복원 (13 px)",
+    "fontResetLabel": "기본값",
     "backupCleanupWarning": "파일은 저장되었지만 백업을 삭제하지 못했습니다: %{path}",
     "bytes": "바이트",
     "clearSearch": "검색 지우기",
@@ -2188,6 +2192,8 @@
     "unread": "읽지 않음"
   },
   "settings": {
+    "internalEditorFontSize": "내장 편집기 글꼴 크기 (px)",
+    "internalEditorFontSizeDesc": "모든 내장 파일 편집기에 적용됩니다. 마우스 휠은 스크롤에만 사용됩니다.",
     "windowBackgroundOpacityDesc": "배경 이미지와 콘텐츠 배경 아래의 테마 색상 농도입니다. 값이 높을수록 바탕 화면이 덜 보입니다.",
     "windowBackgroundOpacity": "창 배경 불투명도",
     "windowMaterialFallback": "이 환경에서는 선택한 재질을 사용할 수 없어 불투명 배경을 사용합니다. 선택한 설정은 유지됩니다.",

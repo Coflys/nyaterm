@@ -1050,6 +1050,10 @@
     "somethingWentWrong": "問題が発生しました"
   },
   "fileEditor": {
+    "fontDecrease": "文字サイズを縮小",
+    "fontIncrease": "文字サイズを拡大",
+    "fontReset": "既定の文字サイズに戻す (13 px)",
+    "fontResetLabel": "既定に戻す",
     "backupCleanupWarning": "ファイルは保存されましたが、バックアップを削除できませんでした: %{path}",
     "bytes": "バイト",
     "clearSearch": "検索をクリア",
@@ -2188,6 +2192,8 @@
     "unread": "未読"
   },
   "settings": {
+    "internalEditorFontSize": "内蔵エディターの文字サイズ (px)",
+    "internalEditorFontSizeDesc": "すべての内蔵ファイルエディターに適用されます。ホイールはスクロールのみに使用します。",
     "windowBackgroundOpacityDesc": "壁紙とコンテンツ背景の下にあるテーマ色の濃さです。値を上げるとデスクトップが見えにくくなります。",
     "windowBackgroundOpacity": "ウィンドウ背景の不透明度",
     "windowMaterialFallback": "この環境では選択した素材を使用できないため、不透明な背景を使用しています。設定は保持されます。",

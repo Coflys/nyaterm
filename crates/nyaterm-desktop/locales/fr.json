@@ -1050,6 +1050,10 @@
     "somethingWentWrong": "Une erreur s'est produite"
   },
   "fileEditor": {
+    "fontDecrease": "Réduire la taille de police",
+    "fontIncrease": "Augmenter la taille de police",
+    "fontReset": "Rétablir la taille par défaut (13 px)",
+    "fontResetLabel": "Rétablir",
     "backupCleanupWarning": "Fichier enregistré, mais la sauvegarde n'a pas pu être supprimée : %{path}",
     "bytes": "octets",
     "clearSearch": "Effacer la recherche",
@@ -2188,6 +2192,8 @@
     "unread": "Non lu"
   },
   "settings": {
+    "internalEditorFontSize": "Taille de police de l’éditeur intégré (px)",
+    "internalEditorFontSizeDesc": "S’applique à tous les éditeurs de fichiers intégrés ; la molette sert uniquement au défilement.",
     "windowBackgroundOpacityDesc": "Teinte du thème sous le papier peint et les surfaces. Une valeur élevée masque davantage le bureau.",
     "windowBackgroundOpacity": "Opacité du fond de la fenêtre",
     "windowMaterialFallback": "Le matériau sélectionné est indisponible ici. Un fond opaque est utilisé et votre préférence est conservée.",
