@@ -3,7 +3,7 @@ use gpui::{
     Pixels, Point, PointerCancelEvent, Styled as _, Window, canvas,
 };
 
-use super::tab_mouse::SessionTabDragPayload;
+use super::tab_mouse::WorkspaceTabDragPayload;
 use crate::app_shell::tab_drag::{TabDragSource, release_at, screen_bounds};
 use crate::features::NyaTermApp;
 
@@ -13,7 +13,7 @@ mod tests;
 impl NyaTermApp {
     pub(in crate::features) fn drop_session_tab_on_strip(
         &mut self,
-        payload: &SessionTabDragPayload,
+        payload: &WorkspaceTabDragPayload,
         group: &Option<String>,
         cx: &mut Context<Self>,
     ) {
@@ -24,13 +24,13 @@ impl NyaTermApp {
         if payload.source_workspace_id == self.workspace_id {
             if let Some(group) = group {
                 self.dock_tab_on_terminal_window_leaf(
-                    payload.session_id.clone(),
+                    payload.tab_id.layout_key(),
                     group.clone(),
                     crate::models::TabDockZone::Center,
                     cx,
                 );
             } else {
-                self.reorder_session_to_end(payload.session_id.clone(), cx);
+                self.reorder_session_to_end(payload.tab_id.layout_key(), cx);
             }
         } else {
             self.request_tab_tree_move(
@@ -49,7 +49,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn commit_session_tab_preview(
         &mut self,
-        payload: &SessionTabDragPayload,
+        payload: &WorkspaceTabDragPayload,
         group: &Option<String>,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -59,7 +59,7 @@ impl NyaTermApp {
         let motion = self.shell.tab_strip_motion(group.clone());
         let preview = motion
             .borrow()
-            .preview(&payload.session_id)
+            .preview(&payload.tab_id.layout_key())
             .map(<[String]>::to_vec);
         let Some(preview) = preview else {
             // Membership changed or measurement was incomplete: a stale
@@ -68,15 +68,12 @@ impl NyaTermApp {
             return true;
         };
         let live = if let Some(group) = group {
-            self.terminal
+            self.shell
                 .terminal_group_tabs(group)
                 .map(|(ids, _)| ids)
                 .unwrap_or_default()
         } else {
-            self.ordered_tab_sessions()
-                .into_iter()
-                .map(|session| session.id)
-                .collect()
+            self.workspace_tab_ids()
         };
         let preview = preview
             .into_iter()
@@ -86,7 +83,10 @@ impl NyaTermApp {
             self.clear_session_tab_drag(cx);
             return true;
         }
-        let Some(index) = preview.iter().position(|id| id == &payload.session_id) else {
+        let Some(index) = preview
+            .iter()
+            .position(|id| id == &payload.tab_id.layout_key())
+        else {
             self.clear_session_tab_drag(cx);
             return true;
         };
@@ -100,10 +100,10 @@ impl NyaTermApp {
         }
         motion.borrow_mut().finish(std::time::Instant::now());
         if let Some(next) = preview.get(index + 1) {
-            self.reorder_session_relative(payload.session_id.clone(), next.clone(), false, cx);
+            self.reorder_session_relative(payload.tab_id.layout_key(), next.clone(), false, cx);
         } else if index > 0 {
             self.reorder_session_relative(
-                payload.session_id.clone(),
+                payload.tab_id.layout_key(),
                 preview[index - 1].clone(),
                 true,
                 cx,
@@ -137,7 +137,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn begin_session_tab_drag(
         &mut self,
-        payload: &SessionTabDragPayload,
+        payload: &WorkspaceTabDragPayload,
         grab_offset: Point<Pixels>,
         window: &Window,
         cx: &mut Context<Self>,
@@ -145,7 +145,11 @@ impl NyaTermApp {
         self.shell
             .tab_strip_motion(payload.source_group_id.clone())
             .borrow_mut()
-            .begin(&payload.session_id, f32::from(grab_offset.x));
+            .begin(&payload.tab_id.layout_key(), f32::from(grab_offset.x));
+        if matches!(payload.tab_id, crate::models::WorkspaceTabId::Editor(_)) {
+            self.update_session_tab_drag(payload.tab_id.layout_key(), cx);
+            return;
+        }
         // The new workspace has one strip tab. Include the strip's offset in
         // the window so its first tab, rather than the window corner, follows
         // the grab point (including the sidebar and title-bar space).
@@ -164,12 +168,12 @@ impl NyaTermApp {
                 });
             });
         }
-        self.update_session_tab_drag(payload.session_id.clone(), cx);
+        self.update_session_tab_drag(payload.tab_id.layout_key(), cx);
     }
 
     pub(in crate::features) fn accept_session_tab_drop(
         &self,
-        payload: &SessionTabDragPayload,
+        payload: &WorkspaceTabDragPayload,
         cx: &mut Context<Self>,
     ) {
         if let Some(controller) = &self.desktop_controller {

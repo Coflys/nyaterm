@@ -910,7 +910,7 @@ impl NyaTermApp {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        self.terminal.clear_terminal_file_drop_hover();
+        self.shell.clear_terminal_file_drop_hover();
         if session_id.is_empty() || paths.is_empty() {
             cx.notify();
             return;
@@ -1005,7 +1005,7 @@ impl NyaTermApp {
         session_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal.set_terminal_file_drop_hover(session_id) {
+        if self.shell.set_terminal_file_drop_hover(session_id) {
             cx.notify();
         }
         // A drag can end without a drop on this element, and only `has_active_drag`
@@ -1019,7 +1019,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self
-            .terminal
+            .shell
             .clear_terminal_file_drop_hover_for_session(session_id)
         {
             cx.notify();

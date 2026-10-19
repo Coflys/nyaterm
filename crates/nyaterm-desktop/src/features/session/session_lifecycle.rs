@@ -523,7 +523,7 @@ impl NyaTermApp {
         self.session.migrate_session_presentation(old_id, new_id);
 
         self.shell.replace_workspace_session_id(old_id, new_id);
-        self.terminal.replace_terminal_window_tab_id(old_id, new_id);
+        self.shell.replace_terminal_window_tab_id(old_id, new_id);
         self.sync_input.replace_session_id(old_id, new_id);
         if self.session.active_id() == Some(old_id) {
             self.activate_session_id(new_id, cx);

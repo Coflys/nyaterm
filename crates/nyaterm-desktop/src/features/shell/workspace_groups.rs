@@ -1,7 +1,6 @@
 use crate::features::NyaTermApp;
 use crate::models::TerminalWindowNode;
 use gpui::{Context, Window};
-use nyaterm_transport::SessionInfo;
 
 enum GroupTabTarget {
     Session(String),
@@ -15,11 +14,8 @@ impl NyaTermApp {
         let belongs = |placement: Option<crate::features::session::SessionStartTabPlacement>| {
             group.is_none()
                 || placement
-                    .and_then(|p| {
-                        self.terminal
-                            .terminal_start_display_group(p.request_sequence)
-                    })
-                    .or_else(|| self.terminal.first_terminal_group())
+                    .and_then(|p| self.shell.terminal_start_display_group(p.request_sequence))
+                    .or_else(|| self.shell.first_terminal_group())
                     == group
         };
         let mut transient = self
@@ -52,20 +48,21 @@ impl NyaTermApp {
         transient.sort_by_key(|(key, _)| *key);
         let mut transient = transient.into_iter().peekable();
         let mut targets = Vec::new();
-        for (index, session) in self
-            .active_terminal_group_sessions()
-            .into_iter()
-            .enumerate()
-        {
+        let tabs = group
+            .as_deref()
+            .and_then(|group| self.shell.terminal_group_tabs(group))
+            .map(|(tabs, _)| tabs)
+            .unwrap_or_else(|| self.workspace_tab_ids());
+        for (index, id) in tabs.into_iter().enumerate() {
             let key = self
                 .session
-                .session_start_tab_placement(&session.id)
+                .session_start_tab_placement(&id)
                 .map(|p| (p.insert_index, p.request_sequence))
                 .unwrap_or((index, u64::MAX));
             while transient.peek().is_some_and(|(next, _)| *next < key) {
                 targets.push(transient.next().unwrap().1);
             }
-            targets.push(GroupTabTarget::Session(session.id));
+            targets.push(GroupTabTarget::Session(id));
         }
         targets.extend(transient.map(|(_, target)| target));
         targets
@@ -103,7 +100,7 @@ impl NyaTermApp {
                 GroupTabTarget::Session(id) => {
                     !self.session.start_has_active_pending()
                         && !self.session.start_has_active_failed()
-                        && self.session.active_id() == Some(id.as_str())
+                        && self.active_workspace_tab().as_deref() == Some(id.as_str())
                 }
                 GroupTabTarget::Pending(id) | GroupTabTarget::Failed(id) => {
                     self.session.start_request_is_active(id)
@@ -121,7 +118,7 @@ impl NyaTermApp {
         group: &str,
         direction: crate::models::WorkspaceSplitDirection,
     ) -> bool {
-        let Some(bounds) = self.terminal.terminal_split_bounds(group) else {
+        let Some(bounds) = self.shell.terminal_split_bounds(group) else {
             return true;
         };
         match direction {
@@ -140,7 +137,7 @@ impl NyaTermApp {
             .filter(|(id, _)| self.session.start_request_is_active(id))
             .find_map(|(_, pending)| {
                 pending.tab_placement.and_then(|placement| {
-                    self.terminal
+                    self.shell
                         .terminal_start_display_group(placement.request_sequence)
                 })
             })
@@ -150,28 +147,23 @@ impl NyaTermApp {
                     .filter(|(id, _)| self.session.start_request_is_active(id))
                     .find_map(|(_, failed)| {
                         failed.pending.tab_placement.and_then(|placement| {
-                            self.terminal
+                            self.shell
                                 .terminal_start_display_group(placement.request_sequence)
                         })
                     })
             })
             .or_else(|| {
+                self.shell
+                    .workspace
+                    .focused_group
+                    .clone()
+                    .filter(|group| self.shell.terminal_window_has_leaf(group))
+            })
+            .or_else(|| {
                 self.session
                     .active_id()
-                    .and_then(|id| self.terminal.terminal_group_for_tab(id))
+                    .and_then(|id| self.shell.terminal_group_for_tab(id))
             })
-    }
-
-    pub(in crate::features) fn active_terminal_group_sessions(&self) -> Vec<SessionInfo> {
-        if let Some(group) = self.current_terminal_group()
-            && let Some((tabs, _)) = self.terminal.terminal_group_tabs(&group)
-        {
-            return tabs
-                .iter()
-                .filter_map(|id| self.session.session_info(id))
-                .collect();
-        }
-        self.ordered_tab_sessions()
     }
 
     pub(crate) fn focus_terminal_session(
@@ -180,6 +172,14 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let crate::models::WorkspaceTabId::Editor(id) =
+            crate::models::WorkspaceTabId::from_layout_key(session)
+        {
+            if let Some(view) = self.transfer.workspace_editor_view(&id) {
+                view.update(cx, |view, cx| view.focus(window, cx));
+            }
+            return;
+        }
         if self.remote_desktop.is_session(session) {
             window.focus(self.remote_desktop.focus(), cx);
         } else {
@@ -193,7 +193,7 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(root) = self.terminal.terminal_window_tree() else {
+        let Some(root) = self.shell.terminal_window_tree() else {
             return;
         };
         let groups = root.leaf_ids();
@@ -205,7 +205,7 @@ impl NyaTermApp {
             .and_then(|id| groups.iter().position(|group| group == &id))
             .unwrap_or(0);
         let next = (index as isize + offset).rem_euclid(groups.len() as isize) as usize;
-        if let Some((_, Some(tab))) = self.terminal.terminal_group_tabs(&groups[next]) {
+        if let Some((_, Some(tab))) = self.shell.terminal_group_tabs(&groups[next]) {
             self.select_session(tab.clone(), cx);
             self.focus_terminal_session(&tab, window, cx);
         }
@@ -217,21 +217,21 @@ impl NyaTermApp {
         if !self.session.restore_is_complete()
             || !self.shell.workspace.pane_layout_restored
             || self.shell.workspace.pane_layout_loading
-            || !self.terminal.terminal_windows_restore_is_complete()
+            || !self.shell.terminal_windows_restore_is_complete()
         {
             return false;
         }
         if self.shell.workspace.pane_roots.is_empty() {
             return true;
         }
-        let active = self.session.active_id_owned();
+        let active = self.active_workspace_tab();
         let ordered = self
             .ordered_tab_sessions()
             .into_iter()
             .map(|s| s.id)
             .collect::<Vec<_>>();
         let mut root = self
-            .terminal
+            .shell
             .terminal_window_tree()
             .unwrap_or_else(|| TerminalWindowNode::leaf(ordered.clone(), active.clone()));
         let secondary = self
@@ -257,11 +257,21 @@ impl NyaTermApp {
                 properties.push((tab, panes.session_ids()));
             }
         }
-        let mut actual = root.collect_tab_ids();
+        let mut actual = root
+            .collect_tab_ids()
+            .into_iter()
+            .filter(|key| {
+                matches!(
+                    crate::models::WorkspaceTabId::from_layout_key(key),
+                    crate::models::WorkspaceTabId::Session(_)
+                )
+            })
+            .collect::<Vec<_>>();
         let mut expected = self
             .session
             .ordered_sessions()
             .into_iter()
+            .filter(|s| !self.shell.session_tab_is_hidden(&s.id))
             .map(|s| s.id)
             .collect::<Vec<_>>();
         actual.sort();
@@ -288,7 +298,7 @@ impl NyaTermApp {
         if let Some(active) = active {
             root.set_active_tab(&active);
         }
-        self.terminal.restore_terminal_window_tree(Some(root));
+        self.shell.restore_terminal_window_tree(Some(root));
         self.shell.workspace.pane_roots.clear();
         self.shell.workspace.tab_owner.clear();
         self.shell.workspace.split = None;
@@ -345,7 +355,7 @@ mod tests {
         let (app, _root) = fixture(&mut cx);
         app.update(&mut cx, |app, cx| {
             app.apply_smart_split(SmartSplitMode::Vertical, cx);
-            let before = app.terminal.terminal_window_tree();
+            let before = app.shell.terminal_window_tree();
             let group = app.current_terminal_group().unwrap();
             let options = app.prepare_session_start_options(SavedConnectionStartOptions::default());
             app.session
@@ -355,7 +365,7 @@ mod tests {
             assert!(app.visible_terminal_session_ids().contains(&"b"));
             app.session.simulate_start_failure("pending");
             assert_eq!(app.current_terminal_group(), Some(group));
-            assert_eq!(app.terminal.terminal_window_tree(), before);
+            assert_eq!(app.shell.terminal_window_tree(), before);
             app.select_relative_session(1, cx);
             assert_eq!(app.session.active_id(), Some("a"));
             assert!(!app.session.start_has_active_failed());
@@ -376,9 +386,9 @@ mod tests {
             let original = app.current_terminal_group().unwrap();
             let options = app.prepare_session_start_options(SavedConnectionStartOptions::default());
             app.close_session("a".into(), cx);
-            assert!(!app.terminal.terminal_window_has_leaf(&original));
+            assert!(!app.shell.terminal_window_has_leaf(&original));
             assert_eq!(
-                app.terminal
+                app.shell
                     .terminal_start_group(options.tab_placement.unwrap().request_sequence),
                 Some(original.as_str())
             );
@@ -395,13 +405,13 @@ mod tests {
                 options.tab_placement,
                 None,
             );
-            let before = app.terminal.terminal_window_tree();
+            let before = app.shell.terminal_window_tree();
             app.apply_workspace_split_for_duplicate(
                 cx,
                 Some((WorkspaceSplitDirection::Horizontal, "a".into())),
                 "new",
             );
-            assert_eq!(app.terminal.terminal_window_tree(), before);
+            assert_eq!(app.shell.terminal_window_tree(), before);
             assert!(app.session.has_session("new"));
         });
     }
@@ -425,7 +435,7 @@ mod tests {
             assert_eq!(serialized[0].title, app.session.display_name("c").unwrap());
             app.apply_smart_split(SmartSplitMode::Auto, cx);
             app.unsplit_workspace(cx);
-            assert_eq!(app.terminal.terminal_window_tab_ids(), ["c", "a", "b"]);
+            assert_eq!(app.shell.terminal_window_tab_ids(), ["c", "a", "b"]);
         });
     }
 
@@ -453,15 +463,11 @@ mod tests {
             );
             assert_eq!(app.session.active_id(), Some("b"));
             assert_eq!(
-                app.terminal
-                    .terminal_group_tabs(&group)
-                    .unwrap()
-                    .1
-                    .as_deref(),
+                app.shell.terminal_group_tabs(&group).unwrap().1.as_deref(),
                 Some("b")
             );
             assert_eq!(app.visible_terminal_session_ids(), ["b"]);
-            assert_eq!(app.terminal.terminal_group_for_tab("new"), Some(group));
+            assert_eq!(app.shell.terminal_group_for_tab("new"), Some(group));
         });
     }
 
@@ -483,7 +489,7 @@ mod tests {
         app.update(cx, |app, _| {
             app.session.mark_restore_complete();
             app.shell.set_workspace_pane_layout_restored(true);
-            app.terminal.complete_terminal_windows_restore();
+            app.shell.complete_terminal_windows_restore();
             app.shell.show_workspace();
             for id in ["a", "b", "c"] {
                 register(app, id);
@@ -515,7 +521,7 @@ mod tests {
         let (app, _root) = fixture(&mut cx);
         app.update(&mut cx, |app, cx| {
             app.apply_smart_split(SmartSplitMode::Vertical, cx);
-            let original = app.terminal.terminal_group_for_tab("a").unwrap();
+            let original = app.shell.terminal_group_for_tab("a").unwrap();
             let options = app.prepare_session_start_options(SavedConnectionStartOptions::default());
             app.select_session("b".into(), cx);
             app.register_session_for_start(
@@ -532,7 +538,7 @@ mod tests {
                 None,
             );
             assert_eq!(
-                app.terminal.terminal_group_for_tab("new"),
+                app.shell.terminal_group_for_tab("new"),
                 Some(original.clone())
             );
             app.apply_workspace_split_for_duplicate(
@@ -540,8 +546,8 @@ mod tests {
                 Some((WorkspaceSplitDirection::Horizontal, "a".into())),
                 "new",
             );
-            assert_ne!(app.terminal.terminal_group_for_tab("new"), Some(original));
-            assert!(app.terminal.terminal_windows_is_multi_leaf());
+            assert_ne!(app.shell.terminal_group_for_tab("new"), Some(original));
+            assert!(app.shell.terminal_windows_is_multi_leaf());
             assert_eq!(app.session.active_id(), Some("b"));
             assert!(app.visible_terminal_session_ids().contains(&"b"));
         });
@@ -570,10 +576,7 @@ mod tests {
             app.unsplit_workspace(cx);
             assert!(!app.terminal_windows_is_multi_leaf());
             assert_eq!(
-                app.terminal
-                    .terminal_window_tree()
-                    .unwrap()
-                    .collect_tab_ids(),
+                app.shell.terminal_window_tree().unwrap().collect_tab_ids(),
                 ["a", "c"]
             );
             assert_eq!(app.session.tab_color("c"), Some(0x123456));
@@ -634,22 +637,19 @@ mod tests {
                 700.,
             )
             .unwrap();
-            app.terminal.restore_terminal_window_tree(Some(outer));
+            app.shell.restore_terminal_window_tree(Some(outer));
             app.select_session("b".into(), cx);
             app.normalize_legacy_terminal_groups();
             assert!(app.shell.workspace.pane_roots.is_empty());
             assert_eq!(
-                app.terminal
-                    .terminal_window_tree()
-                    .unwrap()
-                    .collect_tab_ids(),
+                app.shell.terminal_window_tree().unwrap().collect_tab_ids(),
                 ["a", "b", "c"]
             );
             assert_eq!(app.session.active_id(), Some("b"));
             assert!(app.session.tab_is_locked("b"));
             assert_eq!(app.session.custom_name("b"), Some("legacy name"));
             let saved = app
-                .terminal
+                .shell
                 .serialize_terminal_window_layout(&["a".into(), "b".into(), "c".into()])
                 .unwrap();
             let restored =
@@ -674,9 +674,9 @@ mod tests {
             };
             app.shell
                 .insert_workspace_pane_root("a".into(), panes.clone());
-            let before = app.terminal.terminal_window_tree();
+            let before = app.shell.terminal_window_tree();
             app.normalize_legacy_terminal_groups();
-            assert_eq!(app.terminal.terminal_window_tree(), before);
+            assert_eq!(app.shell.terminal_window_tree(), before);
             assert_eq!(app.shell.workspace_pane_root("a"), Some(&panes));
         });
     }
@@ -694,11 +694,11 @@ mod tests {
                 TabDockZone::Edge(TabDockEdge::Right),
                 cx,
             );
-            let TerminalWindowNode::Split { id, .. } = app.terminal.terminal_window_tree().unwrap()
+            let TerminalWindowNode::Split { id, .. } = app.shell.terminal_window_tree().unwrap()
             else {
                 panic!("split");
             };
-            app.terminal.record_terminal_split_bounds(
+            app.shell.record_terminal_split_bounds(
                 id.clone(),
                 Bounds {
                     origin: point(px(0.), px(0.)),
@@ -720,10 +720,7 @@ mod tests {
                 },
                 cx,
             );
-            assert_eq!(
-                app.terminal.terminal_window_split_geometry(&id).unwrap().1,
-                60
-            );
+            assert_eq!(app.shell.terminal_window_split_geometry(&id).unwrap().1, 60);
         });
     }
 }

@@ -295,10 +295,14 @@ impl NyaTermApp {
     }
 
     fn visible_terminal_surface_session_ids(&self) -> Vec<String> {
-        if let Some(window_root) = self.terminal.windows.tree.as_ref()
+        if let Some(window_root) = self.shell.terminal_window_tree().as_ref()
             && matches!(window_root, TerminalWindowNode::Split { .. })
         {
-            return window_root.active_tabs();
+            return window_root
+                .active_tabs()
+                .into_iter()
+                .filter(|id| self.session.has_session(id))
+                .collect();
         }
         self.shell
             .workspace_split()

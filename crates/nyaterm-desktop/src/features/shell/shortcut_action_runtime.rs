@@ -156,9 +156,7 @@ impl NyaTermApp {
                     },
                     cx,
                 );
-                if let Some(active) = self.session.active_id_owned() {
-                    self.focus_terminal_session(&active, window, cx);
-                }
+                self.focus_active_workspace_surface(window, cx);
             }
             ShortcutId::NextTerminalGroup => self.select_relative_terminal_group(1, window, cx),
             ShortcutId::PreviousTerminalGroup => {
@@ -172,9 +170,7 @@ impl NyaTermApp {
                     index.saturating_sub(1)
                 };
                 self.select_session_index(index, cx);
-                if let Some(active) = self.session.active_id_owned() {
-                    self.focus_terminal_session(&active, window, cx);
-                }
+                self.focus_active_workspace_surface(window, cx);
             }
             ShortcutId::DuplicateSession => self.duplicate_active_session(window, cx),
             ShortcutId::MultiplexSsh => self.multiplex_active_ssh_session(window, cx),
@@ -189,7 +185,14 @@ impl NyaTermApp {
                 self.execute_title_menu_command(&TitleMenuCommand::ToggleRightSidebar, window, cx)
             }
             ShortcutId::TogglePaneFocus => {
-                if self.session.active_id().is_some() {
+                if self.session.active_id().is_some()
+                    && !self.active_workspace_tab().is_some_and(|key| {
+                        matches!(
+                            crate::models::WorkspaceTabId::from_layout_key(&key),
+                            crate::models::WorkspaceTabId::Editor(_)
+                        )
+                    })
+                {
                     self.shell
                         .set_pane_focus_mode(!self.shell.pane_focus_mode());
                     self.sync_terminal_frame_snapshot_priority();

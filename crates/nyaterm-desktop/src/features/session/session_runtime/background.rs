@@ -34,13 +34,13 @@ impl NyaTermApp {
         }
         if let Some(placement) = options.tab_placement {
             if self
-                .terminal
+                .shell
                 .terminal_start_group(placement.request_sequence)
                 .is_none()
             {
                 self.ensure_terminal_windows_root();
                 if let Some(group) = self.current_terminal_group() {
-                    self.terminal
+                    self.shell
                         .reserve_terminal_start_group(placement.request_sequence, group);
                 }
             }
@@ -64,7 +64,7 @@ impl NyaTermApp {
         let placement = self.session.start.allocate_tab_placement(insert_index);
         self.ensure_terminal_windows_root();
         if let Some(group) = self.current_terminal_group() {
-            self.terminal
+            self.shell
                 .reserve_terminal_start_group(placement.request_sequence, group);
         }
         options.tab_placement = Some(placement);

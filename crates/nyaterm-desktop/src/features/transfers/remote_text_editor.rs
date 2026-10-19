@@ -9,7 +9,7 @@ use crate::features::NyaTermApp;
 use crate::models::{TransferEditorField, TransferEditorState};
 
 pub(in crate::features) struct RemoteTextEditor {
-    app: Entity<NyaTermApp>,
+    app: gpui::WeakEntity<NyaTermApp>,
     tab_id: String,
     document: Entity<NyaDocumentEditorState>,
     synced_content: NyaDocumentSnapshot,
@@ -33,13 +33,13 @@ impl RemoteTextEditor {
             )
         });
         let tab_id = tab.id.clone();
-        let app_for_events = app.clone();
+        let app_for_events = app.downgrade();
         let subscription = cx.subscribe(
             &document,
             move |this, _, event: &NyaDocumentEditorEvent, cx| match event {
                 NyaDocumentEditorEvent::Changed(content) => {
                     this.synced_content = content.clone();
-                    app_for_events.update(cx, |app, cx| {
+                    let _ = app_for_events.update(cx, |app, cx| {
                         app.transfer.sync_editor_content(&tab_id, content.clone());
                         app.mark_user_activity();
                         cx.notify();
@@ -55,7 +55,7 @@ impl RemoteTextEditor {
             document.update(cx, |document, cx| document.move_cursor_to_end(cx));
         }
         Self {
-            app,
+            app: app.downgrade(),
             tab_id: tab.id.clone(),
             document,
             synced_content: tab.content.clone(),
@@ -76,7 +76,7 @@ impl RemoteTextEditor {
         });
         let subscription = cx.subscribe(&document, |_, _, _: &NyaDocumentEditorEvent, _| {});
         Self {
-            app,
+            app: app.downgrade(),
             tab_id: id,
             document,
             synced_content: Default::default(),
@@ -120,6 +120,11 @@ impl RemoteTextEditor {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn document_for_test(&self) -> Entity<NyaDocumentEditorState> {
+        self.document.clone()
+    }
+
     pub(in crate::features) fn cursor_position(&self, cx: &App) -> (usize, usize) {
         self.document.read(cx).cursor_position(cx)
     }
@@ -128,11 +133,17 @@ impl RemoteTextEditor {
         self.document.read(cx).focus_handle(cx)
     }
 
+    pub(in crate::features) fn open_search(&self, cx: &mut Context<Self>) {
+        self.document
+            .update(cx, |document, cx| document.open_search(false, cx));
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let modifiers = event.keystroke.modifiers;
         if (modifiers.platform || modifiers.control) && event.keystroke.key == "s" {
-            self.app
-                .update(cx, |app, cx| app.save_transfer_editor(false, window, cx));
+            let _ = self.app.update(cx, |app, cx| {
+                app.save_transfer_editor_tab(&self.tab_id, false, window, cx)
+            });
             cx.stop_propagation();
         }
     }
@@ -146,7 +157,10 @@ impl Focusable for RemoteTextEditor {
 
 impl Render for RemoteTextEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (font_size, font) = self.app.read_with(cx, |app, _| {
+        let Some(app) = self.app.upgrade() else {
+            return div().into_any_element();
+        };
+        let (font_size, font) = app.read_with(cx, |app, _| {
             (
                 app.settings
                     .summary()
@@ -167,14 +181,14 @@ impl Render for RemoteTextEditor {
             .font(font)
             .text_size(px(font_size))
             .capture_key_down(cx.listener(|this, _, _, cx| {
-                this.app.update(cx, |app, _| app.mark_user_activity());
+                let _ = this.app.update(cx, |app, _| app.mark_user_activity());
             }))
             .on_key_down(cx.listener(Self::on_key_down))
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
-                this.app.update(cx, |app, _| app.mark_user_activity());
+                let _ = this.app.update(cx, |app, _| app.mark_user_activity());
             }))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                this.app.update(cx, |app, _| app.mark_user_activity());
+                let _ = this.app.update(cx, |app, _| app.mark_user_activity());
                 if !event.modifiers.control && !event.modifiers.platform {
                     return;
                 }
@@ -184,13 +198,14 @@ impl Render for RemoteTextEditor {
                 };
                 if delta_y != 0.0 {
                     let step = if delta_y < 0.0 { 1 } else { -1 };
-                    this.app.update(cx, |app, cx| {
+                    let _ = this.app.update(cx, |app, cx| {
                         app.adjust_transfer_internal_editor_font_size(step, cx);
                     });
                     cx.stop_propagation();
                 }
             }))
             .child(NyaDocumentEditor::new(&self.document))
+            .into_any_element()
     }
 }
 

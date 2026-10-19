@@ -34,7 +34,9 @@ impl NyaTermApp {
     }
 
     pub(crate) fn can_close_failed_tab_workspace(&self) -> bool {
-        !self.has_live_sessions() && !self.session.start_has_pending()
+        !self.has_live_sessions()
+            && !self.session.start_has_pending()
+            && self.transfer.editor_documents().is_empty()
     }
 
     pub(crate) fn report_tab_move_failure(&mut self, error: String, cx: &mut Context<Self>) {
@@ -44,7 +46,7 @@ impl NyaTermApp {
     }
     pub(in crate::features) fn request_tab_tree_move(
         &mut self,
-        payload: &super::shell::SessionTabDragPayload,
+        payload: &super::shell::WorkspaceTabDragPayload,
         placement: MoveTabPlacement,
         cx: &mut Context<Self>,
     ) {
@@ -67,6 +69,21 @@ impl NyaTermApp {
         placement: MoveTabPlacement,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            crate::models::WorkspaceTabId::from_layout_key(&root_tab_id),
+            crate::models::WorkspaceTabId::Editor(_)
+        ) || (source_workspace_id == self.workspace_id
+            && self
+                .tab_tree_session_ids(&root_tab_id)
+                .iter()
+                .any(|id| self.transfer.editor_references_session(id)))
+        {
+            self.shell.set_status(
+                "Close the referencing file editors before moving this session to another window",
+            );
+            cx.notify();
+            return;
+        }
         let Some(controller) = self.desktop_controller.clone() else {
             return;
         };
@@ -136,13 +153,13 @@ impl NyaTermApp {
         match placement {
             MoveTabPlacement::Append => {}
             MoveTabPlacement::BeforeTab(id) | MoveTabPlacement::AfterTab(id) => {
-                if !self.session.has_session(id) || self.tab_root_for_session(id) != *id {
+                if !self.workspace_tab_ids().contains(id) {
                     return Err("the target tab no longer exists".into());
                 }
             }
             MoveTabPlacement::TerminalLeaf { leaf_id, .. } => {
-                if !self.terminal.terminal_window_tree_is_some()
-                    || !self.terminal.terminal_window_has_leaf(leaf_id)
+                if !self.shell.terminal_window_tree_is_some()
+                    || !self.shell.terminal_window_has_leaf(leaf_id)
                 {
                     return Err("the target split pane no longer exists".into());
                 }
@@ -172,6 +189,15 @@ impl NyaTermApp {
         let session_ids = self
             .tab_tree_transfer_session_ids(root_tab_id)
             .ok_or_else(|| "the source tab no longer exists".to_string())?;
+        if session_ids
+            .iter()
+            .any(|id| self.transfer.editor_references_session(id))
+        {
+            return Err(
+                "Close the referencing file editors before moving this session to another window"
+                    .to_string(),
+            );
+        }
         self.session
             .can_transfer_sessions(&session_ids)
             .map_err(str::to_string)?;
@@ -205,7 +231,7 @@ impl NyaTermApp {
         let session_ids = self.can_transfer_tab_tree(root_tab_id, source_revision)?;
         let source_index = self.session.session_index(root_tab_id).unwrap_or(0);
         let source_active_id = self.session.active_id_owned();
-        let source_terminal_tree = self.terminal.terminal_window_tree();
+        let source_terminal_tree = self.shell.terminal_window_tree();
         if let Some(active) = self.session.active_id_owned()
             && session_ids.contains(&active)
         {
@@ -324,7 +350,7 @@ impl NyaTermApp {
         self.reconcile_terminal_windows();
         if let MoveTabPlacement::BeforeTab(tab_id) = placement {
             let _ = self
-                .terminal
+                .shell
                 .place_tab_before_in_terminal_windows(&root_tab_id, tab_id);
         }
         if let MoveTabPlacement::AfterTab(tab_id) = placement {
@@ -341,7 +367,7 @@ impl NyaTermApp {
             });
             self.ensure_terminal_windows_root();
             let _ = self
-                .terminal
+                .shell
                 .dock_tab_on_terminal_window_leaf(&root_tab_id, leaf_id, zone);
         }
         self.activate_session_id_with_surface_sync(&root_tab_id, cx);
@@ -373,7 +399,7 @@ impl NyaTermApp {
             self.shell
                 .insert_workspace_pane_root(bundle.root_tab_id, pane_root);
         }
-        self.terminal
+        self.shell
             .restore_terminal_window_tree(bundle.source_terminal_tree);
         self.rebuild_session_tab_owners();
         self.reconcile_terminal_windows();

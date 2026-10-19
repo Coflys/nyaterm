@@ -22,7 +22,7 @@ use crate::features::assets::{
 };
 use crate::features::formatting::format_last_used_ms;
 use crate::features::icons::resolve_connection_icon;
-use crate::features::shell::SessionTabDragPayload;
+use crate::features::shell::WorkspaceTabDragPayload;
 use crate::features::view_widgets::connection_type_icon;
 
 const ASSET_CARD_MIN_WIDTH: f32 = 300.;
@@ -288,15 +288,21 @@ impl NyaTermApp {
             })
             // Empty workspaces hide the tab strip, so the surface must receive
             // tab drops before the outside-release fallback creates a window.
-            .drag_over::<SessionTabDragPayload>(move |this, _, _, _| {
+            .drag_over::<WorkspaceTabDragPayload>(move |this, _, _, _| {
                 this.border_2().border_color(rgb(palette.focus_ring))
             })
-            .on_drop(cx.listener(|this, payload: &SessionTabDragPayload, _, cx| {
-                this.accept_session_tab_drop(payload, cx);
-                if payload.source_workspace_id != this.workspace_id {
-                    this.request_tab_tree_move(payload, nyaterm_core::MoveTabPlacement::Append, cx);
-                }
-            }))
+            .on_drop(
+                cx.listener(|this, payload: &WorkspaceTabDragPayload, _, cx| {
+                    this.accept_session_tab_drop(payload, cx);
+                    if payload.source_workspace_id != this.workspace_id {
+                        this.request_tab_tree_move(
+                            payload,
+                            nyaterm_core::MoveTabPlacement::Append,
+                            cx,
+                        );
+                    }
+                }),
+            )
             .child(content)
             .child(
                 div()

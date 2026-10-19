@@ -57,6 +57,35 @@ impl NyaTermApp {
         if !self.title_menu_command_enabled(command, cx) {
             return;
         }
+        if let Some(crate::models::WorkspaceTabId::Editor(id)) = self
+            .active_workspace_tab()
+            .as_deref()
+            .map(crate::models::WorkspaceTabId::from_layout_key)
+        {
+            match command {
+                TitleMenuCommand::TerminalCopy
+                | TitleMenuCommand::TerminalPaste
+                | TitleMenuCommand::TerminalFind
+                | TitleMenuCommand::TerminalSelectAll => {
+                    if let Some(view) = self.transfer.workspace_editor_view(&id) {
+                        view.update(cx, |view, cx| {
+                            view.execute_edit_command(command, window, cx)
+                        });
+                    }
+                    return;
+                }
+                TitleMenuCommand::TerminalClear | TitleMenuCommand::ToggleBroadcast => return,
+                TitleMenuCommand::ZoomIn => {
+                    self.adjust_transfer_internal_editor_font_size(1, cx);
+                    return;
+                }
+                TitleMenuCommand::ZoomOut => {
+                    self.adjust_transfer_internal_editor_font_size(-1, cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match command {
             TitleMenuCommand::NewWindow => {
                 cx.emit(crate::features::AppLifecycleEvent::NewWindowRequested)

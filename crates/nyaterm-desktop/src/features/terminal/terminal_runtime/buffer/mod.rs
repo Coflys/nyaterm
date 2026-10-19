@@ -1160,9 +1160,14 @@ impl NyaTermApp {
             if self.session.start_has_active_pending() || self.session.start_has_active_failed() {
                 return Vec::new();
             }
-            return self.session.active_id().into_iter().collect();
+            return self
+                .session
+                .active_id()
+                .filter(|id| !self.shell.session_tab_is_hidden(id))
+                .into_iter()
+                .collect();
         }
-        if let Some(root) = self.terminal.windows.tree.as_ref() {
+        if let Some(root) = self.shell.terminal_window_tree_ref() {
             let mut visible = terminal_window_node_visible_tab_ids(root);
             if (self.session.start_has_active_pending() || self.session.start_has_active_failed())
                 && let Some(group) = self.current_terminal_group()
@@ -1172,9 +1177,16 @@ impl NyaTermApp {
             return visible;
         }
         if let Some(root) = self.shell.workspace_split() {
-            return workspace_pane_node_visible_session_ids(root);
+            return workspace_pane_node_visible_session_ids(root)
+                .into_iter()
+                .filter(|id| !self.shell.session_tab_is_hidden(id))
+                .collect();
         }
-        self.session.active_id().into_iter().collect()
+        self.session
+            .active_id()
+            .filter(|id| !self.shell.session_tab_is_hidden(id))
+            .into_iter()
+            .collect()
     }
 
     fn apply_terminal_snapshot_frame(
@@ -3077,7 +3089,12 @@ fn collect_terminal_window_node_visible_tab_ids<'a>(
 ) {
     match node {
         TerminalWindowNode::Leaf { active_tab_id, .. } => {
-            if let Some(id) = active_tab_id.as_deref() {
+            if let Some(id) = active_tab_id.as_deref()
+                && matches!(
+                    crate::models::WorkspaceTabId::from_layout_key(id),
+                    crate::models::WorkspaceTabId::Session(_)
+                )
+            {
                 ids.push(id);
             }
         }

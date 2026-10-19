@@ -13,7 +13,7 @@ use nyaterm_ui::{NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement}
 use crate::features::NyaTermApp;
 use crate::features::icons::resolve_connection_icon;
 use crate::features::shell::{
-    NewSessionMenuAnchor, SessionTabDragPayload, SessionTabDragPreview, SessionTabTooltip,
+    NewSessionMenuAnchor, SessionTabDragPreview, SessionTabTooltip, WorkspaceTabDragPayload,
 };
 use crate::features::view_widgets::{connection_spinner, themed_icon};
 
@@ -428,7 +428,7 @@ impl NyaTermApp {
         let is_drag_source = self.session.tab_drag_source_is(&session.id);
         let motion = self
             .shell
-            .tab_strip_motion(self.terminal.terminal_group_for_tab(&session.id));
+            .tab_strip_motion(self.shell.terminal_group_for_tab(&session.id));
         let has_local_preview = motion.borrow().preview(&session.id).is_some();
         let preview_width = motion.borrow().width(&session.id).unwrap_or(188.);
         let custom_color = self.session.tab_color(&session.id);
@@ -507,13 +507,13 @@ impl NyaTermApp {
         // edge uses the focus/drag border color.
         let drag_target_bg = self.shell_surface_color(palette.hover);
         let drop_workspace_id = self.workspace_id;
-        let target_group = self.terminal.terminal_group_for_tab(&session.id);
+        let target_group = self.shell.terminal_group_for_tab(&session.id);
         let hover_target_group = target_group.clone();
-        let drag_payload = SessionTabDragPayload {
+        let drag_payload = WorkspaceTabDragPayload {
             source_workspace_id: self.workspace_id,
             root_tab_id: session.id.clone(),
             source_revision: self.workspace_revision(),
-            session_id: session.id.clone(),
+            tab_id: crate::models::WorkspaceTabId::Session(session.id.clone()),
             order_index: tab_index,
             source_group_id: target_group.clone(),
             display_name: display_name.clone(),
@@ -565,7 +565,7 @@ impl NyaTermApp {
                         .with_icon(drag_icon.clone())
                 })
             })
-            .drag_over::<SessionTabDragPayload>(move |this, payload, _, _| {
+            .drag_over::<WorkspaceTabDragPayload>(move |this, payload, _, _| {
                 if payload.source_workspace_id == drop_workspace_id
                     && payload.source_group_id == hover_target_group
                 {
@@ -584,7 +584,7 @@ impl NyaTermApp {
                 }) else {
                     return this;
                 };
-                if payload.session_id == drag_over_target_session_id {
+                if payload.tab_id.layout_key() == drag_over_target_session_id {
                     return this;
                 }
                 let target = this
@@ -598,13 +598,13 @@ impl NyaTermApp {
                 }
             })
             .on_drag_move(cx.listener(
-                move |this, event: &gpui::DragMoveEvent<SessionTabDragPayload>, _, cx| {
+                move |this, event: &gpui::DragMoveEvent<WorkspaceTabDragPayload>, _, cx| {
                     let payload = event.drag(cx);
-                    this.update_session_tab_drag(payload.session_id.clone(), cx);
+                    this.update_session_tab_drag(payload.tab_id.layout_key(), cx);
                 },
             ))
             .on_drop(
-                cx.listener(move |this, payload: &SessionTabDragPayload, _, cx| {
+                cx.listener(move |this, payload: &WorkspaceTabDragPayload, _, cx| {
                     this.accept_session_tab_drop(payload, cx);
                     if this.commit_session_tab_preview(payload, &target_group, cx) {
                         return;
@@ -628,7 +628,7 @@ impl NyaTermApp {
                         return;
                     };
                     this.reorder_session_relative(
-                        payload.session_id.clone(),
+                        payload.tab_id.layout_key(),
                         drop_target_session_id.clone(),
                         insert_after,
                         cx,
@@ -815,7 +815,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let groups = self
-            .terminal
+            .shell
             .terminal_window_tree()
             .map(|root| root.leaf_ids())
             .unwrap_or_default();
@@ -838,30 +838,20 @@ impl NyaTermApp {
     ) -> gpui::AnyElement {
         let palette = self.theme_palette();
         let shell_hover_bg = self.shell_surface_color(palette.hover);
-        let (sessions, group_active) = if let Some(group) = &group_id {
-            let (tabs, active) = self.terminal.terminal_group_tabs(group).unwrap_or_default();
-            (
-                tabs.iter()
-                    .filter_map(|id| self.session.session_info(id))
-                    .collect::<Vec<_>>(),
-                active,
-            )
-        } else {
-            (self.ordered_tab_sessions(), self.session.active_id_owned())
-        };
-        let session_count = sessions.len();
+        let (tab_keys, group_active) = group_id
+            .as_deref()
+            .and_then(|group| self.shell.terminal_group_tabs(group))
+            .unwrap_or_else(|| (self.workspace_tab_ids(), self.active_workspace_tab()));
+        let session_count = tab_keys.len();
         let tab_scroll = group_id
             .as_ref()
-            .map(|id| self.terminal.terminal_group_scroll(id))
+            .map(|id| self.shell.terminal_group_scroll(id))
             .unwrap_or_else(|| self.shell.session_tab_strip_scroll().clone());
         let matches_group =
             |placement: Option<crate::features::session::SessionStartTabPlacement>| {
                 let target = placement
-                    .and_then(|p| {
-                        self.terminal
-                            .terminal_start_display_group(p.request_sequence)
-                    })
-                    .or_else(|| self.terminal.first_terminal_group());
+                    .and_then(|p| self.shell.terminal_start_display_group(p.request_sequence))
+                    .or_else(|| self.shell.first_terminal_group());
                 group_id
                     .as_deref()
                     .is_none_or(|group| target.as_deref() == Some(group))
@@ -880,9 +870,10 @@ impl NyaTermApp {
                     .filter(|name| !name.is_empty())
                     .unwrap_or(&pending.connection_name)
                     .to_string();
-                let after_position = pending.after_session_id.as_ref().and_then(|after_id| {
-                    sessions.iter().position(|session| session.id == *after_id)
-                });
+                let after_position = pending
+                    .after_session_id
+                    .as_ref()
+                    .and_then(|after_id| tab_keys.iter().position(|key| key == after_id));
                 let index = pending.tab_placement.map_or_else(
                     || {
                         pending_tab_insert_index(
@@ -919,9 +910,10 @@ impl NyaTermApp {
                         .filter(|name| !name.is_empty())
                         .unwrap_or(&pending.connection_name)
                         .to_string();
-                    let after_position = pending.after_session_id.as_ref().and_then(|after_id| {
-                        sessions.iter().position(|session| session.id == *after_id)
-                    });
+                    let after_position = pending
+                        .after_session_id
+                        .as_ref()
+                        .and_then(|after_id| tab_keys.iter().position(|key| key == after_id));
                     let index = pending.tab_placement.map_or_else(
                         || {
                             pending_tab_insert_index(
@@ -955,14 +947,12 @@ impl NyaTermApp {
         if self.shell.session_tab_scroll_into_view_pending()
             && (group_id.is_none() || self.current_terminal_group() == group_id)
         {
-            if let Some(active_id) = self.session.active_id()
-                && let Some(index) = sessions
-                    .iter()
-                    .position(|session| session.id == self.tab_root_for_session(active_id))
+            if let Some(active_id) = group_active.as_deref()
+                && let Some(index) = tab_keys.iter().position(|key| key == active_id)
             {
                 let active_key = self
                     .session
-                    .session_start_tab_placement(&sessions[index].id)
+                    .session_start_tab_placement(active_id)
                     .map(|placement| (placement.insert_index, placement.request_sequence))
                     .unwrap_or((index, u64::MAX));
                 let pending_count = transient_tabs
@@ -996,7 +986,7 @@ impl NyaTermApp {
             .overflow_y_hidden()
             .track_scroll(&tab_scroll)
             .on_drag_move(
-                move |event: &gpui::DragMoveEvent<SessionTabDragPayload>, _, cx| {
+                move |event: &gpui::DragMoveEvent<WorkspaceTabDragPayload>, _, cx| {
                     let payload = event.drag(cx);
                     let mut motion = motion_for_drag.borrow_mut();
                     let local = payload.source_workspace_id == drag_workspace
@@ -1017,7 +1007,7 @@ impl NyaTermApp {
             )
             .on_drop(cx.listener({
                 let group = group_id.clone();
-                move |this, payload: &SessionTabDragPayload, _, cx| {
+                move |this, payload: &WorkspaceTabDragPayload, _, cx| {
                     this.drop_session_tab_on_strip(payload, &group, cx);
                 }
             }))
@@ -1039,11 +1029,11 @@ impl NyaTermApp {
             }));
 
         let mut transient_cursor = 0usize;
-        let motion_sessions = sessions.iter().map(|session| session.id.clone()).collect();
-        for (tab_index, session) in sessions.into_iter().enumerate() {
+        let motion_sessions = tab_keys.clone();
+        for (tab_index, key) in tab_keys.into_iter().enumerate() {
             let session_key = self
                 .session
-                .session_start_tab_placement(&session.id)
+                .session_start_tab_placement(&key)
                 .map(|placement| (placement.insert_index, placement.request_sequence))
                 .unwrap_or((tab_index, u64::MAX));
             while transient_cursor < transient_tabs.len()
@@ -1069,6 +1059,27 @@ impl NyaTermApp {
                 });
                 transient_cursor += 1;
             }
+            if let crate::models::WorkspaceTabId::Editor(id) =
+                crate::models::WorkspaceTabId::from_layout_key(&key)
+            {
+                motion_order.push(key.clone());
+                tabs = tabs.child(TabMotionElement {
+                    id: key,
+                    motion: motion.clone(),
+                    scroll: tab_scroll.clone(),
+                    child: self.editor_strip_tab(
+                        id,
+                        tab_index,
+                        tab_index + transient_cursor + 1,
+                        group_active.as_deref(),
+                        cx,
+                    ),
+                });
+                continue;
+            }
+            let Some(session) = self.session.session_info(&key) else {
+                continue;
+            };
             motion_order.push(session.id.clone());
             tabs = tabs.child(TabMotionElement {
                 id: session.id.clone(),
@@ -1122,7 +1133,7 @@ impl NyaTermApp {
                     .border_b_1()
                     .border_color(rgb(palette.border))
                     .hover(move |this| this.bg(shell_hover_bg))
-                    .drag_over::<SessionTabDragPayload>(move |this, payload, _, _| {
+                    .drag_over::<WorkspaceTabDragPayload>(move |this, payload, _, _| {
                         if payload.source_workspace_id == drop_workspace_id
                             && payload.source_group_id == hover_end_group
                         {
@@ -1134,12 +1145,12 @@ impl NyaTermApp {
                         }
                     })
                     .on_drag_move(cx.listener(
-                        |this, event: &gpui::DragMoveEvent<SessionTabDragPayload>, _, cx| {
-                            this.update_session_tab_drag(event.drag(cx).session_id.clone(), cx);
+                        |this, event: &gpui::DragMoveEvent<WorkspaceTabDragPayload>, _, cx| {
+                            this.update_session_tab_drag(event.drag(cx).tab_id.layout_key(), cx);
                         },
                     ))
                     .on_drop(
-                        cx.listener(move |this, payload: &SessionTabDragPayload, _, cx| {
+                        cx.listener(move |this, payload: &WorkspaceTabDragPayload, _, cx| {
                             this.drop_session_tab_on_strip(payload, &end_drop_group, cx);
                         }),
                     ),
@@ -1156,13 +1167,13 @@ impl NyaTermApp {
                     .flex_1()
                     .border_b_1()
                     .border_color(rgb(palette.border))
-                    .drag_over::<SessionTabDragPayload>(move |this, _, _, _| {
+                    .drag_over::<WorkspaceTabDragPayload>(move |this, _, _, _| {
                         this.bg(shell_hover_bg)
                             .border_l_2()
                             .border_color(rgb(palette.focus_ring))
                     })
                     .on_drop(
-                        cx.listener(move |this, payload: &SessionTabDragPayload, _, cx| {
+                        cx.listener(move |this, payload: &WorkspaceTabDragPayload, _, cx| {
                             this.drop_session_tab_on_strip(payload, &empty_drop_group, cx);
                         }),
                     ),
@@ -1246,7 +1257,7 @@ impl NyaTermApp {
             .on_open_change(cx.listener(move |this, open, window, cx| {
                 if *open {
                     if let Some(group) = &overflow_group
-                        && let Some((_, Some(tab))) = this.terminal.terminal_group_tabs(group)
+                        && let Some((_, Some(tab))) = this.shell.terminal_group_tabs(group)
                     {
                         this.select_session(tab, cx);
                     }
@@ -1257,9 +1268,7 @@ impl NyaTermApp {
                     || this.current_terminal_group() == overflow_group
                 {
                     this.close_open_tabs_menu(cx);
-                    if let Some(active) = this.session.active_id_owned() {
-                        this.focus_terminal_session(&active, window, cx);
-                    }
+                    this.focus_active_workspace_surface(window, cx);
                 }
             }));
             session_actions = session_actions.child(
@@ -1329,9 +1338,7 @@ impl NyaTermApp {
                 this.open_new_session_menu(anchor, cx);
             } else if this.shell.new_session_menu_is_open_at(&anchor) {
                 this.close_new_session_menu(cx);
-                if let Some(active) = this.session.active_id_owned() {
-                    this.focus_terminal_session(&active, window, cx);
-                }
+                this.focus_active_workspace_surface(window, cx);
             }
         }));
         session_actions = session_actions.child(

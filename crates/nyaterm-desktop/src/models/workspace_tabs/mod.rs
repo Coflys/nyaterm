@@ -84,3 +84,29 @@ impl TabDockZone {
         Self::Center
     }
 }
+
+/// Typed routing at the boundary of the existing string-keyed layout algorithms.
+/// Editor keys never enter session/protocol APIs or persisted workspace data.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum WorkspaceTabId {
+    Session(String),
+    Editor(String),
+}
+
+impl WorkspaceTabId {
+    const EDITOR_PREFIX: &str = "\0editor:";
+
+    pub(crate) fn from_layout_key(key: &str) -> Self {
+        match key.strip_prefix(Self::EDITOR_PREFIX) {
+            Some(id) => Self::Editor(id.to_string()),
+            None => Self::Session(key.to_string()),
+        }
+    }
+
+    pub(crate) fn layout_key(&self) -> String {
+        match self {
+            Self::Session(id) => id.clone(),
+            Self::Editor(id) => format!("{}{id}", Self::EDITOR_PREFIX),
+        }
+    }
+}

@@ -98,6 +98,14 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(key) = self.active_workspace_tab()
+            && let crate::models::WorkspaceTabId::Editor(id) =
+                crate::models::WorkspaceTabId::from_layout_key(&key)
+            && let Some(view) = self.transfer.workspace_editor_view(&id)
+        {
+            view.update(cx, |view, cx| view.focus(window, cx));
+            return;
+        }
         match workspace_surface_focus_target(self.session.active_id(), |session_id| {
             self.remote_desktop.is_session(session_id)
         }) {
@@ -109,11 +117,11 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn quick_switch_items(&self) -> Vec<QuickSwitchItem> {
-        let sessions = self.session.ordered_sessions();
+        let sessions = self.ordered_tab_sessions();
         let mut session_items = Vec::new();
         for session in &sessions {
             let title = self.session.display_name_by_info(session);
-            let active = self.session.active_id() == Some(session.id.as_str());
+            let active = self.active_workspace_tab().as_deref() == Some(session.id.as_str());
             let mut subtitle = format!(
                 "{} - {}",
                 session_kind_label(session.kind),
@@ -131,6 +139,26 @@ impl NyaTermApp {
             });
         }
 
+        for key in self.workspace_tab_ids() {
+            if let crate::models::WorkspaceTabId::Editor(id) =
+                crate::models::WorkspaceTabId::from_layout_key(&key)
+                && let Some(document) = self.transfer.editor_tab_snapshot(&id)
+            {
+                session_items.push(QuickSwitchItem::Session {
+                    active: self.active_workspace_tab().as_deref() == Some(&key),
+                    id: key,
+                    title: document.name,
+                    subtitle: document.remote_path,
+                });
+            }
+        }
+        let order = self.workspace_tab_ids();
+        session_items.sort_by_key(|item| {
+            order
+                .iter()
+                .position(|key| item.id() == *key)
+                .unwrap_or(usize::MAX)
+        });
         let mut transient_items = self
             .session
             .start_pending_entries()

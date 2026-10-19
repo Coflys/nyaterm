@@ -695,7 +695,7 @@ impl NyaTermApp {
                 })
                 .unwrap_or((0, 0, 0, 0));
         let file_drop_hover = self
-            .terminal
+            .shell
             .terminal_file_drop_hover_matches(session_id.as_str());
         let drop_session_kind = self
             .session

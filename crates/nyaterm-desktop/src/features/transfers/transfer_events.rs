@@ -321,6 +321,10 @@ impl NyaTermApp {
             // The job was cancelled or removed while its worker was still running.
             return false;
         };
+        let editor_event = matches!(
+            job.kind,
+            TransferJobKind::LoadEditor { .. } | TransferJobKind::SaveEditor { .. }
+        );
         let mut dirty = false;
         let event_id = event.id.clone();
         let job_session_id = job.session_id.clone();
@@ -1452,6 +1456,13 @@ impl NyaTermApp {
         }
         if let Some(prompt_id) = external_sync_prompt_to_open {
             self.open_transfer_external_sync_window(prompt_id, cx);
+        }
+        if event_finished {
+            if editor_event {
+                cx.notify();
+            }
+            self.continue_workspace_tabs_close(cx);
+            self.release_unreferenced_editor_sessions(cx);
         }
         dirty
     }

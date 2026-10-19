@@ -229,10 +229,8 @@ struct TransferFileOpsState {
 
 /// Built-in remote file editor workspace.
 struct TransferEditorFeatureState {
+    views: HashMap<String, gpui::Entity<super::workspace_editor::WorkspaceEditorView>>,
     workspace: Option<TransferEditorWorkspaceState>,
-    preview_cache: Option<editor::EditorPreviewCache>,
-    tabs_menu_open: bool,
-    focus: FocusHandle,
     window: ChildWindowSlot,
 }
 
@@ -248,6 +246,7 @@ struct TransferPreviewFeatureState {
     window: ChildWindowSlot,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::features) enum TransferEditorCloseOutcome {
     Missing,
@@ -256,6 +255,7 @@ pub(in crate::features) enum TransferEditorCloseOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::features) enum TransferEditorDiscardOutcome {
     Missing,
     TabDiscarded,
@@ -271,6 +271,7 @@ pub(in crate::features) enum TransferEditorSaveOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::features) enum TransferEditorCloseAfterSave {
     Missing,
     Loading,
@@ -1274,6 +1275,14 @@ impl TransferFeatureState {
         }
 
         let mut changed = false;
+        if let Some(workspace) = &mut self.editor.workspace {
+            for document in &mut workspace.tabs {
+                if document.session_id.as_deref() == Some(old_id) {
+                    document.session_id = Some(new_id.to_string());
+                    changed = true;
+                }
+            }
+        }
         self.tree.replace_session(old_id, new_id);
         if self.file_ops.delete_refresh_pending.remove(old_id) {
             self.file_ops

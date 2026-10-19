@@ -284,6 +284,13 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            crate::models::WorkspaceTabId::from_layout_key(&session_id),
+            crate::models::WorkspaceTabId::Editor(_)
+        ) {
+            self.activate_workspace_tab(&session_id, cx);
+            return;
+        }
         // Local metadata is authoritative for tab existence; transport lock not needed.
         let known = self.session.has_session(&session_id);
         let disconnected = self.session.is_disconnected(&session_id);
@@ -293,6 +300,9 @@ impl NyaTermApp {
             self.remove_session_state(&session_id, cx);
             cx.notify();
             return;
+        }
+        if self.shell.reveal_workspace_session(&session_id) {
+            self.reconcile_terminal_windows();
         }
         // Strip selection targets tab roots; focus the preferred leaf under that tab.
         let focus_id = if !self.is_secondary_pane_session(&session_id) {
@@ -344,7 +354,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if let crate::features::shell::NewSessionMenuAnchor::TerminalLeaf(group) = &anchor
-            && let Some((_, Some(tab))) = self.terminal.terminal_group_tabs(group)
+            && let Some((_, Some(tab))) = self.shell.terminal_group_tabs(group)
         {
             self.select_session(tab, cx);
         }

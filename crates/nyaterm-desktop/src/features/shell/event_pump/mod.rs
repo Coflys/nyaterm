@@ -686,7 +686,7 @@ mod tests {
             app.shell.show_workspace();
             // A fresh app starts with the terminal window layout restore
             // outstanding; complete it so these tests start from a settled app.
-            app.terminal.complete_terminal_windows_restore();
+            app.shell.complete_terminal_windows_restore();
         });
         app
     }

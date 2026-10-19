@@ -111,6 +111,12 @@ impl NyaTermApp {
     ) -> bool {
         let input_started_at = Instant::now();
         if bytes.is_empty()
+            || self.active_workspace_tab().is_some_and(|key| {
+                matches!(
+                    crate::models::WorkspaceTabId::from_layout_key(&key),
+                    crate::models::WorkspaceTabId::Editor(_)
+                )
+            })
             || self.session.start_has_active_pending()
             || self.session.start_has_active_failed()
         {

@@ -199,6 +199,10 @@ pub(in crate::features) struct SessionDisconnectUpdate {
 }
 
 impl SessionFeatureState {
+    pub(in crate::features) fn clear_active_start_selection(&mut self) {
+        self.start.clear_active_selection();
+    }
+
     pub(crate) fn can_transfer_sessions(&self, session_ids: &[String]) -> Result<(), &'static str> {
         if self.start.has_pending() {
             return Err("wait for the session connection attempt to finish");

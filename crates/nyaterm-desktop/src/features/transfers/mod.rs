@@ -212,10 +212,11 @@ pub(in crate::features) use state::natural_compare_ascii;
 #[cfg(test)]
 pub(in crate::features) use state::transfer_browser_entry_is_visible;
 pub(in crate::features) use state::{
-    PdfPageRequest, TransferEditorCloseAfterSave, TransferEditorCloseOutcome,
-    TransferEditorDiscardOutcome, TransferFeatureFocus, TransferFeatureState,
-    TransferFileClipboard, TransferPreviewCloseOutcome,
+    PdfPageRequest, TransferFeatureFocus, TransferFeatureState, TransferFileClipboard,
+    TransferPreviewCloseOutcome,
 };
 pub(in crate::features) use transfer_widgets::{
     duplicate_decision_label, duplicate_policy_label, format_file_size,
 };
+
+mod workspace_editor;
