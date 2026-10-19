@@ -86,6 +86,7 @@ pub(in crate::features) struct StartWorkspaceFeatureState {
     filters: HashSet<AssetFilterKey>,
     selected_group_id: Option<String>,
     view_mode: AssetViewMode,
+    context_connection_id: Option<String>,
     sort: Option<AssetSortState>,
     column_widths: [f32; 7],
     column_resize: Option<AssetColumnResize>,
@@ -166,6 +167,7 @@ impl StartWorkspaceFeatureState {
             filters: HashSet::new(),
             selected_group_id: None,
             view_mode: AssetViewMode::List,
+            context_connection_id: None,
             sort: normalize_asset_sort_state(
                 settings.ui_asset_sort_key.as_deref(),
                 settings.ui_asset_sort_direction.as_deref(),
@@ -197,6 +199,14 @@ impl StartWorkspaceFeatureState {
             true
         }
     }
+    pub fn context_connection_id(&self) -> Option<&str> {
+        self.context_connection_id.as_deref()
+    }
+
+    pub fn set_context_connection_id(&mut self, connection_id: Option<String>) {
+        self.context_connection_id = connection_id;
+    }
+
     pub fn search_field(&self) -> Entity<NyaInputState> {
         self.search_field.clone()
     }
