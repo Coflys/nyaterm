@@ -259,7 +259,6 @@ impl ScpEnhancedBackend {
             unregister_transfer(&controller.id());
             return Err(error);
         }
-        let mut local_file_created = false;
         let _ = app.emit(
             "transfer-event",
             &controller.build_event("started", 0, None),
@@ -291,10 +290,8 @@ impl ScpEnhancedBackend {
             controller.update_progress(0, total_size);
 
             wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
-            let mut local_file = tokio::fs::File::create(local_path)
-                .await
-                .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
-            local_file_created = true;
+            let mut download = StagedLocalDownload::new(local_path).await?;
+            let local_file = download.file_mut();
 
             let cmd = format!("cat -- {}", sh_quote(remote_path));
             let handle_mtx = self.ssh_handle.target_handle();
@@ -356,11 +353,6 @@ impl ScpEnhancedBackend {
                 }
             }
 
-            local_file
-                .flush()
-                .await
-                .map_err(|e| AppError::Channel(format!("Flush failed: {}", e)))?;
-
             if exit_code.unwrap_or(1) != 0 {
                 let msg = String::from_utf8_lossy(&stderr_buf);
                 return Err(AppError::Channel(format!(
@@ -370,6 +362,9 @@ impl ScpEnhancedBackend {
                 )));
             }
 
+            download
+                .commit(&controller, parent_controller.as_ref(), None)
+                .await?;
             Ok(bytes_transferred)
         }
         .await;
@@ -386,9 +381,6 @@ impl ScpEnhancedBackend {
             }
             Err(e) => {
                 if matches!(e, AppError::Cancelled(_)) {
-                    if local_file_created {
-                        cleanup_cancelled_download(local_path).await;
-                    }
                     let _ = app.emit(
                         "transfer-event",
                         &controller.build_event("cancelled", 0, None),

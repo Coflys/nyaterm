@@ -586,6 +586,105 @@ pub(crate) fn emit_parent_progress(
     }
 }
 
+/// 下载先写同目录临时文件，完整成功后才替换目标；失败或取消由 TempPath 清理。
+pub(crate) struct StagedLocalDownload {
+    file: tokio::fs::File,
+    temp_path: tempfile::TempPath,
+    target_path: PathBuf,
+}
+
+impl StagedLocalDownload {
+    pub(crate) async fn new(local_path: &str) -> AppResult<Self> {
+        let target_path = std::path::absolute(local_path)
+            .map_err(|error| AppError::Channel(format!("Invalid download path: {error}")))?;
+        let creation_target = target_path.clone();
+        let (file, temp_path) = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+            let mut builder = tempfile::Builder::new();
+            builder.prefix(".nyaterm-download-");
+            #[cfg(unix)]
+            let permissions = {
+                use std::os::unix::fs::PermissionsExt;
+                let permissions = match std::fs::metadata(&creation_target) {
+                    Ok(metadata) if metadata.is_file() => Some(std::fs::Permissions::from_mode(
+                        metadata.permissions().mode() & 0o777,
+                    )),
+                    Ok(_) => None,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(error),
+                };
+                // 新文件仍按普通下载的 0666/umask 创建，覆盖时不扩大原文件的访问权限。
+                builder.permissions(
+                    permissions
+                        .clone()
+                        .unwrap_or_else(|| std::fs::Permissions::from_mode(0o666)),
+                );
+                permissions
+            };
+            let temp = builder.tempfile_in(creation_target.parent().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Download path has no parent",
+                )
+            })?)?;
+            #[cfg(unix)]
+            if let Some(permissions) = permissions {
+                temp.as_file().set_permissions(permissions)?;
+            }
+            Ok(temp.into_parts())
+        })
+        .await
+        .map_err(|error| AppError::Channel(format!("Download staging task failed: {error}")))?
+        .map_err(|error| {
+            AppError::Channel(format!("Failed to stage download '{local_path}': {error}"))
+        })?;
+        Ok(Self {
+            file: tokio::fs::File::from_std(file),
+            temp_path,
+            target_path,
+        })
+    }
+
+    pub(crate) fn file_mut(&mut self) -> &mut tokio::fs::File {
+        &mut self.file
+    }
+
+    pub(crate) async fn commit(
+        self,
+        controller: &Arc<TransferController>,
+        parent_controller: Option<&Arc<TransferController>>,
+        modified: Option<std::time::SystemTime>,
+    ) -> AppResult<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let Self {
+            mut file,
+            temp_path,
+            target_path,
+        } = self;
+        file.flush().await.map_err(|error| {
+            AppError::Channel(format!(
+                "Failed to flush download '{}': {error}",
+                target_path.display()
+            ))
+        })?;
+        // 等待后台写入结束并关闭句柄，再做时间戳处理和最终替换（兼容 Windows）。
+        let file = file.into_std().await;
+        if let Some(modified) = modified {
+            let _ = file.set_modified(modified);
+        }
+        drop(file);
+        wait_for_transfer_chain(controller, parent_controller).await?;
+        // 取消检查到替换之间不再 await，避免 worker 被 abort 后仍有后台提交。
+        // persist 使用同文件系统替换；失败时目标不变，临时文件随错误一起释放。
+        temp_path.persist(&target_path).map_err(|error| {
+            AppError::Channel(format!(
+                "Failed to commit download '{}': {error}",
+                target_path.display()
+            ))
+        })
+    }
+}
+
 pub(crate) async fn cleanup_cancelled_download(local_path: &str) {
     if tokio::fs::remove_file(local_path).await.is_err() {
         let _ = tokio::fs::remove_dir_all(local_path).await;

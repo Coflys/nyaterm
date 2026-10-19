@@ -466,6 +466,14 @@ async fn stat_remote_properties(
     parse_ls_line_to_properties(&line, path)
 }
 
+fn download_command_succeeded(exit_code: Option<u32>, bytes_transferred: u64) -> bool {
+    match exit_code {
+        Some(code) => code == 0,
+        // 保留无退出状态服务器的兼容行为，但明确的失败不能提交部分输出。
+        None => bytes_transferred > 0,
+    }
+}
+
 async fn download_file_inner(
     ssh_handle: &Arc<SshConnectionHandles>,
     app: &tauri::AppHandle,
@@ -483,7 +491,6 @@ async fn download_file_inner(
         unregister_transfer(&controller.id());
         return Err(error);
     }
-    let mut local_file_created = false;
     let _ = app.emit(
         "transfer-event",
         &controller.build_event("started", 0, None),
@@ -511,10 +518,8 @@ async fn download_file_inner(
         channel.exec(true, cmd.as_bytes()).await?;
 
         wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
-        let mut local_file = tokio::fs::File::create(local_path)
-            .await
-            .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
-        local_file_created = true;
+        let mut download = StagedLocalDownload::new(local_path).await?;
+        let local_file = download.file_mut();
 
         const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
         let mut last_progress = Instant::now();
@@ -565,12 +570,7 @@ async fn download_file_inner(
             }
         }
 
-        local_file
-            .flush()
-            .await
-            .map_err(|e| AppError::Channel(format!("Flush failed: {}", e)))?;
-
-        if exit_code != Some(0) && bytes_transferred == 0 {
+        if !download_command_succeeded(exit_code, bytes_transferred) {
             let stderr_text = String::from_utf8_lossy(&remote_stderr);
             return Err(AppError::Channel(format!(
                 "Download failed: {}",
@@ -578,6 +578,9 @@ async fn download_file_inner(
             )));
         }
 
+        download
+            .commit(&controller, parent_controller.as_ref(), None)
+            .await?;
         Ok(bytes_transferred)
     }
     .await;
@@ -594,9 +597,6 @@ async fn download_file_inner(
         }
         Err(e) => {
             if matches!(e, AppError::Cancelled(_)) {
-                if local_file_created {
-                    cleanup_cancelled_download(local_path).await;
-                }
                 let _ = app.emit(
                     "transfer-event",
                     &controller.build_event("cancelled", 0, None),
@@ -1594,7 +1594,20 @@ impl RemoteFs for ScpNormalBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_dir_command, parse_ls_line, parse_ls_line_to_properties, stat_command};
+    use super::{
+        download_command_succeeded, list_dir_command, parse_ls_line, parse_ls_line_to_properties,
+        stat_command,
+    };
+
+    #[test]
+    fn download_rejects_failed_commands_even_after_receiving_partial_output() {
+        assert!(!download_command_succeeded(Some(1), 0));
+        assert!(!download_command_succeeded(Some(1), 1024));
+        assert!(download_command_succeeded(Some(0), 0));
+        assert!(download_command_succeeded(Some(0), 1024));
+        assert!(!download_command_succeeded(None, 0));
+        assert!(download_command_succeeded(None, 1024));
+    }
 
     #[test]
     fn ls_parser_handles_numeric_owner_and_group() {

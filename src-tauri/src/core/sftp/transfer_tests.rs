@@ -242,6 +242,281 @@ fn download_reservation_keeps_existing_file_until_overwrite_is_explicit() {
     assert_eq!(std::fs::read(&file).unwrap(), b"original");
 }
 
+mod staged_download_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    fn controller(path: &Path) -> Arc<TransferController> {
+        create_child_file_transfer_controller(
+            None,
+            "session",
+            "app.log".to_string(),
+            "/remote/app.log",
+            &path.to_string_lossy(),
+            "download",
+            None,
+        )
+    }
+
+    async fn stage(path: &Path, contents: &[u8]) -> (StagedLocalDownload, PathBuf) {
+        let mut download = StagedLocalDownload::new(&path.to_string_lossy())
+            .await
+            .unwrap();
+        let staged_path = download.temp_path.to_path_buf();
+        assert_eq!(staged_path.parent(), path.parent());
+        assert_ne!(staged_path, path);
+        download.file_mut().write_all(contents).await.unwrap();
+        download.file_mut().flush().await.unwrap();
+        assert_eq!(std::fs::read(&staged_path).unwrap(), contents);
+        (download, staged_path)
+    }
+
+    fn assert_entries(path: &Path, expected: &[&str]) {
+        let mut actual: Vec<_> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        actual.sort();
+        let mut expected: Vec<_> = expected.iter().map(|name| name.to_string()).collect();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn overwrite_cancel_after_partial_write_preserves_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, b"original server log").unwrap();
+        let controller = controller(&path);
+        let (download, staged_path) = stage(&path, b"partial new server log").await;
+        assert_eq!(std::fs::read(&path).unwrap(), b"original server log");
+
+        controller.cancel();
+        assert!(matches!(
+            download.commit(&controller, None, None).await,
+            Err(AppError::Cancelled(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), b"original server log");
+        assert!(!staged_path.exists());
+        assert_entries(dir.path(), &["app.log"]);
+    }
+
+    #[tokio::test]
+    async fn new_file_cancel_after_partial_write_leaves_no_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        let controller = controller(&path);
+        let (download, _) = stage(&path, b"partial log").await;
+        assert!(!path.exists());
+
+        controller.cancel();
+        assert!(matches!(
+            download.commit(&controller, None, None).await,
+            Err(AppError::Cancelled(_))
+        ));
+        assert_entries(dir.path(), &[]);
+    }
+
+    #[tokio::test]
+    async fn successful_commit_updates_only_the_final_path_including_empty_files() {
+        for exists in [false, true] {
+            for contents in [&b"complete new log"[..], &b""[..]] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("app.log");
+                if exists {
+                    std::fs::write(&path, b"old longer server log").unwrap();
+                }
+                let controller = controller(&path);
+                let (download, staged_path) = stage(&path, contents).await;
+                assert_eq!(path.exists(), exists);
+                if exists {
+                    assert_eq!(std::fs::read(&path).unwrap(), b"old longer server log");
+                }
+
+                download.commit(&controller, None, None).await.unwrap();
+                assert_eq!(std::fs::read(&path).unwrap(), contents);
+                assert!(!staged_path.exists());
+                assert_entries(dir.path(), &["app.log"]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_partial_download_cleans_only_its_staging_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, b"original").unwrap();
+        let (download, _) = stage(&path, b"partial new log").await;
+
+        // 模拟远端读取/完整性校验失败，离开作用域时不执行提交。
+        drop(download);
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_entries(dir.path(), &["app.log"]);
+    }
+
+    #[tokio::test]
+    async fn failed_commit_keeps_existing_destination_and_cleans_staging_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        // 文件不能替换包含原有文件的目录；不依赖运行用户权限即可稳定触发失败。
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep.log"), b"original").unwrap();
+        let controller = controller(&path);
+        let (download, staged_path) = stage(&path, b"new log").await;
+
+        assert!(
+            matches!(download.commit(&controller, None, None).await, Err(AppError::Channel(message)) if message.starts_with("Failed to commit download"))
+        );
+        assert_eq!(std::fs::read(path.join("keep.log")).unwrap(), b"original");
+        assert!(!staged_path.exists());
+        assert_entries(dir.path(), &["app.log"]);
+    }
+
+    #[tokio::test]
+    async fn directory_cancel_preserves_unfinished_child_and_keeps_committed_children() {
+        // SFTP 的 worker 直接使用目录 controller，SCP 的子任务还需检查父 controller。
+        for use_child_controller in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("app.log");
+            let completed = dir.path().join("completed.log");
+            std::fs::write(&path, b"old app log").unwrap();
+            std::fs::write(dir.path().join("keep.log"), b"untouched").unwrap();
+            std::fs::write(&completed, b"old completed log").unwrap();
+            let parent = create_directory_transfer_controller(
+                None,
+                "session",
+                "logs".to_string(),
+                "/remote/logs",
+                &dir.path().to_string_lossy(),
+                "download",
+                2,
+                100,
+            );
+            let child = controller(&path);
+            let (first, _) = stage(&completed, b"fully downloaded log").await;
+            first.commit(&parent, None, None).await.unwrap();
+            let (download, _) = stage(&path, b"partial app log").await;
+
+            parent.cancel();
+            let result = if use_child_controller {
+                download.commit(&child, Some(&parent), None).await
+            } else {
+                download.commit(&parent, None, None).await
+            };
+            assert!(matches!(result, Err(AppError::Cancelled(_))));
+            assert_eq!(std::fs::read(&path).unwrap(), b"old app log");
+            assert_eq!(
+                std::fs::read(dir.path().join("keep.log")).unwrap(),
+                b"untouched"
+            );
+            assert_eq!(std::fs::read(&completed).unwrap(), b"fully downloaded log");
+            assert_entries(dir.path(), &["app.log", "completed.log", "keep.log"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn aborting_directory_worker_drops_staging_file_without_touching_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, b"original").unwrap();
+        let worker_path = path.clone();
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let mut workers = tokio::task::JoinSet::new();
+        workers.spawn(async move {
+            let (download, staged_path) = stage(&worker_path, b"partial log").await;
+            ready.send(staged_path).unwrap();
+            std::future::pending::<()>().await;
+            drop(download);
+        });
+        let staged_path = started.await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+
+        workers.abort_all();
+        assert!(
+            workers
+                .join_next()
+                .await
+                .unwrap()
+                .unwrap_err()
+                .is_cancelled()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert!(!staged_path.exists());
+        assert_entries(dir.path(), &["app.log"]);
+    }
+
+    #[tokio::test]
+    async fn successful_commit_preserves_requested_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        let controller = controller(&path);
+        let (download, _) = stage(&path, b"complete log").await;
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+        download
+            .commit(&controller, None, Some(modified))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_entries(dir.path(), &["app.log"]);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_target_commit_failure_preserves_original_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, b"original").unwrap();
+        let controller = controller(&path);
+        let (download, staged_path) = stage(&path, b"new complete log").await;
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+
+        assert!(
+            matches!(download.commit(&controller, None, None).await, Err(AppError::Channel(message)) if message.starts_with("Failed to commit download"))
+        );
+        drop(locked);
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert!(!staged_path.exists());
+        assert_entries(dir.path(), &["app.log"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn commit_keeps_existing_permissions_and_normal_new_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        let reference = dir.path().join("reference.log");
+        std::fs::File::create(&reference).unwrap();
+        let ordinary_mode = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+        let controller = controller(&path);
+        let (download, _) = stage(&path, b"new log").await;
+        download.commit(&controller, None, None).await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            ordinary_mode
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let (download, _) = stage(&path, b"replacement").await;
+        download.commit(&controller, None, None).await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn download_reservation_recognizes_windows_case_aliases() {
