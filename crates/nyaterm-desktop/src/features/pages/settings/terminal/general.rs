@@ -39,27 +39,6 @@ impl SettingsPanel {
             .gap_3()
             .child(settings_form_section(
                 palette,
-                Some(t!("settings.interactionEncoding")),
-                Some(t!("settings.interactionEncodingDesc")),
-                self.settings_select_field(
-                    "settings.interaction.default-encoding",
-                    t!("settings.defaultEncoding"),
-                    Some(SharedString::from(t!("settings.defaultEncodingDesc"))),
-                    (
-                        nyaterm_core::character_encoding::CharacterEncoding::ALL
-                            .into_iter()
-                            .map(|encoding| {
-                                NyaSelectOption::new(encoding.label(), encoding.label())
-                            })
-                            .collect(),
-                        encoding,
-                        false,
-                    ),
-                    cx,
-                ),
-            ))
-            .child(settings_form_section(
-                palette,
                 None,
                 None,
                 div()
@@ -361,6 +340,27 @@ impl SettingsPanel {
                             ),
                         ))
                     }),
+            ))
+            .child(settings_form_section(
+                palette,
+                Some(t!("settings.interactionEncoding")),
+                Some(t!("settings.interactionEncodingDesc")),
+                self.settings_select_field(
+                    "settings.interaction.default-encoding",
+                    t!("settings.defaultEncoding"),
+                    Some(SharedString::from(t!("settings.defaultEncodingDesc"))),
+                    (
+                        nyaterm_core::character_encoding::CharacterEncoding::ALL
+                            .into_iter()
+                            .map(|encoding| {
+                                NyaSelectOption::new(encoding.label(), encoding.label())
+                            })
+                            .collect(),
+                        encoding,
+                        false,
+                    ),
+                    cx,
+                ),
             ))
             .child(settings_form_section(
                 palette,
