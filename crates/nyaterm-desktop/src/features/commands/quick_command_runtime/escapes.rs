@@ -84,6 +84,16 @@ pub(super) fn plan_quick_command(text: &str, execute: bool) -> Vec<QuickCommandC
     chunks
 }
 
+/// Whether a plan must go through the staged writer instead of the ordinary
+/// single-write input path.
+///
+/// The chunk count alone is not enough: a script that starts with `\p` plans
+/// as one chunk that still carries the pause, and dropping that delay would
+/// send the text immediately.
+pub(super) fn quick_command_needs_staging(chunks: &[QuickCommandChunk]) -> bool {
+    chunks.len() > 1 || chunks.iter().any(|chunk| !chunk.delay.is_zero())
+}
+
 fn flush(chunks: &mut Vec<QuickCommandChunk>, pending: &mut String, delay: &mut Duration) {
     if pending.is_empty() {
         // Nothing to send yet, so the banked pause carries over.
@@ -112,7 +122,7 @@ fn append_execution_return(chunks: &mut Vec<QuickCommandChunk>) {
 mod tests {
     use std::time::Duration;
 
-    use super::plan_quick_command;
+    use super::{plan_quick_command, quick_command_needs_staging};
 
     fn chunks(text: &str, execute: bool) -> Vec<(Duration, Vec<u8>)> {
         plan_quick_command(text, execute)
@@ -225,5 +235,39 @@ mod tests {
                 (Duration::from_secs(1), b"shutdown\r".to_vec()),
             ]
         );
+    }
+
+    #[test]
+    fn a_lone_chunk_with_a_leading_pause_still_stages() {
+        // `\pwhoami` plans as one delayed chunk: a staging gate keyed only on
+        // the chunk count would drop the wait and send immediately.
+        assert!(quick_command_needs_staging(&plan_quick_command(
+            "\\pwhoami",
+            true
+        )));
+        assert!(quick_command_needs_staging(&plan_quick_command(
+            "\\p\\pwhoami",
+            false
+        )));
+    }
+
+    #[test]
+    fn scripts_without_a_delayed_chunk_do_not_stage() {
+        assert!(!quick_command_needs_staging(&plan_quick_command(
+            "pwd", true
+        )));
+        // A trailing pause has nothing to wait for and is dropped.
+        assert!(!quick_command_needs_staging(&plan_quick_command(
+            "reboot\\p",
+            true
+        )));
+        // A pauses-only script falls back to its literal text, not a wait.
+        assert!(!quick_command_needs_staging(&plan_quick_command(
+            "\\p", false
+        )));
+        assert!(quick_command_needs_staging(&plan_quick_command(
+            "enable\\psecret",
+            false
+        )));
     }
 }

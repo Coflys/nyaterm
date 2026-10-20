@@ -5,7 +5,7 @@ use nyaterm_store::StoreDomain;
 use crate::features::NyaTermApp;
 use crate::models::QuickCommandVariablePromptState;
 
-use super::escapes::{QuickCommandChunk, plan_quick_command};
+use super::escapes::{QuickCommandChunk, plan_quick_command, quick_command_needs_staging};
 use super::helpers::{
     ai_command_card_category_name, unique_quick_command_category_id, validated_quick_command_text,
 };
@@ -251,14 +251,14 @@ impl NyaTermApp {
         let mut chunks = plan_quick_command(&command_text, execute);
         self.queue_quick_command_use_count(command_id);
 
-        if chunks.len() > 1 {
+        if quick_command_needs_staging(&chunks) {
             self.send_staged_quick_command(label, chunks, execute, send_to_all, cx);
             return;
         }
 
         // The common case is one chunk, which goes through the ordinary input
-        // path exactly as before. A lone chunk never carries a pause: `\p` only
-        // delays the chunk that follows it.
+        // path exactly as before. The staging gate above already excluded any
+        // plan that carries a pause, so this chunk's delay is zero.
         let Some(chunk) = chunks.pop() else {
             return;
         };
