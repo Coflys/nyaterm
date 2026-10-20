@@ -242,6 +242,7 @@ pub struct AppSettingsSummary {
     pub terminal_paste_image_as_path: bool,
     #[serde(default)]
     pub terminal_reconnect_restore_cwd: bool,
+    /// Retained only to round-trip legacy settings; no longer affects terminal behavior.
     #[serde(default)]
     pub terminal_low_latency_mode: bool,
     #[serde(default = "default_terminal_zebra_stripes_enabled")]

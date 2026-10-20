@@ -904,23 +904,69 @@ fn terminal_input_latency_active_uses_short_idle_window() {
 }
 
 #[test]
-fn terminal_command_suggestion_input_tracking_skips_low_latency_mode() {
-    assert!(terminal_should_track_command_suggestion_input(
-        true, false, true
-    ));
-    assert!(!terminal_should_track_command_suggestion_input(
-        true, true, true
-    ));
-    assert!(!terminal_should_track_command_suggestion_input(
-        false, false, true
-    ));
+fn legacy_low_latency_setting_does_not_override_individual_feature_switches() {
+    let root = TestConfigDir::new("nyaterm-retired-low-latency");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+    cx.update_entity(&app, |app, cx| {
+        let mut summary = app.settings.summary().clone();
+        summary.terminal_low_latency_mode = true;
+        summary.interaction_command_suggestions_enabled = true;
+        summary.terminal_action_links_enabled = true;
+        app.settings.replace_summary(summary);
+        let mut keywords = app.settings.keyword_config().clone();
+        keywords.enabled = true;
+        app.settings.replace_keyword_config(keywords);
+        app.invalidate_paint_theme_caches();
+
+        app.note_shell_editing_input(b"echo abc", cx);
+        app.note_command_suggestion_input(b"echo abc", cx);
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+        assert!(!app.resolved_keyword_highlight_rules().is_empty());
+        app.ensure_paint_theme_caches();
+        assert!(!app.resolved_keyword_highlight_rules().is_empty());
+        let snapshot = app.terminal.view.views["s1"].screen.viewport_snapshot(0);
+        assert!(app.request_terminal_live_action_link_enrichment("s1", &snapshot));
+
+        let mut summary = app.settings.summary().clone();
+        summary.interaction_command_suggestions_enabled = false;
+        summary.terminal_action_links_enabled = false;
+        app.settings.replace_summary(summary);
+        let mut keywords = app.settings.keyword_config().clone();
+        keywords.enabled = false;
+        app.settings.replace_keyword_config(keywords);
+        app.invalidate_paint_theme_caches();
+
+        app.note_command_suggestion_input(b"echo abc", cx);
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_none()
+        );
+        assert!(app.resolved_keyword_highlight_rules().is_empty());
+        app.ensure_paint_theme_caches();
+        assert!(app.resolved_keyword_highlight_rules().is_empty());
+        assert!(!app.request_terminal_live_action_link_enrichment("s1", &snapshot));
+        assert!(app.settings.summary().terminal_low_latency_mode);
+    });
+}
+
+#[test]
+fn terminal_command_suggestion_input_tracking_requires_tracking_opt_in() {
+    assert!(terminal_should_track_command_suggestion_input(true, true));
+    assert!(!terminal_should_track_command_suggestion_input(false, true));
 }
 
 #[test]
 fn terminal_command_suggestion_input_tracking_skips_disabled_suggestions() {
-    assert!(!terminal_should_track_command_suggestion_input(
-        true, false, false
-    ));
+    assert!(!terminal_should_track_command_suggestion_input(true, false));
 }
 
 #[test]

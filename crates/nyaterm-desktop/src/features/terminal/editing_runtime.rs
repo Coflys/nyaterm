@@ -575,7 +575,6 @@ mod tests {
         cx.update_entity(&app, |app, cx| {
             let mut settings = app.settings.summary().clone();
             settings.interaction_command_suggestions_enabled = false;
-            settings.terminal_low_latency_mode = true;
             app.settings.replace_summary(settings);
             app.terminal.assist.command_suggestions_suppressed = true;
             app.note_shell_editing_input(b"echo abc", cx);

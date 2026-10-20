@@ -207,9 +207,8 @@ fn terminal_scroll_snapshot_request_should_enqueue(
 fn terminal_scroll_snapshot_request_action_links_enabled(
     priority: bool,
     action_links_enabled: bool,
-    low_latency_mode: bool,
 ) -> bool {
-    priority && action_links_enabled && !low_latency_mode
+    priority && action_links_enabled
 }
 
 fn terminal_live_action_link_enrichment_should_enqueue(
@@ -329,8 +328,7 @@ impl NyaTermApp {
         self.terminal.view.frame_pipeline.request_snapshot(
             session_id.to_string(),
             offset,
-            self.settings.summary().terminal_action_links_enabled
-                && !self.settings.summary().terminal_low_latency_mode,
+            self.settings.summary().terminal_action_links_enabled,
             self.settings
                 .summary()
                 .terminal_action_links_matchers
@@ -348,10 +346,7 @@ impl NyaTermApp {
         session_id: &str,
         snapshot: &TerminalSnapshot,
     ) -> bool {
-        if session_id.is_empty()
-            || !self.settings.summary().terminal_action_links_enabled
-            || self.settings.summary().terminal_low_latency_mode
-        {
+        if session_id.is_empty() || !self.settings.summary().terminal_action_links_enabled {
             return false;
         }
         let matcher_key = terminal_action_link_matcher_key(
@@ -489,7 +484,6 @@ impl NyaTermApp {
             let action_links_enabled = terminal_scroll_snapshot_request_action_links_enabled(
                 priority,
                 self.settings.summary().terminal_action_links_enabled,
-                self.settings.summary().terminal_low_latency_mode,
             );
             self.terminal.view.frame_pipeline.request_priority_snapshot(
                 session_id.to_string(),
@@ -523,7 +517,6 @@ impl NyaTermApp {
         if session_id.is_empty()
             || offset == 0
             || !self.settings.summary().terminal_action_links_enabled
-            || self.settings.summary().terminal_low_latency_mode
         {
             return false;
         }
@@ -1304,15 +1297,16 @@ impl NyaTermApp {
             "terminal frame snapshot row reuse"
         );
         // Snapshot applies only dirties the surface, not chrome.
-        let current_action_link_matcher_key =
-            (self.settings.summary().terminal_action_links_enabled
-                && !self.settings.summary().terminal_low_latency_mode)
-                .then(|| {
-                    terminal_action_link_matcher_key(
-                        true,
-                        &self.settings.summary().terminal_action_links_matchers,
-                    )
-                });
+        let current_action_link_matcher_key = self
+            .settings
+            .summary()
+            .terminal_action_links_enabled
+            .then(|| {
+                terminal_action_link_matcher_key(
+                    true,
+                    &self.settings.summary().terminal_action_links_matchers,
+                )
+            });
         let should_paint = self.terminal_session_has_visible_surface(&frame.session_id)
             && self
                 .terminal
@@ -2514,16 +2508,13 @@ mod frame_event_queue_tests {
     #[test]
     fn terminal_scroll_snapshot_action_links_only_for_priority_user_requests() {
         assert!(terminal_scroll_snapshot_request_action_links_enabled(
-            true, true, false
+            true, true
         ));
         assert!(!terminal_scroll_snapshot_request_action_links_enabled(
-            false, true, false
+            false, true
         ));
         assert!(!terminal_scroll_snapshot_request_action_links_enabled(
-            true, false, false
-        ));
-        assert!(!terminal_scroll_snapshot_request_action_links_enabled(
-            true, true, true
+            true, false
         ));
     }
 

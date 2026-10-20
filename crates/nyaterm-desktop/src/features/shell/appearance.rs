@@ -363,9 +363,6 @@ impl NyaTermApp {
     pub(in crate::features) fn resolved_keyword_highlight_rules(
         &self,
     ) -> Arc<Vec<ResolvedKeywordHighlightRule>> {
-        if self.settings.summary().terminal_low_latency_mode {
-            return Arc::new(Vec::new());
-        }
         if let Some(cached) = self.terminal.cached_keyword_highlight_rules() {
             return cached.clone();
         }
@@ -386,17 +383,6 @@ impl NyaTermApp {
     }
 
     fn ensure_keyword_highlight_rules_cache(&mut self) {
-        if self.settings.summary().terminal_low_latency_mode {
-            if !self
-                .terminal
-                .cached_keyword_highlight_rules()
-                .is_some_and(|rules| rules.is_empty())
-            {
-                self.terminal
-                    .cache_keyword_highlight_rules(Arc::new(Vec::new()));
-            }
-            return;
-        }
         if self.terminal.cached_keyword_highlight_rules().is_some() {
             return;
         }

@@ -552,11 +552,6 @@ impl SettingsFeatureState {
         self.summary.x11_display = text;
     }
 
-    pub(in crate::features) fn toggle_terminal_low_latency_mode(&mut self) -> bool {
-        self.summary.terminal_low_latency_mode = !self.summary.terminal_low_latency_mode;
-        self.summary.terminal_low_latency_mode
-    }
-
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self) {
         self.summary.terminal_zebra_stripes_enabled = !self.summary.terminal_zebra_stripes_enabled;
     }
@@ -1921,8 +1916,6 @@ mod tests {
         assert_eq!(summary.ui_process_manager_interval, 3);
         assert_eq!(summary.ui_docker_manager_interval, 120);
 
-        let low_latency = summary.terminal_low_latency_mode;
-        assert_eq!(state.toggle_terminal_low_latency_mode(), !low_latency);
         let zebra = state.summary().terminal_zebra_stripes_enabled;
         state.toggle_terminal_zebra_stripes();
         assert_eq!(state.summary().terminal_zebra_stripes_enabled, !zebra);

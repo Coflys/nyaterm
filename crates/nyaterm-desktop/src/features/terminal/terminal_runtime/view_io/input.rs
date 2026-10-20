@@ -80,10 +80,9 @@ pub(super) fn terminal_session_write_failure_log(context: &str, error: &str) -> 
 
 pub(super) fn terminal_should_track_command_suggestion_input(
     track_suggestions: bool,
-    low_latency_mode: bool,
     command_suggestions_enabled: bool,
 ) -> bool {
-    track_suggestions && !low_latency_mode && command_suggestions_enabled
+    track_suggestions && command_suggestions_enabled
 }
 
 impl NyaTermApp {
@@ -198,7 +197,6 @@ impl NyaTermApp {
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
-            self.settings.summary().terminal_low_latency_mode,
             self.settings
                 .summary()
                 .interaction_command_suggestions_enabled,
@@ -336,7 +334,6 @@ impl NyaTermApp {
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
-            self.settings.summary().terminal_low_latency_mode,
             self.settings
                 .summary()
                 .interaction_command_suggestions_enabled,

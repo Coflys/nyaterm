@@ -15,24 +15,6 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn toggle_terminal_low_latency_mode(&mut self, cx: &mut Context<Self>) {
-        let low_latency_mode = self.settings.toggle_terminal_low_latency_mode();
-        self.terminal.invalidate_command_suggestion_search();
-        if low_latency_mode {
-            self.terminal.clear_command_tracking();
-        }
-        self.invalidate_paint_theme_caches();
-        self.save_terminal_settings(cx);
-        let session_ids = self
-            .visible_terminal_session_ids()
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        for session_id in session_ids {
-            self.notify_terminal_surface_only(Some(session_id.as_str()), cx);
-        }
-    }
-
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_terminal_zebra_stripes();
         self.save_terminal_settings(cx);

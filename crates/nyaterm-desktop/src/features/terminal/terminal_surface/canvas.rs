@@ -205,9 +205,7 @@ impl NyaTermApp {
             && self
                 .terminal_protocol_state_for_session(&session_id)
                 .mouse_reporting;
-        let low_latency_mode = self.settings.summary().terminal_low_latency_mode;
-        let action_links_enabled =
-            self.settings.summary().terminal_action_links_enabled && !low_latency_mode;
+        let action_links_enabled = self.settings.summary().terminal_action_links_enabled;
         let render_output_pressure = self.runtime_output_pressure_active();
         let render_pressure = self
             .terminal
@@ -221,12 +219,8 @@ impl NyaTermApp {
                     view.performance_mode,
                 )
             })
-            .unwrap_or(render_output_pressure)
-            || low_latency_mode;
-        if render_pressure
-            && !low_latency_mode
-            && let Some(view) = self.terminal.view.views.get_mut(&session_id)
-        {
+            .unwrap_or(render_output_pressure);
+        if render_pressure && let Some(view) = self.terminal.view.views.get_mut(&session_id) {
             view.enter_render_degraded_mode();
         }
         let render_degraded = self

@@ -2001,7 +2001,6 @@ forward_app_action!(
     toggle_startup_restore_window_layout,
     toggle_terminal_action_links,
     toggle_terminal_line_numbers,
-    toggle_terminal_low_latency_mode,
     toggle_terminal_reconnect_restore_cwd,
     toggle_terminal_timestamps,
     toggle_terminal_workspace_padding,
