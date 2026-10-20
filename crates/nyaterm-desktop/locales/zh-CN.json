@@ -2556,8 +2556,6 @@
     "logLevelWarn": "警告",
     "logRetention": "日志保留时长",
     "logRetentionDesc": "超过该时长的旧日志会被自动清理。",
-    "macImeCompatibility": "macOS 输入法兼容模式",
-    "macImeCompatibilityDesc": "修复部分 macOS 输入法英文模式下快速输入漏字的问题。仅建议在遇到按键丢失时开启。",
     "manualSyncActions": "手动操作",
     "masterPassword": "主密码",
     "masterPasswordClear": "清除",

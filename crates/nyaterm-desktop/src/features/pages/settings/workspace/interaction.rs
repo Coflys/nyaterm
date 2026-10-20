@@ -240,19 +240,6 @@ impl SettingsPanel {
                                 this.toggle_alt_as_meta(cx);
                             }),
                         ),
-                    ))
-                    .child(settings_form_row(
-                        palette,
-                        t!("settings.macImeCompatibility"),
-                        Some(SharedString::from(t!("settings.macImeCompatibilityDesc"))),
-                        settings_switch(
-                            palette,
-                            "interaction-mac-ime",
-                            self.settings.summary().interaction_mac_ime_compatibility,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_mac_ime_compatibility(cx);
-                            }),
-                        ),
                     )),
             ))
             .child(settings_form_section(

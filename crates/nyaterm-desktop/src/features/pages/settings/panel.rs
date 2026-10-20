@@ -1984,7 +1984,6 @@ forward_app_action!(
     toggle_interaction_copy_on_select,
     toggle_mouse_events_require_alt,
     toggle_keyword_highlights,
-    toggle_mac_ime_compatibility,
     toggle_minimize_to_tray,
     toggle_multi_line_paste_dialog,
     toggle_osc52_clipboard_write,

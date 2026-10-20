@@ -279,10 +279,8 @@ impl NyaTermApp {
         // Live sessions already paint the grid on TerminalSurface. Skip cloning /
         // building a shell-side viewport snapshot except when IME preedit needs
         // cursor placement, or when there is no session (empty bootstrap canvas).
-        let needs_shell_viewport_snapshot = session_id.is_empty()
-            || (is_active
-                && self.settings.summary().interaction_mac_ime_compatibility
-                && !self.terminal.input.ime_marked_text.is_empty());
+        let needs_shell_viewport_snapshot =
+            session_id.is_empty() || (is_active && !self.terminal.input.ime_marked_text.is_empty());
         let snapshot = if needs_shell_viewport_snapshot {
             self.terminal_snapshot_for_session(
                 (!session_id.is_empty()).then_some(session_id.as_str()),
@@ -477,7 +475,6 @@ impl NyaTermApp {
         let terminal_gpui_font = terminal_font.font();
         let ime_preedit_text = (is_active
             && !session_id.is_empty()
-            && self.settings.summary().interaction_mac_ime_compatibility
             && !self.terminal.input.ime_marked_text.is_empty())
         .then(|| self.terminal.input.ime_marked_text.clone());
         let ime_preedit_position = ime_preedit_text.as_ref().map(|_| {

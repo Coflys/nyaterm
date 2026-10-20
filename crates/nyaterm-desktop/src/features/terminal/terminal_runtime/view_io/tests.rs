@@ -1142,7 +1142,6 @@ fn ime_defer_leaves_option_shortcuts_for_terminal_encoding() {
     let event = key_event("b", Some("∫"), gpui::Modifiers::alt());
     for marked_text in ["", "五笔"] {
         assert!(!terminal_should_defer_key_text_to_input_handler_for_state(
-            true,
             marked_text,
             &event
         ));
@@ -1154,7 +1153,7 @@ fn ime_defer_does_not_swallow_plain_space_without_marked_text() {
     let event = key_event("space", None, gpui::Modifiers::default());
 
     assert!(!terminal_should_defer_key_text_to_input_handler_for_state(
-        true, "", &event
+        "", &event
     ));
 }
 
@@ -1163,7 +1162,7 @@ fn ime_defer_keeps_space_for_active_marked_text() {
     let event = key_event("space", None, gpui::Modifiers::default());
 
     assert!(terminal_should_defer_key_text_to_input_handler_for_state(
-        true, "ni", &event
+        "ni", &event
     ));
 }
 
@@ -1172,7 +1171,7 @@ fn ime_defer_keeps_non_ascii_text_for_input_handler() {
     let event = key_event("あ", Some("あ"), gpui::Modifiers::default());
 
     assert!(terminal_should_defer_key_text_to_input_handler_for_state(
-        true, "", &event
+        "", &event
     ));
 }
 

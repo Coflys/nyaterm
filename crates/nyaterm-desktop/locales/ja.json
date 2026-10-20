@@ -2556,8 +2556,6 @@
     "logLevelWarn": "Warn",
     "logRetention": "ログの保持期間",
     "logRetentionDesc": "この期間を超えた古いログは削除されます。",
-    "macImeCompatibility": "macOS IME 互換モード",
-    "macImeCompatibilityDesc": "一部の macOS IME で英語モード時に素早く入力すると文字が欠落する問題を修正します。キー入力が欠ける場合のみ有効にしてください。",
     "manualSyncActions": "手動",
     "masterPassword": "マスターパスワード",
     "masterPasswordClear": "消去",

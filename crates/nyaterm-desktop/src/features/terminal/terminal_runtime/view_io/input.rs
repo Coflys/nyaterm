@@ -1413,7 +1413,6 @@ impl NyaTermApp {
         event: &KeyDownEvent,
     ) -> bool {
         terminal_should_defer_key_text_to_input_handler_for_state(
-            self.settings.summary().interaction_mac_ime_compatibility,
             &self.terminal.input.ime_marked_text,
             event,
         )
@@ -1489,15 +1488,13 @@ pub(super) fn terminal_key_bytes_for_mode_and_settings(
 }
 
 pub(super) fn terminal_should_defer_key_text_to_input_handler_for_state(
-    ime_compatibility: bool,
     marked_text: &str,
     event: &KeyDownEvent,
 ) -> bool {
-    if !ime_compatibility
-        || !event
-            .keystroke
-            .modifiers
-            .is_subset_of(&gpui::Modifiers::shift())
+    if !event
+        .keystroke
+        .modifiers
+        .is_subset_of(&gpui::Modifiers::shift())
     {
         return false;
     }

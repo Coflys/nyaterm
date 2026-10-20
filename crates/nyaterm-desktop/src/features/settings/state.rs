@@ -519,11 +519,6 @@ impl SettingsFeatureState {
         self.summary.interaction_alt_as_meta = !self.summary.interaction_alt_as_meta;
     }
 
-    pub(in crate::features) fn toggle_mac_ime_compatibility(&mut self) {
-        self.summary.interaction_mac_ime_compatibility =
-            !self.summary.interaction_mac_ime_compatibility;
-    }
-
     pub(in crate::features) fn set_interaction_encoding(&mut self, encoding: &str) {
         self.summary.interaction_default_encoding = encoding.to_string();
     }

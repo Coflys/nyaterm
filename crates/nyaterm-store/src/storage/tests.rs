@@ -3317,6 +3317,38 @@ fn header_status_settings_roundtrip_and_preserve_unknown_ui_fields() {
 }
 
 #[test]
+fn retired_ime_setting_survives_loading_and_saving_interaction_settings() {
+    for legacy_enabled in [false, true] {
+        let dir = unique_temp_dir("retired-ime-setting");
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .save_settings_value(&serde_json::json!({
+                "interaction": {
+                    "mac_ime_compatibility": legacy_enabled,
+                    "future_setting": {"keep": true}
+                }
+            }))
+            .unwrap();
+
+        let mut settings = store.load_app_settings_summary().unwrap();
+        assert_eq!(settings.interaction_mac_ime_compatibility, legacy_enabled);
+        settings.interaction_alt_as_meta = true;
+        let saved = store.save_interaction_settings(&settings).unwrap();
+        assert_eq!(saved.interaction_mac_ime_compatibility, legacy_enabled);
+        assert!(saved.interaction_alt_as_meta);
+        let stored = store.load_settings_value().unwrap();
+        assert_eq!(
+            stored["interaction"]["mac_ime_compatibility"],
+            legacy_enabled
+        );
+        assert_eq!(
+            stored["interaction"]["future_setting"],
+            serde_json::json!({"keep": true})
+        );
+    }
+}
+
+#[test]
 fn app_settings_summary_reads_and_updates_host_key_policy() {
     let dir = unique_temp_dir("settings-summary");
     let store = ConnectionStore::open(&dir).expect("store");

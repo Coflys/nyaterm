@@ -2556,8 +2556,6 @@
     "logLevelWarn": "경고",
     "logRetention": "로그 보존 기간",
     "logRetentionDesc": "이 기간을 넘은 오래된 로그는 제거됩니다.",
-    "macImeCompatibility": "macOS IME 호환 모드",
-    "macImeCompatibilityDesc": "일부 macOS IME에서 영어 모드로 빠르게 입력할 때 문자가 누락되는 문제를 해결합니다. 입력 누락이 발생할 때만 활성화하세요.",
     "manualSyncActions": "수동",
     "masterPassword": "마스터 비밀번호",
     "masterPasswordClear": "지우기",

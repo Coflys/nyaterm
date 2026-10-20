@@ -2556,8 +2556,6 @@
     "logLevelWarn": "Warn",
     "logRetention": "Log Retention",
     "logRetentionDesc": "Old logs beyond this window are removed.",
-    "macImeCompatibility": "macOS IME compatibility mode",
-    "macImeCompatibilityDesc": "Fixes dropped characters when typing quickly with some macOS IMEs in English mode. Enable only if you experience missing keystrokes.",
     "manualSyncActions": "Manual",
     "masterPassword": "Master Pass",
     "masterPasswordClear": "Clear",

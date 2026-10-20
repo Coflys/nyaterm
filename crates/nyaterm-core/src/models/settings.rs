@@ -374,6 +374,7 @@ pub struct AppSettingsSummary {
     pub interaction_word_separators: String,
     pub interaction_duplicate_session_command_delay_ms: u32,
     pub interaction_alt_as_meta: bool,
+    /// Retained only to round-trip legacy settings. Native terminal IME is always enabled.
     pub interaction_mac_ime_compatibility: bool,
     pub interaction_tab_double_click_action: String,
     pub interaction_tab_middle_click_action: String,

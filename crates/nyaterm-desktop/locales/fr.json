@@ -2556,8 +2556,6 @@
     "logLevelWarn": "Avertissement",
     "logRetention": "Conservation des journaux",
     "logRetentionDesc": "Les anciens journaux au-delà de cette période sont supprimés.",
-    "macImeCompatibility": "Mode de compatibilité IME macOS",
-    "macImeCompatibilityDesc": "Corrige les caractères perdus lors d'une saisie rapide avec certains IME macOS en mode anglais. À activer uniquement si vous constatez des frappes manquantes.",
     "manualSyncActions": "Manuel",
     "masterPassword": "Mot de passe maître",
     "masterPasswordClear": "Effacer",
