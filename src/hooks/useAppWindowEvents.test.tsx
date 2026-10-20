@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VncServerKeyVerifyRequest } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { createTerminalWindowLeaf, type TerminalWindowNode } from "@/lib/tabWindows";
+import type { TmuxSessionState } from "@/lib/tmux/types";
 import { setOwnerMainWindowLabel } from "@/lib/windowManager";
 import { useAppWindowEvents } from "./useAppWindowEvents";
 
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   focusTerminalSession: vi.fn(),
   setBackendTransferDuplicatePrompt: vi.fn(),
+  removeBackendTransferDuplicatePrompt: vi.fn(),
   toastError: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: vi.fn() }));
@@ -20,6 +22,7 @@ vi.mock("@/lib/invoke", () => ({ invoke: mocks.invoke }));
 vi.mock("@/lib/appSessionFactory", () => ({ focusTerminalSession: mocks.focusTerminalSession }));
 vi.mock("@/lib/transferDuplicatePrompt", () => ({
   setBackendTransferDuplicatePrompt: mocks.setBackendTransferDuplicatePrompt,
+  removeBackendTransferDuplicatePrompt: mocks.removeBackendTransferDuplicatePrompt,
 }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
 vi.mock("@/i18n", () => ({ default: { t: (key: string) => key } }));
@@ -119,6 +122,7 @@ describe("useAppWindowEvents", () => {
     "rdp-certificate-verify",
     "vnc-server-key-verify",
     "transfer-duplicate-request",
+    "transfer-duplicate-resolved",
     "session-connect-after-edit",
   ])("ignores %s addressed to another window", async (name) => {
     const { result, options } = renderEvents();
@@ -130,6 +134,7 @@ describe("useAppWindowEvents", () => {
     expect(options.handleConnectAfterEdit).not.toHaveBeenCalled();
     expect(mocks.focusTerminalSession).not.toHaveBeenCalled();
     expect(mocks.setBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
+    expect(mocks.removeBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
     expect(result.current).toEqual([]);
   });
 
@@ -247,6 +252,8 @@ describe("useAppWindowEvents", () => {
     const transfer = {
       requestId: "transfer-1",
       sessionId: "ssh-1",
+      destinationKind: "local",
+      requiresActivation: true,
       remotePath: "/notes",
       fileName: "notes",
       isDirectory: false,
@@ -257,6 +264,32 @@ describe("useAppWindowEvents", () => {
       ...transfer,
       respondViaBackend: true,
     });
+  });
+
+  it("removes ended duplicate prompts by request ID in the owner window", async () => {
+    renderEvents();
+    await receive("transfer-duplicate-resolved", { requestId: "ended", targetWindowLabel: "main-test" });
+    expect(mocks.removeBackendTransferDuplicatePrompt).toHaveBeenCalledExactlyOnceWith("ended");
+    expect(mocks.setBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
+  });
+
+  it("keeps tmux state events and duplicate prompt completion independent", async () => {
+    const { options } = renderEvents();
+    const state: TmuxSessionState = {
+      controlSessionId: "tmux-1",
+      exited: false,
+      windows: [],
+    };
+    await receive("tmux-session-state", state);
+    expect(options.applyTmuxState).toHaveBeenCalledExactlyOnceWith(state);
+    expect(mocks.removeBackendTransferDuplicatePrompt).not.toHaveBeenCalled();
+
+    await receive("transfer-duplicate-resolved", {
+      requestId: "ended",
+      targetWindowLabel: "main-test",
+    });
+    expect(mocks.removeBackendTransferDuplicatePrompt).toHaveBeenCalledExactlyOnceWith("ended");
+    expect(options.applyTmuxState).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates cloud conflicts across subscription updates", async () => {
@@ -292,7 +325,7 @@ describe("useAppWindowEvents", () => {
     );
     const options = eventOptions();
     const { unmount } = renderHook(() => useAppWindowEvents(options), { wrapper: StrictMode });
-    expect(registrations).toHaveLength(38);
+    expect(registrations).toHaveLength(40);
     unmount();
     await act(async () => {
       for (const registration of registrations) registration.resolve(registration.dispose);

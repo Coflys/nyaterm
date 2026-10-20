@@ -1116,8 +1116,6 @@ pub(super) async fn download_directory_file_with_session(
     max_pipeline_depth: usize,
     path_cache: &RwLock<HashMap<String, Vec<u8>>>,
 ) -> AppResult<u64> {
-    use tokio::io::AsyncWriteExt;
-
     wait_for_transfer_ready(directory_controller).await?;
     if let Some(parent) = std::path::Path::new(&file.local_path).parent() {
         tokio::fs::create_dir_all(parent)
@@ -1125,14 +1123,8 @@ pub(super) async fn download_directory_file_with_session(
             .map_err(|e| AppError::Channel(format!("Failed to create local dir: {}", e)))?;
     }
 
-    let mut local_file = tokio::fs::File::create(&file.local_path)
-        .await
-        .map_err(|e| {
-            AppError::Channel(format!(
-                "Failed to create local file {}: {}",
-                file.local_path, e
-            ))
-        })?;
+    let mut download = StagedLocalDownload::new(&file.local_path).await?;
+    let local_file = download.file_mut();
     if file.size > 0 {
         let _ = local_file.set_len(file.size).await;
     }
@@ -1145,7 +1137,7 @@ pub(super) async fn download_directory_file_with_session(
             &sftp,
             &file.remote_path,
             &file.local_path,
-            &mut local_file,
+            local_file,
             file.size,
             request_kib,
             pipeline_depth,
@@ -1171,11 +1163,6 @@ pub(super) async fn download_directory_file_with_session(
         .await?;
     }
 
-    local_file
-        .flush()
-        .await
-        .map_err(|e| AppError::Channel(format!("Flush failed for {}: {}", file.local_path, e)))?;
-
     ensure_download_complete(
         &file.remote_path,
         &file.local_path,
@@ -1185,15 +1172,13 @@ pub(super) async fn download_directory_file_with_session(
         payload_bytes,
     )?;
 
-    if transfer_settings.preserve_timestamps {
-        if let Some(mtime) = file.mtime.filter(|mtime| *mtime > 0) {
-            let set_mtime =
-                std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(mtime));
-            if let Ok(f) = std::fs::File::open(&file.local_path) {
-                let _ = f.set_modified(set_mtime);
-            }
-        }
-    }
+    let modified = file
+        .mtime
+        .filter(|mtime| transfer_settings.preserve_timestamps && *mtime > 0)
+        .map(|mtime| std::time::UNIX_EPOCH + Duration::from_secs(u64::from(mtime)));
+    download
+        .commit(directory_controller, None, modified)
+        .await?;
 
     emit_parent_progress(app, Some(directory_controller));
     Ok(bytes_transferred)

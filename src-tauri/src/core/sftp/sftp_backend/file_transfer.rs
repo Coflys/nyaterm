@@ -350,6 +350,10 @@ pub(super) async fn download_remote_file_inner_with_controller(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     register_transfer(controller.clone());
+    if let Err(error) = wait_for_transfer_chain(&controller, parent_controller.as_ref()).await {
+        unregister_transfer(&controller.id());
+        return Err(error);
+    }
     let _ = app.emit(
         "transfer-event",
         &controller.build_event("started", 0, None),
@@ -378,9 +382,9 @@ pub(super) async fn download_remote_file_inner_with_controller(
         let total_size = remote_size.unwrap_or(0);
         controller.update_progress(0, total_size);
 
-        let mut local_file = tokio::fs::File::create(&actual_path)
-            .await
-            .map_err(|e| AppError::Channel(format!("Failed to create local file: {}", e)))?;
+        wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
+        let mut download = StagedLocalDownload::new(actual_path).await?;
+        let local_file = download.file_mut();
 
         if total_size > 0 {
             let _ = local_file.set_len(total_size).await;
@@ -393,7 +397,7 @@ pub(super) async fn download_remote_file_inner_with_controller(
                 &sftp,
                 remote_path,
                 actual_path,
-                &mut local_file,
+                local_file,
                 total_size,
                 request_kib,
                 pipeline_depth,
@@ -462,11 +466,6 @@ pub(super) async fn download_remote_file_inner_with_controller(
             close_download_remote_file(remote_file, remote_path, actual_path, None).await?;
         }
 
-        local_file
-            .flush()
-            .await
-            .map_err(|e| AppError::Channel(format!("Flush failed: {}", e)))?;
-
         if let Some(remote_size) = remote_size {
             ensure_download_complete(
                 remote_path,
@@ -478,21 +477,15 @@ pub(super) async fn download_remote_file_inner_with_controller(
             )?;
         }
 
-        if ts.preserve_timestamps {
-            if let Some(ref attrs) = remote_attrs {
-                let mtime = attrs.mtime.unwrap_or(0);
-                if mtime > 0 {
-                    use std::time::UNIX_EPOCH;
-                    let set_mtime = UNIX_EPOCH + std::time::Duration::from_secs(u64::from(mtime));
-                    let local_file_for_ts = std::fs::File::open(actual_path);
-                    if let Ok(f) = local_file_for_ts {
-                        let _ = f.set_modified(set_mtime);
-                    }
-                }
-            }
-        }
-
+        let modified = remote_attrs
+            .as_ref()
+            .and_then(|attrs| attrs.mtime)
+            .filter(|mtime| ts.preserve_timestamps && *mtime > 0)
+            .map(|mtime| std::time::UNIX_EPOCH + Duration::from_secs(u64::from(mtime)));
         let _ = sftp.close().await;
+        download
+            .commit(&controller, parent_controller.as_ref(), modified)
+            .await?;
 
         Ok(bytes_transferred)
     }
@@ -520,7 +513,10 @@ pub(super) async fn download_remote_file_inner_with_controller(
         }
         Err(e) => {
             if matches!(e, AppError::Cancelled(_)) {
-                cleanup_cancelled_download(actual_path).await;
+                let _ = app.emit(
+                    "transfer-event",
+                    &controller.build_event("cancelled", 0, None),
+                );
             } else {
                 let _ = app.emit(
                     "transfer-event",
