@@ -593,7 +593,23 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        self.single_side_panel(side, panel, window, cx)
+        let close_button = (panel != NavItem::Plugins).then(|| {
+            header_svg_icon_button(
+                self.theme_palette(),
+                match side {
+                    PanelSide::Left => "floating-left-panel-close",
+                    PanelSide::Right => "floating-right-panel-close",
+                },
+                "icons/window/close.svg",
+                t!("common.close"),
+                true,
+                cx.listener(move |this, _, _, cx| {
+                    this.close_floating_panel(side, cx);
+                }),
+            )
+            .into_any_element()
+        });
+        self.single_side_panel(side, panel, close_button, window, cx)
     }
 
     pub(in crate::features) fn side_panel_stack(
@@ -611,7 +627,7 @@ impl NyaTermApp {
                 .relative()
                 .size_full()
                 .overflow_hidden()
-                .child(self.single_side_panel(side, overlay, window, cx));
+                .child(self.single_side_panel(side, overlay, None, window, cx));
         }
 
         let open_ids = self.side_open_panel_ids(side);
@@ -627,7 +643,7 @@ impl NyaTermApp {
                     .first_panel_on_side(side)
             })
             .unwrap_or(NavItem::Workspace);
-            self.single_side_panel(side, fallback, window, cx)
+            self.single_side_panel(side, fallback, None, window, cx)
         } else if open_ids.len() == 1 || !self.shell.panels.multi_open {
             let panel = open_ids
                 .first()
@@ -639,7 +655,7 @@ impl NyaTermApp {
                         .first_panel_on_side(side)
                 })
                 .unwrap_or(NavItem::Workspace);
-            self.single_side_panel(side, panel, window, cx)
+            self.single_side_panel(side, panel, None, window, cx)
         } else {
             let weights: Vec<f32> = open_ids
                 .iter()
@@ -689,6 +705,7 @@ impl NyaTermApp {
         &mut self,
         side: PanelSide,
         panel: NavItem,
+        close_button: Option<AnyElement>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -697,6 +714,23 @@ impl NyaTermApp {
             .map(|key| t!(key))
             .unwrap_or_else(|| Cow::Borrowed(panel.panel_title()));
         let actions = self.side_panel_header_actions(panel, cx);
+        // Floating controls share the header's layout instead of covering its
+        // metadata or feature actions from an absolutely positioned overlay.
+        let actions = match close_button {
+            None => actions,
+            Some(close_button) => Some(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_end()
+                    .gap_1()
+                    .max_w_full()
+                    .children(actions)
+                    .child(close_button)
+                    .into_any_element(),
+            ),
+        };
         let palette = self.theme_palette();
         let (meta, body) = self.side_panel_content(side, panel, window, cx);
         div()
@@ -744,20 +778,12 @@ impl NyaTermApp {
         }
     }
 
-    /// Tauri PanelHeader meta/actions: Connections shows total count; AI shows model name.
+    /// Header metadata displayed beside the panel title.
     fn side_panel_meta(&self, _side: PanelSide, panel: NavItem) -> SharedString {
         match panel {
             NavItem::Connections => SharedString::from(""),
             NavItem::AiAssistant => SharedString::from(self.ai_header_presentation().model_label),
             NavItem::ActiveSessions => SharedString::from(""),
-            // Tauri NetworkPanel header shows active tab profile count.
-            NavItem::Tunnels => {
-                let count = match self.connection_state.network_active_tab() {
-                    NetworkTab::Tunnels => self.tunnel_state.tunnels().len(),
-                    NetworkTab::Proxies => self.tunnel_state.proxies().len(),
-                };
-                SharedString::from(count.to_string())
-            }
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
                 .session
@@ -804,17 +830,6 @@ impl NyaTermApp {
                 };
                 SharedString::from(format!("Engine {}", truncate_preview(&version, 24)))
             }
-            // Tauri SecurityAuthPanel header actions show active-tab count.
-            NavItem::SecurityAuth => {
-                let count = match self.security.auth_tab() {
-                    SecurityAuthTab::Keys => self.security.ssh_keys().len(),
-                    SecurityAuthTab::Passwords => self.security.passwords().len(),
-                    SecurityAuthTab::Credentials => self.security.credentials().len(),
-                    SecurityAuthTab::Otp => self.security.otp_entries().len(),
-                    SecurityAuthTab::KnownHosts => self.security.known_hosts().len(),
-                };
-                SharedString::from(count.to_string())
-            }
             NavItem::Recording => SharedString::from(""),
             NavItem::SyncBackupHistory => SharedString::from(""),
             _ => SharedString::from(""),
@@ -826,14 +841,34 @@ impl NyaTermApp {
         panel: NavItem,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        match panel {
-            NavItem::Connections if !self.connection_state.connections().is_empty() => Some(
+        let count = match panel {
+            NavItem::Connections if !self.connection_state.connections().is_empty() => {
+                Some(self.connection_state.connections().len())
+            }
+            NavItem::Tunnels => Some(match self.connection_state.network_active_tab() {
+                NetworkTab::Tunnels => self.tunnel_state.tunnels().len(),
+                NetworkTab::Proxies => self.tunnel_state.proxies().len(),
+            }),
+            NavItem::SecurityAuth => Some(match self.security.auth_tab() {
+                SecurityAuthTab::Keys => self.security.ssh_keys().len(),
+                SecurityAuthTab::Passwords => self.security.passwords().len(),
+                SecurityAuthTab::Credentials => self.security.credentials().len(),
+                SecurityAuthTab::Otp => self.security.otp_entries().len(),
+                SecurityAuthTab::KnownHosts => self.security.known_hosts().len(),
+            }),
+            _ => None,
+        };
+        if let Some(count) = count {
+            return Some(
                 div()
+                    .flex_none()
                     .text_size(px(11.))
                     .text_color(rgb(self.theme_palette().text_dimmed))
-                    .child(self.connection_state.connections().len().to_string())
+                    .child(count.to_string())
                     .into_any_element(),
-            ),
+            );
+        }
+        match panel {
             NavItem::AiAssistant => {
                 let palette = self.theme_palette();
                 let ai_running = self.ai.chat_or_agent_is_running();
@@ -1189,6 +1224,7 @@ fn header_svg_icon_button_with_color(
         .id(SharedString::from(id.clone()))
         .debug_selector(move || id.clone())
         .size(px(28.))
+        .flex_none()
         .flex()
         .items_center()
         .justify_center()
@@ -1226,9 +1262,105 @@ fn header_svg_icon_button_with_color(
 
 #[cfg(test)]
 mod tests {
-    use crate::models::NavItem;
+    use gpui::{
+        Context, Entity, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _,
+        Render, Styled as _, TestAppContext, Window, div, px,
+    };
+
+    use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{NavItem, PanelOpenMode, PanelSide};
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
 
     use super::{SidePanelStackRenderMode, side_panel_stack_render_mode};
+
+    struct FloatingPanelFixture {
+        app: Entity<NyaTermApp>,
+        width: f32,
+        side: PanelSide,
+    }
+
+    impl Render for FloatingPanelFixture {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let panel = self.app.update(cx, |app, cx| {
+                app.floating_side_panel(self.side, NavItem::AiAssistant, window, cx)
+                    .into_any_element()
+            });
+            div().size_full().child(
+                div()
+                    .debug_selector(|| "floating-panel-fixture".into())
+                    .w(px(self.width))
+                    .h_full()
+                    .child(panel),
+            )
+        }
+    }
+
+    #[test]
+    fn floating_panel_close_stays_clickable_without_covering_actions_at_narrow_widths() {
+        let test_dir = TestConfigDir::new("nyaterm-floating-panel-header");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "header-test");
+        app.update(&mut cx, |app, cx| {
+            app.sync_component_theme(cx);
+            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
+        });
+        let (fixture, cx) = cx.add_window_view(|_, _| FloatingPanelFixture {
+            app: app.clone(),
+            width: 320.,
+            side: PanelSide::Left,
+        });
+
+        for (side, close_id) in [
+            (PanelSide::Left, "floating-left-panel-close"),
+            (PanelSide::Right, "floating-right-panel-close"),
+        ] {
+            for width in [160., 200., 320.] {
+                cx.update(|_, cx| {
+                    app.update(cx, |app, cx| {
+                        app.toggle_floating_panel(NavItem::AiAssistant, side, cx);
+                    });
+                    fixture.update(cx, |fixture, cx| {
+                        fixture.width = width;
+                        fixture.side = side;
+                        cx.notify();
+                    });
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    _ = window.draw(cx);
+                });
+
+                let panel = cx.debug_bounds("floating-panel-fixture").unwrap();
+                let close = cx.debug_bounds(close_id).unwrap();
+                assert!(close.left() >= panel.left() && close.right() <= panel.right());
+                for id in [
+                    "ai-header-execution-mode-toggle",
+                    "ai-header-history-toggle",
+                    "ai-header-open-settings",
+                    "ai-header-new-chat",
+                ] {
+                    let action = cx.debug_bounds(id).unwrap();
+                    assert!(
+                        action.left() >= panel.left() && action.right() <= panel.right(),
+                        "{id} must stay inside a {width}px panel"
+                    );
+                    assert!(
+                        action.right() <= close.left()
+                            || close.right() <= action.left()
+                            || action.bottom() <= close.top()
+                            || close.bottom() <= action.top(),
+                        "{id} must not overlap close at {width}px"
+                    );
+                }
+                cx.simulate_click(close.center(), Modifiers::default());
+                cx.update(|_, cx| {
+                    assert_eq!(app.read(cx).shell.floating_panel(side), None);
+                });
+            }
+        }
+    }
 
     #[test]
     fn exclusive_panel_overlay_takes_precedence_over_stack_construction() {
