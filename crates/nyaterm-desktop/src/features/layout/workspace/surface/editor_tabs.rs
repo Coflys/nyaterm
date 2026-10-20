@@ -2,6 +2,7 @@ use gpui::{
     Context, FontWeight, IntoElement, MouseButton, SharedString, div, prelude::*, px, rgb, rgba,
     svg,
 };
+use nyaterm_ui::tab_close::NyaTabCloseButton;
 use nyaterm_ui::{NyaContextMenu, NyaMenuItem, NyaTooltip};
 use rust_i18n::t;
 
@@ -176,56 +177,22 @@ impl NyaTermApp {
                     .text_ellipsis()
                     .child(document.name),
             )
-            .when(document.dirty, |this| {
-                this.child(
-                    div()
-                        .size(px(6.))
-                        .flex_none()
-                        .rounded_full()
-                        .bg(rgb(palette.link)),
-                )
-            })
             .child(
-                div()
-                    .id(SharedString::from(format!(
-                        "editor-tab-close-{}",
-                        document.id
-                    )))
-                    .tooltip(|window, cx| {
-                        NyaTooltip::new(t!("common.close").to_string()).build(window, cx)
-                    })
-                    .size(px(18.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_sm()
-                    .when(!selected, |this| {
-                        this.opacity(0.)
-                            .group_hover(tab_group.clone(), |style| style.opacity(1.))
-                    })
-                    .hover(|this| this.bg(rgb(palette.border)))
-                    .group(SharedString::from(format!(
-                        "editor-tab-close-group-{}",
-                        document.id
-                    )))
-                    .child(
-                        svg()
-                            .size(px(13.))
-                            .path("icons/window/close.svg")
-                            .text_color(rgb(palette.text_muted))
-                            .group_hover(
-                                SharedString::from(format!(
-                                    "editor-tab-close-group-{}",
-                                    document.id
-                                )),
-                                |this| this.text_color(rgb(palette.danger)),
-                            ),
-                    )
-                    .on_click(cx.listener(move |app, _, _, cx| {
-                        cx.stop_propagation();
-                        app.request_workspace_tabs_close(vec![close_key.clone()], None, cx);
-                    })),
+                NyaTabCloseButton::new(
+                    format!("editor-tab-close-{}", document.id),
+                    tab_group,
+                    palette,
+                    if document.dirty {
+                        format!("{} · {}", t!("common.close"), t!("fileEditor.unsaved"))
+                    } else {
+                        t!("common.close").to_string()
+                    },
+                )
+                .active(selected)
+                .dirty(document.dirty)
+                .on_click(cx.listener(move |app, _, _, cx| {
+                    app.request_workspace_tabs_close(vec![close_key.clone()], None, cx);
+                })),
             );
         let app = cx.weak_entity();
         NyaContextMenu::new_dynamic(tab, move |_, cx| {

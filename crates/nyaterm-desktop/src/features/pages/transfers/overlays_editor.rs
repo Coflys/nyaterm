@@ -5,6 +5,7 @@ use gpui::{
     Window, div, prelude::*, px, rgb, rgba,
 };
 use nyaterm_core::truncate_preview;
+use nyaterm_ui::tab_close::NyaTabCloseButton;
 use nyaterm_ui::{NyaScrollable, NyaTooltip};
 
 use crate::features::NyaTermApp;
@@ -253,15 +254,12 @@ impl NyaTermApp {
             let id = document.id.clone();
             let close_id = id.clone();
             let active = id == workspace.active_tab_id;
-            let label = format!(
-                "{}{}",
-                document.name,
-                if document.dirty { " •" } else { "" }
-            );
+            let tab_group = SharedString::from(format!("editor-window-tab-group-{id}"));
             let path = document.remote_path.clone();
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("editor-window-tab-{id}")))
+                    .group(tab_group.clone())
                     .h_full()
                     .flex_none()
                     .px_3()
@@ -270,18 +268,28 @@ impl NyaTermApp {
                     .gap_2()
                     .text_xs()
                     .bg(rgb(if active { palette.bg } else { palette.surface }))
+                    .hover(move |style| style.bg(rgb(palette.hover)))
                     .tooltip(move |window, cx| NyaTooltip::new(path.clone()).build(window, cx))
                     .on_click(
                         cx.listener(move |app, _, _, cx| app.activate_transfer_editor_tab(&id, cx)),
                     )
-                    .child(label)
+                    .child(document.name.clone())
                     .child(
-                        nyaterm_ui::NyaButton::new("window-file-close", "×")
-                            .small()
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                cx.stop_propagation();
-                                app.close_transfer_editor_tab(&close_id, cx);
-                            })),
+                        NyaTabCloseButton::new(
+                            format!("editor-window-tab-close-{close_id}"),
+                            tab_group,
+                            palette,
+                            if document.dirty {
+                                format!("{} · {}", t!("common.close"), t!("fileEditor.unsaved"))
+                            } else {
+                                t!("common.close").to_string()
+                            },
+                        )
+                        .active(active)
+                        .dirty(document.dirty)
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.close_transfer_editor_tab(&close_id, cx);
+                        })),
                     ),
             );
         }
