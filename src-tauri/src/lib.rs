@@ -37,6 +37,7 @@ use crate::core::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    platform::prepare_webkit_renderer();
     platform::prepare_appimage_wayland_backend();
     portable_updater::schedule_cleanup_from_environment();
     let runtime = runtime::resolve().expect("failed to resolve runtime paths");
@@ -282,12 +283,16 @@ pub fn run() {
             cmd::session::list_serial_ports,
             cmd::session::write_to_session,
             cmd::session::write_bytes_to_session,
+            cmd::session::get_session_encoding,
+            cmd::session::set_session_encoding,
             cmd::session::set_session_output_paused,
             cmd::session::ack_session_output,
             cmd::session::resize_session,
             cmd::session::attach_session,
             cmd::session::detach_session_renderer,
             cmd::session::close_session,
+            cmd::tmux::tmux_send_command,
+            cmd::tmux::tmux_detach,
             cmd::session::list_sessions,
             cmd::session::get_session_cwd_presentation,
             cmd::session::add_command_history,

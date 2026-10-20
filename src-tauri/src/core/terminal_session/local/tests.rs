@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    use super::{configure_local_pty_environment, local_shell_line_editor_ready};
+    use super::local_shell_line_editor_ready;
     #[cfg(unix)]
     use super::prepare_local_startup_injection;
     #[cfg(target_os = "macos")]
@@ -11,7 +11,8 @@ mod tests {
         StartupGateOutput, StartupInjectionAttempt, StartupInjectionDecision, StartupInjectionSchedule,
         StartupInputBarrier, StartupOutputGate, StdMutex, TerminalQueryDetector, WorkingDirectoryOutcome, ZmodemDetectResult, ZmodemDetector,
         ZmodemDirection, apply_working_dir_to_command, build_cmd_prompt,
-        build_local_startup_script, cancel_startup_for_pending_zmodem, detect_local_zmodem,
+        build_local_startup_script, cancel_startup_for_pending_zmodem,
+        configure_local_pty_environment, detect_local_zmodem,
         drain_startup_pipeline_on_cancel, input_cancels_startup_injection,
         is_unresolved_shell_wrapper, local_managed_integration_enabled, lock_or_recover,
         managed_cwd_runtime_ready, parse_shell_args, reconcile_managed_cwd_payloads,
@@ -350,9 +351,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn local_pty_environment_sets_terminal() {
-        let shell = if cfg!(target_os = "macos") {
+    fn local_pty_environment_sets_terminal_identity() {
+        let shell = if cfg!(target_os = "windows") {
+            "pwsh.exe"
+        } else if cfg!(target_os = "macos") {
             "/bin/zsh"
         } else {
             "/bin/bash"
@@ -363,6 +365,19 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM").and_then(|value| value.to_str()),
             Some("xterm-256color")
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|value| value.to_str()),
+            Some("truecolor")
+        );
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|value| value.to_str()),
+            Some("NyaTerm")
+        );
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM_VERSION")
+                .and_then(|value| value.to_str()),
+            Some(env!("CARGO_PKG_VERSION"))
         );
     }
 

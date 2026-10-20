@@ -84,7 +84,7 @@ export function supportsPanel(id: string): boolean {
 }
 
 export function supportsSettingsTab(id: string): boolean {
-  if (id === "remote-desktop") return canUseWindowsRdpClient();
+  if (id === "remote-desktop") return false;
   return runtime === "desktop" || !new Set(["ai-agents", "security", "syncBackup"]).has(id);
 }
 

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use nyaterm_mcp_protocol::MCP_TOOL_REGISTRY;
@@ -14,9 +14,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{AiAgentKind, AiBackendKind, AiModelSource, AiSettings, CodexThreadMode};
 use crate::core::SessionManager;
+use crate::core::mcp::{McpTurnGuard, SessionMcpCredential};
 use crate::error::{AppError, AppResult};
 use crate::utils::process::hide_window;
 
@@ -98,13 +100,83 @@ pub struct CodexAppServerManager {
     state: RwLock<CodexRuntimeState>,
     writer: Mutex<Option<BufWriter<ChildStdin>>>,
     child: Mutex<Option<Child>>,
-    pending: Mutex<HashMap<u64, oneshot::Sender<AppResult<Value>>>>,
-    active_turns: Mutex<HashMap<String, Arc<CodexTurnContext>>>,
+    pending: StdMutex<HashMap<u64, oneshot::Sender<AppResult<Value>>>>,
+    active_turns: StdMutex<HashMap<String, Arc<CodexTurnContext>>>,
+    starting_turns: StdMutex<HashMap<String, Arc<CodexTurnContext>>>,
     next_request_id: AtomicU64,
     last_account: Mutex<Option<CodexAccountStatus>>,
+    sessions: StdMutex<HashMap<String, Arc<CodexSession>>>,
+    epoch: AtomicU64,
+    runtime_cancel: StdMutex<CancellationToken>,
+    #[cfg(test)]
+    test_events: StdMutex<Option<tokio::sync::mpsc::UnboundedSender<(String, Value)>>>,
+}
+
+#[derive(Default)]
+struct CodexSession {
+    thread: Mutex<Option<LoadedCodexThread>>,
+    credential: StdMutex<Option<Arc<SessionMcpCredential>>>,
+    cancellation: CancellationToken,
+}
+
+struct LoadedCodexThread {
+    id: String,
+    epoch: u64,
+    ephemeral: bool,
+    mcp: bool,
+}
+
+impl CodexSession {
+    fn close_credential(&self) {
+        if let Some(credential) = self.credential.lock().unwrap().take() {
+            credential.close();
+        }
+    }
+
+    fn close(&self) {
+        self.cancellation.cancel();
+        self.close_credential();
+    }
+}
+
+struct CodexRequestGuard<'a> {
+    manager: &'a CodexAppServerManager,
+    id: u64,
+}
+impl Drop for CodexRequestGuard<'_> {
+    fn drop(&mut self) {
+        self.manager.pending.lock().unwrap().remove(&self.id);
+    }
+}
+
+struct CodexTurnRegistration<'a> {
+    manager: &'a CodexAppServerManager,
+    thread_id: &'a str,
+    turn_id: Option<String>,
+}
+impl Drop for CodexTurnRegistration<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = &self.turn_id {
+            self.manager.active_turns.lock().unwrap().remove(id);
+        }
+        self.manager
+            .starting_turns
+            .lock()
+            .unwrap()
+            .remove(self.thread_id);
+    }
+}
+
+struct CodexCompletionGuard(CancellationToken);
+impl Drop for CodexCompletionGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 struct CodexTurnContext {
+    completed: CancellationToken,
+    mcp_turn: StdMutex<Option<McpTurnGuard>>,
     app: AppHandle,
     session_manager: Arc<SessionManager>,
     approval_manager: Arc<AgentApprovalManager>,
@@ -123,10 +195,49 @@ impl CodexAppServerManager {
             state: RwLock::new(CodexRuntimeState::Stopped),
             writer: Mutex::new(None),
             child: Mutex::new(None),
-            pending: Mutex::new(HashMap::new()),
-            active_turns: Mutex::new(HashMap::new()),
+            pending: StdMutex::new(HashMap::new()),
+            active_turns: StdMutex::new(HashMap::new()),
+            starting_turns: StdMutex::new(HashMap::new()),
             next_request_id: AtomicU64::new(1),
             last_account: Mutex::new(None),
+            sessions: StdMutex::new(HashMap::new()),
+            epoch: AtomicU64::new(0),
+            runtime_cancel: StdMutex::new(CancellationToken::new()),
+            #[cfg(test)]
+            test_events: StdMutex::new(None),
+        }
+    }
+
+    fn session(&self, id: &str) -> Arc<CodexSession> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .entry(id.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    pub async fn release_session(&self, id: &str) {
+        let session = self.sessions.lock().unwrap().remove(id);
+        if let Some(session) = session {
+            session.close();
+            let _finished = session.thread.lock().await;
+        }
+    }
+
+    pub async fn release_all_sessions(&self) {
+        let sessions: Vec<_> = self
+            .sessions
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        for session in &sessions {
+            session.close();
+        }
+        for session in sessions {
+            let _finished = session.thread.lock().await;
         }
     }
 
@@ -209,6 +320,8 @@ impl CodexAppServerManager {
 
         *self.writer.lock().await = Some(BufWriter::new(stdin));
         *child_guard = Some(child);
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        *self.runtime_cancel.lock().unwrap() = CancellationToken::new();
 
         let reader_manager = self.clone();
         tauri::async_runtime::spawn(async move {
@@ -351,10 +464,13 @@ impl CodexAppServerManager {
     async fn request(&self, method: &str, params: Value) -> AppResult<Value> {
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        self.pending.lock().unwrap().insert(id, tx);
+        let _registration = CodexRequestGuard { manager: self, id };
         self.write_message(json!({ "method": method, "id": id, "params": params }))
             .await?;
-        rx.await
+        timeout(Duration::from_secs(30), rx)
+            .await
+            .map_err(|_| AppError::Channel(format!("Codex {method} timed out")))?
             .map_err(|_| AppError::Channel("codex response channel closed".to_string()))?
     }
 
@@ -386,13 +502,19 @@ impl CodexAppServerManager {
             };
             self.handle_message(value).await;
         }
-        *self.state.write().await = CodexRuntimeState::Failed;
-        let mut pending = self.pending.lock().await;
-        for (_, sender) in pending.drain() {
-            let _ = sender.send(Err(AppError::Channel(
-                "codex app-server exited".to_string(),
-            )));
+        self.runtime_cancel.lock().unwrap().cancel();
+        for session in self.sessions.lock().unwrap().values() {
+            session.close_credential();
         }
+        {
+            let mut pending = self.pending.lock().unwrap();
+            for (_, sender) in pending.drain() {
+                let _ = sender.send(Err(AppError::Channel(
+                    "codex app-server exited".to_string(),
+                )));
+            }
+        }
+        *self.state.write().await = CodexRuntimeState::Failed;
     }
 
     async fn handle_message(&self, value: Value) {
@@ -401,7 +523,7 @@ impl CodexAppServerManager {
                 self.handle_server_request(id, value).await;
                 return;
             }
-            let sender = self.pending.lock().await.remove(&id);
+            let sender = self.pending.lock().unwrap().remove(&id);
             if let Some(sender) = sender {
                 let result = if let Some(error) = value.get("error") {
                     let message = error
@@ -466,11 +588,9 @@ impl CodexAppServerManager {
             .get("tool")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let context = {
-            let active = self.active_turns.lock().await;
-            active.get(turn_id).cloned()
-        }
-        .ok_or_else(|| AppError::Config("No active Codex turn for tool call".to_string()))?;
+        let context = self
+            .turn_context(turn_id, &params)
+            .ok_or_else(|| AppError::Config("No active Codex turn for tool call".to_string()))?;
         context
             .dynamic_tool_call_count
             .fetch_add(1, Ordering::SeqCst);
@@ -526,7 +646,19 @@ impl CodexAppServerManager {
         }
     }
 
+    fn turn_context(&self, turn_id: &str, params: &Value) -> Option<Arc<CodexTurnContext>> {
+        let active = self.active_turns.lock().unwrap();
+        active.get(turn_id).cloned().or_else(|| {
+            let thread_id = params.get("threadId")?.as_str()?;
+            self.starting_turns.lock().unwrap().get(thread_id).cloned()
+        })
+    }
+
     async fn handle_notification(&self, method: &str, params: Value) {
+        #[cfg(test)]
+        if let Some(events) = self.test_events.lock().unwrap().as_ref() {
+            let _ = events.send((method.to_string(), params.clone()));
+        }
         match method {
             "account/updated" => {
                 let status = CodexAccountStatus {
@@ -549,10 +681,7 @@ impl CodexAppServerManager {
             }
             "item/agentMessage/delta" => {
                 if let Some(turn_id) = params.get("turnId").and_then(Value::as_str) {
-                    let context = {
-                        let active = self.active_turns.lock().await;
-                        active.get(turn_id).cloned()
-                    };
+                    let context = self.turn_context(turn_id, &params);
                     if let Some(context) = context
                         && let Some(delta) = params.get("delta").and_then(Value::as_str)
                         && !delta.is_empty()
@@ -578,10 +707,7 @@ impl CodexAppServerManager {
             }
             "item/reasoning/delta" | "item/reasoning/summaryDelta" => {
                 if let Some(turn_id) = params.get("turnId").and_then(Value::as_str) {
-                    let context = {
-                        let active = self.active_turns.lock().await;
-                        active.get(turn_id).cloned()
-                    };
+                    let context = self.turn_context(turn_id, &params);
                     if let Some(context) = context {
                         let delta = params
                             .get("delta")
@@ -625,9 +751,35 @@ impl CodexAppServerManager {
                     .and_then(Value::as_str)
                     .unwrap_or("Codex request failed")
                     .to_string();
-                let contexts: Vec<Arc<CodexTurnContext>> =
-                    self.active_turns.lock().await.values().cloned().collect();
+                if params.get("willRetry").and_then(Value::as_bool) == Some(true) {
+                    return;
+                }
+                let contexts: Vec<Arc<CodexTurnContext>> = {
+                    let mut active = self.active_turns.lock().unwrap();
+                    let mut starting = self.starting_turns.lock().unwrap();
+                    if let Some(turn_id) = params.get("turnId").and_then(Value::as_str) {
+                        active
+                            .remove(turn_id)
+                            .or_else(|| {
+                                params
+                                    .get("threadId")
+                                    .and_then(Value::as_str)
+                                    .and_then(|id| starting.remove(id))
+                            })
+                            .into_iter()
+                            .collect()
+                    } else {
+                        active
+                            .drain()
+                            .map(|(_, context)| context)
+                            .chain(starting.drain().map(|(_, context)| context))
+                            .collect()
+                    }
+                };
                 for context in contexts {
+                    let _completion = CodexCompletionGuard(context.completed.clone());
+                    context.mcp_turn.lock().unwrap().take();
+                    active_streams().lock().unwrap().remove(&context.stream_id);
                     emit_stream_event(
                         &context.app,
                         &context.stream_id,
@@ -650,10 +802,18 @@ impl CodexAppServerManager {
     }
 
     async fn complete_turn(&self, turn_id: &str, params: Value) {
-        let context = self.active_turns.lock().await.remove(turn_id);
+        let context = {
+            let mut active = self.active_turns.lock().unwrap();
+            active.remove(turn_id).or_else(|| {
+                let thread_id = params.get("threadId")?.as_str()?;
+                self.starting_turns.lock().unwrap().remove(thread_id)
+            })
+        };
         let Some(context) = context else {
             return;
         };
+        let _completion = CodexCompletionGuard(context.completed.clone());
+        context.mcp_turn.lock().unwrap().take();
         active_streams().lock().unwrap().remove(&context.stream_id);
 
         let turn = params.get("turn").cloned().unwrap_or(Value::Null);
@@ -803,10 +963,19 @@ async fn run_codex_stream_inner(
         ));
     }
     let selected_model_name = resolve_codex_model_name(&settings, request);
+    let session = manager.session(&session_id);
+    let mut thread = session
+        .thread
+        .try_lock()
+        .map_err(|_| AppError::Config("A Codex request is already running in this chat.".into()))?;
+    if session.cancellation.is_cancelled() {
+        return Err(AppError::Cancelled("Codex session closed".into()));
+    }
 
     manager
         .ensure_started(settings.codex.executable_path.clone())
         .await?;
+    let runtime_cancel = manager.runtime_cancel.lock().unwrap().clone();
 
     emit_stream_event(
         &app,
@@ -824,6 +993,10 @@ async fn run_codex_stream_inner(
         },
     );
 
+    if session.cancellation.is_cancelled() || runtime_cancel.is_cancelled() {
+        session.close_credential();
+        return Err(AppError::Cancelled("Codex session closed".into()));
+    }
     if settings.redaction_enabled {
         redact_request(request);
     }
@@ -831,140 +1004,157 @@ async fn run_codex_stream_inner(
         save_user_message(&app, &session_id, request)?;
     }
 
-    let use_nyaterm_mcp = settings.codex.tool_integration_mode.as_deref() == Some("nyaterm_mcp");
-    let mut mcp_fallback = false;
-    let mut mcp_credential = if use_nyaterm_mcp {
-        if let Some(mcp) = app.try_state::<Arc<crate::core::mcp::McpManager>>() {
-            let (scope, default_id) = codex_request_terminal_scope(request);
-            let owner =
-                if let Some(id) = default_id.as_deref().or(scope.first().map(String::as_str)) {
-                    session_manager
-                        .session_info(id)
-                        .await
-                        .ok()
-                        .and_then(|info| info.owner_window_label)
-                } else {
-                    None
-                };
-            match mcp
-                .create_ephemeral_credential(
-                    "codex_mcp",
-                    scope,
-                    default_id,
-                    request.permission_mode.clone(),
-                    owner,
-                    codex_terminal_presentation_max_lines(&settings),
-                )
-                .await
-            {
-                Ok(credential) => Some(credential),
-                Err(error) => {
-                    mcp_fallback = true;
-                    emit_codex_mcp_fallback(
-                        &app,
-                        &stream_id,
-                        &session_id,
-                        request,
-                        &error.to_string(),
-                    );
-                    None
-                }
-            }
-        } else {
-            mcp_fallback = true;
-            emit_codex_mcp_fallback(
-                &app,
-                &stream_id,
-                &session_id,
-                request,
-                "The NyaTerm MCP manager is unavailable.",
-            );
-            None
-        }
-    } else {
-        None
-    };
-
     let metadata = get_session_backend_metadata(&app, &session_id)?;
-    let thread_id = if mcp_credential.is_some() || mcp_fallback {
-        None
-    } else {
-        reusable_codex_thread_id(metadata.as_ref())
-    };
-
-    let thread_id = if let Some(thread_id) = thread_id {
-        manager
-            .request("thread/resume", json!({ "threadId": thread_id }))
-            .await?;
-        thread_id
-    } else {
-        let params = codex_thread_start_params_with_mcp(
-            selected_model_name.as_deref(),
-            settings.codex.thread_mode == CodexThreadMode::Ephemeral,
-            mcp_credential.as_ref(),
-        );
-        let response = match manager.request("thread/start", params).await {
-            Ok(response) => response,
-            Err(error) if mcp_credential.is_some() => {
+    let epoch = manager.epoch.load(Ordering::SeqCst);
+    let cached_thread_id = live_codex_thread_id(thread.as_ref(), epoch)?;
+    let previous_thread_id = cached_thread_id.clone().or_else(|| {
+        thread
+            .as_ref()
+            .map(|thread| thread.id.clone())
+            .or_else(|| reusable_codex_thread_id(metadata.as_ref()))
+    });
+    if cached_thread_id.is_none()
+        && metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.codex_thread_mode == Some(CodexThreadMode::Ephemeral))
+        && previous_thread_id.is_some()
+    {
+        return Err(AppError::Config(
+            "The temporary Codex thread is no longer available. Start a new chat.".into(),
+        ));
+    }
+    let use_nyaterm_mcp = thread
+        .as_ref()
+        .map(|thread| thread.mcp)
+        .or_else(|| {
+            metadata
+                .as_ref()
+                .and_then(|metadata| metadata.codex_tool_integration_mode.as_deref())
+                .map(|mode| mode == "nyaterm_mcp")
+        })
+        .unwrap_or(settings.codex.tool_integration_mode.as_deref() == Some("nyaterm_mcp"));
+    let ephemeral = thread
+        .as_ref()
+        .map(|thread| thread.ephemeral)
+        .or_else(|| {
+            metadata
+                .as_ref()
+                .and_then(|metadata| metadata.codex_thread_mode.as_ref())
+                .map(|mode| *mode == CodexThreadMode::Ephemeral)
+        })
+        .unwrap_or(settings.codex.thread_mode == CodexThreadMode::Ephemeral);
+    let mut mcp_credential = session.credential.lock().unwrap().clone();
+    if use_nyaterm_mcp && mcp_credential.is_none() {
+        let result = if let Some(mcp) = app.try_state::<Arc<crate::core::mcp::McpManager>>() {
+            mcp.create_session_credential().await
+        } else {
+            Err(AppError::Config(
+                "The NyaTerm MCP manager is unavailable.".into(),
+            ))
+        };
+        match result {
+            Ok(credential) => {
+                let credential = Arc::new(credential);
+                *session.credential.lock().unwrap() = Some(credential.clone());
+                mcp_credential = Some(credential);
+            }
+            Err(error) if previous_thread_id.is_none() => {
                 emit_codex_mcp_fallback(&app, &stream_id, &session_id, request, &error.to_string());
-                mcp_credential.take();
-                manager
-                    .request(
-                        "thread/start",
-                        codex_thread_start_params_with_mcp(
-                            selected_model_name.as_deref(),
-                            settings.codex.thread_mode == CodexThreadMode::Ephemeral,
-                            None,
-                        ),
-                    )
-                    .await?
             }
             Err(error) => return Err(error),
+        }
+    }
+    let mut mcp_turn = if let Some(credential) = mcp_credential.as_ref() {
+        let (scope, default_id) = codex_request_terminal_scope(request);
+        let owner = if let Some(id) = default_id.as_deref().or(scope.first().map(String::as_str)) {
+            session_manager
+                .session_info(id)
+                .await
+                .ok()
+                .and_then(|info| info.owner_window_label)
+        } else {
+            None
         };
-        let new_thread_id = response
-            .get("thread")
-            .and_then(|thread| thread.get("id"))
-            .and_then(Value::as_str)
-            .or_else(|| response.get("id").and_then(Value::as_str))
-            .ok_or_else(|| {
-                AppError::Config("Codex thread/start returned no thread id".to_string())
-            })?
-            .to_string();
+        Some(credential.activate(
+            scope,
+            default_id,
+            request.permission_mode.clone(),
+            owner,
+            codex_terminal_presentation_max_lines(&settings),
+        )?)
+    } else {
+        None
+    };
+    if session.cancellation.is_cancelled() || runtime_cancel.is_cancelled() {
+        session.close_credential();
+        return Err(AppError::Cancelled("Codex session closed".into()));
+    }
+
+    let response = request_codex_thread(
+        &manager,
+        &mut thread,
+        previous_thread_id.as_deref(),
+        selected_model_name.as_deref(),
+        ephemeral,
+        mcp_credential.as_deref(),
+    )
+    .await;
+    let thread_id = match response {
+        Ok(id) => id,
+        Err(error) if previous_thread_id.is_none() && mcp_credential.is_some() => {
+            emit_codex_mcp_fallback(&app, &stream_id, &session_id, request, &error.to_string());
+            mcp_turn.take();
+            session.close_credential();
+            mcp_credential.take();
+            request_codex_thread(
+                &manager,
+                &mut thread,
+                None,
+                selected_model_name.as_deref(),
+                ephemeral,
+                None,
+            )
+            .await?
+        }
+        Err(error) => return Err(error),
+    };
+    if session.cancellation.is_cancelled() || runtime_cancel.is_cancelled() {
+        session.close_credential();
+        return Err(AppError::Cancelled("Codex session closed".into()));
+    }
+    if cached_thread_id.is_none() {
         set_session_backend_metadata(
             &app,
             &session_id,
             AiSessionBackendMetadata {
                 backend: AiBackendKind::Codex,
-                external_thread_id: Some(new_thread_id.clone()),
+                external_thread_id: Some(thread_id.clone()),
                 codex_terminal_tools_version: Some(CODEX_TERMINAL_TOOLS_VERSION),
+                codex_thread_mode: Some(if ephemeral {
+                    CodexThreadMode::Ephemeral
+                } else {
+                    CodexThreadMode::Persistent
+                }),
+                codex_tool_integration_mode: Some(
+                    if mcp_credential.is_some() {
+                        "nyaterm_mcp"
+                    } else {
+                        "dynamic_tools"
+                    }
+                    .into(),
+                ),
             },
         )?;
-        set_session_external_session_id(
-            &app,
-            &session_id,
-            AiAgentKind::Codex,
-            new_thread_id.clone(),
-        )?;
-        new_thread_id
-    };
+        set_session_external_session_id(&app, &session_id, AiAgentKind::Codex, thread_id.clone())?;
+    }
 
     let prompt = build_codex_agent_prompt(request, &settings);
-    let response = manager
-        .request(
-            "turn/start",
-            codex_turn_start_params(&thread_id, &prompt, selected_model_name.as_deref()),
-        )
-        .await?;
-    let turn_id = response
-        .get("turn")
-        .and_then(|turn| turn.get("id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::Config("Codex turn/start returned no turn id".to_string()))?
-        .to_string();
-
-    manager.active_turns.lock().await.insert(
-        turn_id.clone(),
+    let completed = CancellationToken::new();
+    manager.starting_turns.lock().unwrap().insert(
+        thread_id.clone(),
         Arc::new(CodexTurnContext {
+            completed: completed.clone(),
+            mcp_turn: StdMutex::new(mcp_turn.take()),
             app,
             session_manager,
             approval_manager,
@@ -977,29 +1167,119 @@ async fn run_codex_stream_inner(
             text_accumulator: Mutex::new(String::new()),
         }),
     );
+    let mut registration = CodexTurnRegistration {
+        manager: &manager,
+        thread_id: &thread_id,
+        turn_id: None,
+    };
+    let response = manager
+        .request(
+            "turn/start",
+            codex_turn_start_params(&thread_id, &prompt, selected_model_name.as_deref()),
+        )
+        .await?;
+    let turn_id = response
+        .get("turn")
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Config("Codex turn/start returned no turn id".to_string()))?
+        .to_string();
+    {
+        let mut active = manager.active_turns.lock().unwrap();
+        if let Some(context) = manager.starting_turns.lock().unwrap().remove(&thread_id) {
+            active.insert(turn_id.clone(), context);
+        }
+    }
+    registration.turn_id = Some(turn_id.clone());
 
     tokio::select! {
-        _ = cancel_rx => {
-            let _ = manager
+        _ = wait_for_codex_cancellation(cancel_rx, &session.cancellation, &runtime_cancel) => {
+            if let Some(context) = manager.active_turns.lock().unwrap().remove(&turn_id) {
+                context.mcp_turn.lock().unwrap().take();
+            }
+            let _ = timeout(Duration::from_secs(5), manager
                 .request(
                     "turn/interrupt",
                     json!({ "threadId": thread_id.clone(), "turnId": turn_id.clone() }),
-                )
+                ))
                 .await;
-            manager.active_turns.lock().await.remove(&turn_id);
+            manager.active_turns.lock().unwrap().remove(&turn_id);
             Err(AppError::Cancelled("AI stream cancelled".to_string()))
         }
-        _ = wait_until_turn_removed(manager.clone(), turn_id.clone()) => Ok(())
+        _ = completed.cancelled() => Ok(())
     }
 }
 
-async fn wait_until_turn_removed(manager: Arc<CodexAppServerManager>, turn_id: String) {
-    loop {
-        if !manager.active_turns.lock().await.contains_key(&turn_id) {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+async fn wait_for_codex_cancellation(
+    cancel_rx: &mut oneshot::Receiver<()>,
+    session: &CancellationToken,
+    runtime: &CancellationToken,
+) {
+    tokio::select! {
+        // Completion removes the sender from active_streams. Only an explicit
+        // cancellation message, rather than a dropped sender, interrupts a turn.
+        Ok(()) = cancel_rx => {},
+        _ = session.cancelled() => {},
+        _ = runtime.cancelled() => {},
     }
+}
+
+fn live_codex_thread_id(
+    thread: Option<&LoadedCodexThread>,
+    epoch: u64,
+) -> AppResult<Option<String>> {
+    match thread {
+        Some(thread) if thread.epoch == epoch => Ok(Some(thread.id.clone())),
+        Some(thread) if thread.ephemeral => Err(AppError::Config(
+            "The temporary Codex thread was lost. Start a new chat.".into(),
+        )),
+        _ => Ok(None),
+    }
+}
+
+async fn request_codex_thread(
+    manager: &CodexAppServerManager,
+    loaded: &mut Option<LoadedCodexThread>,
+    previous_thread_id: Option<&str>,
+    model: Option<&str>,
+    ephemeral: bool,
+    credential: Option<&SessionMcpCredential>,
+) -> AppResult<String> {
+    let epoch = manager.epoch.load(Ordering::SeqCst);
+    if let Some(id) = live_codex_thread_id(loaded.as_ref(), epoch)? {
+        return Ok(id);
+    }
+    let mut params = codex_thread_start_params_with_mcp(model, ephemeral, credential);
+    let method = if let Some(id) = previous_thread_id {
+        params.as_object_mut().unwrap().remove("ephemeral");
+        params.as_object_mut().unwrap().remove("dynamicTools");
+        params["threadId"] = json!(id);
+        if credential.is_none() {
+            params["config"] = json!({ "mcp_servers": { "nyaterm": { "enabled": false } } });
+        }
+        "thread/resume"
+    } else {
+        "thread/start"
+    };
+    let response = manager.request(method, params).await?;
+    let id = response
+        .get("thread")
+        .and_then(|thread| thread.get("id"))
+        .or_else(|| response.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::Config(format!("Codex {method} returned no thread id")))?;
+    if previous_thread_id.is_some_and(|previous| previous != id) {
+        return Err(AppError::Config("Codex resumed a different thread.".into()));
+    }
+    *loaded = Some(LoadedCodexThread {
+        id: id.clone(),
+        epoch,
+        ephemeral,
+        mcp: credential.is_some(),
+    });
+    Ok(id)
 }
 
 const CODEX_DETECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1281,7 +1561,7 @@ fn codex_thread_start_params(model: Option<&str>, ephemeral: bool) -> Value {
 fn codex_thread_start_params_with_mcp(
     model: Option<&str>,
     ephemeral: bool,
-    credential: Option<&crate::core::mcp::EphemeralMcpCredential>,
+    credential: Option<&SessionMcpCredential>,
 ) -> Value {
     let mut params = json!({
         "cwd": null,
@@ -1299,7 +1579,7 @@ fn codex_thread_start_params_with_mcp(
         "developerInstructions": codex_developer_instructions()
     });
     if let Some(credential) = credential {
-        params["config"] = codex_nyaterm_mcp_config(&credential.sidecar_path, credential.env());
+        params["config"] = codex_nyaterm_mcp_config(credential.sidecar_path(), credential.env());
     } else {
         params["dynamicTools"] = json!([terminal_tool_namespace()]);
     }
@@ -1539,6 +1819,484 @@ pub async fn manager_from_app(app: &AppHandle) -> AppResult<Arc<CodexAppServerMa
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn normal_completion_is_not_mistaken_for_cancellation() {
+        let session = CancellationToken::new();
+        let runtime = CancellationToken::new();
+        let (sender, mut receiver) = oneshot::channel();
+        drop(sender);
+        assert!(
+            timeout(
+                Duration::from_millis(20),
+                wait_for_codex_cancellation(&mut receiver, &session, &runtime)
+            )
+            .await
+            .is_err()
+        );
+        let (sender, mut receiver) = oneshot::channel();
+        sender.send(()).unwrap();
+        timeout(
+            Duration::from_secs(1),
+            wait_for_codex_cancellation(&mut receiver, &session, &runtime),
+        )
+        .await
+        .unwrap();
+        let (_sender, mut receiver) = oneshot::channel();
+        session.cancel();
+        timeout(
+            Duration::from_secs(1),
+            wait_for_codex_cancellation(&mut receiver, &session, &runtime),
+        )
+        .await
+        .unwrap();
+        let session = CancellationToken::new();
+        let (_sender, mut receiver) = oneshot::channel();
+        runtime.cancel();
+        timeout(
+            Duration::from_secs(1),
+            wait_for_codex_cancellation(&mut receiver, &session, &runtime),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an authenticated Codex CLI and built nyaterm-mcp helper"]
+    async fn real_codex_recalls_prior_turn_and_calls_mcp_twice() {
+        let helper_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let root = tempfile::tempdir().unwrap();
+        let host = crate::core::mcp::McpManager::new(
+            Arc::new(SessionManager::new()),
+            root.path(),
+            helper_dir,
+        );
+        let bridge = host.start_test_bridge().await;
+        let credential = Arc::new(host.create_session_credential().await.unwrap());
+        let manager = Arc::new(CodexAppServerManager::new());
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        *manager.test_events.lock().unwrap() = Some(events);
+        let result = async {
+            manager.ensure_started(None).await?;
+            *manager.session("smoke").credential.lock().unwrap() = Some(credential.clone());
+            let mut loaded = None;
+            let phrase = format!("NYATERM_{}", uuid());
+            let mut thread_ids = vec![];
+            for prompt in [
+                format!("Read-only regression test. Remember this exact phrase: {phrase}. Call the configured NyaTerm MCP get_environment tool once, then reply READY. Do not run commands or use other tools."),
+                "Call the configured NyaTerm MCP get_environment tool once again, then reply with the exact phrase I gave you in the previous message. Do not run commands or use other tools.".to_string(),
+            ] {
+                let guard = credential.activate(vec![], None, crate::config::AiPermissionMode::Observer, None, None)?;
+                let id = request_codex_thread(&manager, &mut loaded, None, None, true, Some(&credential)).await?;
+                let response = manager.request("turn/start", codex_turn_start_params(&id, &prompt, None)).await?;
+                let turn_id = response["turn"]["id"].as_str().unwrap().to_string();
+                let (text, calls) = timeout(Duration::from_secs(120), async {
+                    let mut calls = 0;
+                    loop {
+                        let (method, params) = received.recv().await.unwrap();
+                        if method == "item/completed" && params["item"]["type"] == "mcpToolCall"
+                            && params["item"]["status"] == "completed" {
+                            calls += 1;
+                        }
+                        if method == "turn/completed" && params["turn"]["id"] == turn_id {
+                            if params["turn"]["status"] != "completed" {
+                                return Err(AppError::Config("Real Codex smoke turn did not complete successfully.".into()));
+                            }
+                            return Ok((final_agent_text(&params["turn"]), calls));
+                        }
+                    }
+                }).await.map_err(|_| AppError::Config("Real Codex smoke turn timed out.".into()))??;
+                drop(guard);
+                if calls == 0 { return Err(AppError::Config("Real Codex did not complete an MCP call.".into())); }
+                if !thread_ids.is_empty() && !text.contains(&phrase) {
+                    return Err(AppError::Config("Real Codex did not recall the prior turn.".into()));
+                }
+                thread_ids.push(id);
+            }
+            assert_eq!(thread_ids[0], thread_ids[1]);
+            Ok::<_, AppError>(())
+        }.await;
+        credential.close();
+        if let Some(child) = manager.child.lock().await.as_mut() {
+            let _ = child.kill().await;
+        }
+        host.stop_test_bridge();
+        bridge.await.unwrap();
+        result.unwrap();
+    }
+
+    // A real child process exercising the same JSONL transport as Codex, without model access.
+    #[test]
+    fn fake_codex_app_server() {
+        use std::io::{BufRead, Write};
+        let Some(root) = std::env::var_os("NYATERM_CODEX_TEST_SERVER") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let state_path = root.join("threads.json");
+        let mut threads: HashMap<String, Vec<String>> = std::fs::read(&state_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join("requests.jsonl"))
+            .unwrap();
+        for line in std::io::stdin().lock().lines() {
+            let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            writeln!(log, "{request}").unwrap();
+            log.flush().unwrap();
+            let id = &request["id"];
+            let params = &request["params"];
+            let result = match request["method"].as_str().unwrap() {
+                "thread/start"
+                    if params.get("config").is_some()
+                        && std::env::var_os("NYATERM_CODEX_TEST_REJECT_MCP").is_some() =>
+                {
+                    None
+                }
+                "thread/start" => {
+                    let thread = format!("thread-{}", threads.len() + 1);
+                    threads.insert(thread.clone(), vec![]);
+                    Some(json!({ "thread": { "id": thread } }))
+                }
+                "thread/resume" => params["threadId"]
+                    .as_str()
+                    .filter(|id| threads.contains_key(*id))
+                    .map(|thread| json!({ "thread": { "id": thread } })),
+                "turn/start" => {
+                    let thread = params["threadId"].as_str().unwrap();
+                    let history = threads.get_mut(thread).unwrap();
+                    history.push(params["input"][0]["text"].as_str().unwrap().to_string());
+                    Some(
+                        json!({ "turn": { "id": format!("turn-{}", history.len()) }, "history": history }),
+                    )
+                }
+                _ => Some(json!({})),
+            };
+            std::fs::write(&state_path, serde_json::to_vec(&threads).unwrap()).unwrap();
+            let response = if let Some(result) = result {
+                json!({ "id": id, "result": result })
+            } else {
+                json!({ "id": id, "error": { "code": -32000, "message": "fixture rejected request" } })
+            };
+            println!("\n{response}");
+            std::io::stdout().flush().unwrap();
+        }
+    }
+
+    async fn fixture_server(
+        root: &Path,
+        reject_mcp: bool,
+    ) -> (Arc<CodexAppServerManager>, tokio::task::JoinHandle<()>) {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "core::ai::codex::tests::fake_codex_app_server",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("NYATERM_CODEX_TEST_SERVER", root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        if reject_mcp {
+            command.env("NYATERM_CODEX_TEST_REJECT_MCP", "1");
+        }
+        let mut child = command.spawn().unwrap();
+        let manager = Arc::new(CodexAppServerManager::new());
+        *manager.writer.lock().await = Some(BufWriter::new(child.stdin.take().unwrap()));
+        let stdout = child.stdout.take().unwrap();
+        *manager.child.lock().await = Some(child);
+        manager.epoch.store(1, Ordering::SeqCst);
+        *manager.state.write().await = CodexRuntimeState::Ready;
+        let reader = manager.clone();
+        let task = tokio::spawn(async move {
+            reader.read_stdout(stdout).await;
+        });
+        (manager, task)
+    }
+
+    async fn stop_fixture(manager: &CodexAppServerManager, task: tokio::task::JoinHandle<()>) {
+        manager
+            .child
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .kill()
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    fn fixture_requests(root: &Path) -> Vec<Value> {
+        std::fs::read_to_string(root.join("requests.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    async fn fixture_mcp(
+        root: &Path,
+    ) -> (Arc<crate::core::mcp::McpManager>, Arc<SessionMcpCredential>) {
+        std::fs::write(
+            root.join(if cfg!(windows) {
+                "nyaterm-mcp.exe"
+            } else {
+                "nyaterm-mcp"
+            }),
+            b"fixture",
+        )
+        .unwrap();
+        let host = crate::core::mcp::McpManager::new(Arc::new(SessionManager::new()), root, root);
+        // initialize() requires a Tauri window. The host fixture tests cover activation;
+        // this transport test only needs an isolated, structurally valid MCP environment.
+        let credential = host.create_test_session_credential().await;
+        (host, Arc::new(credential))
+    }
+
+    #[tokio::test]
+    async fn persistent_and_ephemeral_threads_keep_three_turns_on_one_thread() {
+        for ephemeral in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (manager, task) = fixture_server(root.path(), false).await;
+            let (_host, credential) = fixture_mcp(root.path()).await;
+            let mut loaded = None;
+            let mut ids = vec![];
+            for prompt in ["remember alpha", "recall alpha", "recall both messages"] {
+                let id = request_codex_thread(
+                    &manager,
+                    &mut loaded,
+                    None,
+                    None,
+                    ephemeral,
+                    Some(&credential),
+                )
+                .await
+                .unwrap();
+                let result = manager
+                    .request("turn/start", codex_turn_start_params(&id, prompt, None))
+                    .await
+                    .unwrap();
+                ids.push(id);
+                assert_eq!(result["history"][0], "remember alpha");
+                assert_eq!(result["history"].as_array().unwrap().len(), ids.len());
+            }
+            assert!(ids.iter().all(|id| id == &ids[0]));
+            stop_fixture(&manager, task).await;
+            let requests = fixture_requests(root.path());
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request["method"] == "thread/start")
+                    .count(),
+                1
+            );
+            assert!(
+                !requests
+                    .iter()
+                    .any(|request| request["method"] == "thread/resume")
+            );
+            assert_eq!(requests[0]["params"]["ephemeral"], ephemeral);
+        }
+    }
+
+    #[tokio::test]
+    async fn persistent_resume_uses_new_mcp_identity_and_retains_history() {
+        let root = tempfile::tempdir().unwrap();
+        let (manager, task) = fixture_server(root.path(), false).await;
+        let (_host, credential) = fixture_mcp(root.path()).await;
+        let session = manager.session("chat");
+        *session.credential.lock().unwrap() = Some(credential.clone());
+        let id = request_codex_thread(
+            &manager,
+            &mut *session.thread.lock().await,
+            None,
+            None,
+            false,
+            Some(&credential),
+        )
+        .await
+        .unwrap();
+        manager
+            .request(
+                "turn/start",
+                codex_turn_start_params(&id, "remember before restart", None),
+            )
+            .await
+            .unwrap();
+        stop_fixture(&manager, task).await;
+        assert!(
+            credential
+                .activate(
+                    vec![],
+                    None,
+                    crate::config::AiPermissionMode::Confirm,
+                    None,
+                    None
+                )
+                .is_err()
+        );
+
+        let (manager, task) = fixture_server(root.path(), false).await;
+        let (_host, replacement) = fixture_mcp(root.path()).await;
+        assert_ne!(credential.env(), replacement.env());
+        let mut loaded = None;
+        let resumed = request_codex_thread(
+            &manager,
+            &mut loaded,
+            Some(&id),
+            None,
+            false,
+            Some(&replacement),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed, id);
+        let result = manager
+            .request(
+                "turn/start",
+                codex_turn_start_params(&resumed, "recall", None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["history"][0], "remember before restart");
+        stop_fixture(&manager, task).await;
+        let requests = fixture_requests(root.path());
+        let resume = requests
+            .iter()
+            .find(|request| request["method"] == "thread/resume")
+            .unwrap();
+        assert_eq!(
+            resume["params"]["config"],
+            codex_nyaterm_mcp_config(replacement.sidecar_path(), replacement.env())
+        );
+        assert_eq!(resume["params"]["sandbox"], "read-only");
+        assert!(resume["params"].get("ephemeral").is_none());
+    }
+
+    #[tokio::test]
+    async fn fallback_is_reused_and_failed_resume_preserves_the_original_thread() {
+        let root = tempfile::tempdir().unwrap();
+        let (manager, task) = fixture_server(root.path(), true).await;
+        let (_host, credential) = fixture_mcp(root.path()).await;
+        let mut loaded = None;
+        assert!(
+            request_codex_thread(&manager, &mut loaded, None, None, false, Some(&credential))
+                .await
+                .is_err()
+        );
+        assert!(loaded.is_none());
+        let id = request_codex_thread(&manager, &mut loaded, None, None, false, None)
+            .await
+            .unwrap();
+        assert!(!loaded.as_ref().unwrap().mcp);
+        for _ in 0..2 {
+            assert_eq!(
+                request_codex_thread(&manager, &mut loaded, None, None, false, None)
+                    .await
+                    .unwrap(),
+                id
+            );
+        }
+        loaded.as_mut().unwrap().epoch = 0;
+        assert!(
+            request_codex_thread(
+                &manager,
+                &mut loaded,
+                Some("missing-thread"),
+                None,
+                false,
+                Some(&credential)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(loaded.as_ref().unwrap().id, id);
+        assert!(manager.pending.lock().unwrap().is_empty());
+        stop_fixture(&manager, task).await;
+        let requests = fixture_requests(root.path());
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["method"] == "thread/start")
+                .count(),
+            2
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["method"] == "thread/resume")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_locks_cleanup_and_ephemeral_process_loss_are_isolated() {
+        let manager = CodexAppServerManager::new();
+        let first = manager.session("first");
+        let second = manager.session("second");
+        let _lock = first.thread.try_lock().unwrap();
+        assert!(manager.session("first").thread.try_lock().is_err());
+        assert!(second.thread.try_lock().is_ok());
+        let root = tempfile::tempdir().unwrap();
+        let (_host, credential) = fixture_mcp(root.path()).await;
+        let guard = credential
+            .activate(
+                vec![],
+                None,
+                crate::config::AiPermissionMode::Confirm,
+                None,
+                None,
+            )
+            .unwrap();
+        *first.credential.lock().unwrap() = Some(credential.clone());
+        drop(_lock);
+        manager.release_session("first").await;
+        assert!(first.cancellation.is_cancelled());
+        assert!(!second.cancellation.is_cancelled());
+        assert!(
+            credential
+                .activate(
+                    vec![],
+                    None,
+                    crate::config::AiPermissionMode::Confirm,
+                    None,
+                    None
+                )
+                .is_err()
+        );
+        drop(guard);
+        manager.release_all_sessions().await;
+        assert!(second.cancellation.is_cancelled());
+        assert!(manager.sessions.lock().unwrap().is_empty());
+        let thread = LoadedCodexThread {
+            id: "temporary".into(),
+            epoch: 1,
+            ephemeral: true,
+            mcp: true,
+        };
+        assert_eq!(
+            live_codex_thread_id(Some(&thread), 1).unwrap().as_deref(),
+            Some("temporary")
+        );
+        assert!(live_codex_thread_id(Some(&thread), 2).is_err());
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn resolves_windows_cmd_launcher_before_starting_app_server() {
@@ -1717,16 +2475,19 @@ mod tests {
             backend: AiBackendKind::Codex,
             external_thread_id: Some("thread-old".to_string()),
             codex_terminal_tools_version: None,
+            ..Default::default()
         };
         let current_metadata = AiSessionBackendMetadata {
             backend: AiBackendKind::Codex,
             external_thread_id: Some("thread-current".to_string()),
             codex_terminal_tools_version: Some(CODEX_TERMINAL_TOOLS_VERSION),
+            ..Default::default()
         };
         let other_backend_metadata = AiSessionBackendMetadata {
             backend: AiBackendKind::Genai,
             external_thread_id: Some("thread-other".to_string()),
             codex_terminal_tools_version: Some(CODEX_TERMINAL_TOOLS_VERSION),
+            ..Default::default()
         };
 
         assert_eq!(reusable_codex_thread_id(Some(&old_metadata)), None);

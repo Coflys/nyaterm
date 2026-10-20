@@ -194,6 +194,7 @@ async fn execute_command_on_session(
             timeout_ms,
         },
         Some(TerminalExecutionPresentation {
+            source: None,
             app: app.clone(),
             step_index,
             max_lines: terminal_output_lines,
@@ -1619,6 +1620,7 @@ mod tests {
                     owner_window_label: None,
                     ai_execution_profile: AiExecutionProfile::SendOnly,
                     injection_active: false,
+                    cwd_tracking_active: false,
                     dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                     remote_file_browser_enabled: false,
                     remote_stats_enabled: false,

@@ -193,13 +193,13 @@ pub fn get_ai_messages(app: tauri::AppHandle, session_id: String) -> AppResult<V
 }
 
 #[tauri::command]
-pub fn clear_ai_history(app: tauri::AppHandle) -> AppResult<()> {
-    ai::clear_ai_history(&app)
+pub async fn clear_ai_history(app: tauri::AppHandle) -> AppResult<()> {
+    ai::clear_ai_history(&app).await
 }
 
 #[tauri::command]
-pub fn delete_ai_session(app: tauri::AppHandle, session_id: String) -> AppResult<()> {
-    ai::delete_ai_session(&app, session_id)
+pub async fn delete_ai_session(app: tauri::AppHandle, session_id: String) -> AppResult<()> {
+    ai::delete_ai_session(&app, session_id).await
 }
 
 #[tauri::command]

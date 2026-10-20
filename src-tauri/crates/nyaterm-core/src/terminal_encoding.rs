@@ -15,6 +15,26 @@ pub fn terminal_encoding(label: &str) -> &'static Encoding {
     Encoding::for_label(trimmed.as_bytes()).unwrap_or(UTF_8)
 }
 
+/// Encodings offered for temporary, session-local switching. Unlike
+/// `terminal_encoding`, unknown labels must not silently select UTF-8.
+pub fn supported_session_encoding(label: &str) -> Option<&'static str> {
+    match label.trim().to_ascii_uppercase().as_str() {
+        "UTF-8" => Some("UTF-8"),
+        "GBK" => Some("GBK"),
+        "GB2312" => Some("GB2312"),
+        "GB18030" => Some("GB18030"),
+        _ => None,
+    }
+}
+
+/// Report the actual codec for existing saved labels, while retaining the
+/// explicit GB2312 selection (an alias of GBK in encoding_rs).
+pub fn session_encoding_label(label: &str) -> String {
+    supported_session_encoding(label)
+        .map(str::to_string)
+        .unwrap_or_else(|| terminal_encoding(label).name().to_string())
+}
+
 pub struct TerminalOutputDecoder {
     decoder: Decoder,
 }
@@ -24,6 +44,11 @@ impl TerminalOutputDecoder {
         Self {
             decoder: terminal_encoding(encoding).new_decoder_without_bom_handling(),
         }
+    }
+
+    /// Drop any incomplete multibyte sequence from the previous encoding.
+    pub fn reset(&mut self, encoding: &str) {
+        self.decoder = terminal_encoding(encoding).new_decoder_without_bom_handling();
     }
 
     pub fn decode(&mut self, data: &[u8]) -> String {
@@ -127,7 +152,52 @@ fn ansi_sequence_end(data: &[u8], start: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input};
+    use super::{
+        TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input,
+        session_encoding_label, supported_session_encoding, terminal_encoding,
+    };
+
+    #[test]
+    fn session_encoding_accepts_only_supported_labels_without_fallback() {
+        assert_eq!(supported_session_encoding(" gb2312 "), Some("GB2312"));
+        assert_eq!(supported_session_encoding("Utf-8"), Some("UTF-8"));
+        assert_eq!(supported_session_encoding("GB18030"), Some("GB18030"));
+        assert_eq!(supported_session_encoding("GBK"), Some("GBK"));
+        assert_eq!(terminal_encoding("GB2312"), terminal_encoding("GBK"));
+        assert_eq!(supported_session_encoding("BIG5"), None);
+        assert_eq!(supported_session_encoding(""), None);
+        assert_eq!(supported_session_encoding("invalid"), None);
+        assert_eq!(session_encoding_label(" gb2312 "), "GB2312");
+        assert_eq!(session_encoding_label("unknown"), "UTF-8");
+    }
+
+    #[test]
+    fn switching_output_encoding_discards_incomplete_prior_character() {
+        let mut decoder = TerminalOutputDecoder::new("GBK");
+        assert_eq!(decoder.decode(&[0xB2]), "");
+        decoder.reset("UTF-8");
+        assert_eq!(decoder.decode("测".as_bytes()), "测");
+        decoder.reset("GB18030");
+        assert_eq!(decoder.decode(&[0xB2]), "");
+        assert_eq!(decoder.decode(&[0xE2]), "测");
+        decoder.reset("GB2312");
+        assert_eq!(decoder.decode(&[0xB2]), "");
+        assert_eq!(decoder.decode(&[0xE2]), "测");
+    }
+
+    #[test]
+    fn switched_text_input_does_not_change_raw_or_control_bytes() {
+        let text = "测\x1b[201~".as_bytes().to_vec();
+        assert_eq!(prepare_terminal_write_input(text.clone(), "UTF-8", false, false), text);
+        assert_eq!(
+            prepare_terminal_write_input(text.clone(), "GBK", false, false),
+            vec![0xB2, 0xE2, 0x1b, b'[', b'2', b'0', b'1', b'~']
+        );
+        assert_eq!(prepare_terminal_write_input(text.clone(), "GB2312", false, false),
+            prepare_terminal_write_input(text, "GBK", false, false));
+        let raw = vec![0x1b, 0xff, 0x80, 0x7f];
+        assert_eq!(prepare_terminal_write_input(raw.clone(), "GB18030", true, true), raw);
+    }
 
     #[test]
     fn write_input_encodes_text_but_preserves_raw_bytes_and_del() {
@@ -154,6 +224,11 @@ mod tests {
         let mut decoder = TerminalOutputDecoder::new("GB18030");
         assert_eq!(decoder.decode(&[0xB2]), "");
         assert_eq!(decoder.decode(&[0xE2]), "测");
+        let (four_byte, _, _) = terminal_encoding("GB18030").encode("𠮷");
+        assert_eq!(four_byte.len(), 4);
+        assert_eq!(decoder.decode(&four_byte[..1]), "");
+        assert_eq!(decoder.decode(&four_byte[1..3]), "");
+        assert_eq!(decoder.decode(&four_byte[3..]), "𠮷");
     }
 
     #[test]

@@ -363,7 +363,7 @@ export default function TerminalGutter({
     };
   }, [suspended, terminalRef, scheduleUpdate, sessionId]);
 
-  if (suspended || (!showLineNumbers && !showTimestamps)) {
+  if (!showLineNumbers && !showTimestamps) {
     return null;
   }
 
@@ -381,8 +381,8 @@ export default function TerminalGutter({
       style={{
         boxSizing: "content-box",
         width: gutterWidth,
-        // Keep the terminal width stable while full-screen TUIs own the buffer.
-        visibility: alternateScreen ? "hidden" : undefined,
+        // Preserve terminal width while gutter work is suspended or a TUI owns the buffer.
+        visibility: suspended || alternateScreen ? "hidden" : undefined,
         paddingTop: layout.topPadding,
         borderColor:
           "color-mix(in srgb, var(--df-terminal-fg, var(--df-text)) 18%, var(--df-terminal-surface-bg))",

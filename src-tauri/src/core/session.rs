@@ -31,6 +31,8 @@ const COMMAND_QUEUE_CRITICAL_THRESHOLD: usize = 1000;
 const COMMAND_QUEUE_HIGH_RESET_THRESHOLD: usize = 50;
 const COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD: usize = 500;
 
+include!("session_execution.rs");
+
 /// Safe, backend-resolved cwd values used by the dynamic-title UI.
 ///
 /// This is intentionally separate from the legacy cwd projection: existing
@@ -202,6 +204,11 @@ pub struct SessionInfo {
     /// command-confirmation events. Dynamic-title cwd hooks are independent.
     #[serde(default)]
     pub injection_active: bool,
+    /// True when the backend reports this terminal's cwd through a mechanism
+    /// other than shell integration — currently tmux panes, whose directory
+    /// is tracked by the server (`pane_current_path`) and polled on submit.
+    #[serde(default)]
+    pub cwd_tracking_active: bool,
     #[serde(flatten)]
     pub dynamic_title_capabilities: DynamicTitleCapabilities,
     /// True when the remote file browser is enabled for this session.
@@ -250,6 +257,13 @@ pub enum SessionCommand {
         origin: InputOrigin,
         sensitivity: InputSensitivity,
     },
+    /// Effective encoding of this interactive terminal (not saved settings).
+    GetEncoding { reply: oneshot::Sender<String> },
+    /// Switch future text input and output, acknowledged after both paths update.
+    SetEncoding {
+        encoding: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// Temporarily stop reading output from the underlying terminal source.
     PauseOutput,
     /// Resume reading output from the underlying terminal source.
@@ -265,6 +279,7 @@ pub enum SessionCommand {
         marker_id: String,
         wrapped_command: Vec<u8>,
         result_tx: oneshot::Sender<CapturedOutput>,
+        execution: TerminalExecutionGuard,
     },
     /// AI capture: cancel a marker-wrapped command capture that no longer has a caller.
     CancelCapture { marker_id: String },
@@ -285,6 +300,12 @@ pub enum SessionCommand {
         preserve_timestamps: bool,
         result_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// tmux control mode: write one raw command line to the control channel
+    /// (used by the tmux bar for `select-window`, `split-window`, ...).
+    TmuxCommand { line: String },
+    /// tmux control mode: detach the control client and return the channel
+    /// to normal shell I/O.
+    TmuxDetach,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -743,6 +764,9 @@ pub struct SessionManager {
     app_handle: OnceLock<tauri::AppHandle>,
     recording_manager: OnceLock<Arc<RecordingManager>>,
     recent_output: Arc<RecentOutputStore>,
+    terminal_executions: StdMutex<HashMap<String, ExecutionEntry>>,
+    pub(crate) powershell_dispatch:
+        StdMutex<HashMap<String, Arc<super::capture::PowershellDispatch>>>,
 }
 
 impl SessionManager {
@@ -761,6 +785,8 @@ impl SessionManager {
             app_handle: OnceLock::new(),
             recording_manager: OnceLock::new(),
             recent_output: Arc::new(RecentOutputStore::default()),
+            terminal_executions: StdMutex::new(HashMap::new()),
+            powershell_dispatch: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -854,6 +880,9 @@ impl SessionManager {
     pub async fn remove_session(&self, id: &str) -> bool {
         let removed = self.sessions.lock().await.remove(id).is_some();
         if removed {
+            self.terminal_executions.lock().unwrap().remove(id);
+            self.powershell_dispatch.lock().unwrap().remove(id);
+            self.emit_execution_state(id, TerminalExecutionState::Idle);
             self.recent_output.remove(id);
             self.flush_pending_submission(id).await;
             self.command_submissions.lock().await.remove(id);
@@ -904,11 +933,30 @@ impl SessionManager {
     pub async fn send_command(&self, id: &str, cmd: SessionCommand) -> AppResult<()> {
         let sessions = self.sessions.lock().await;
         if let Some(handle) = sessions.get(id) {
+            if let SessionCommand::Write { data, origin, .. } = &cmd {
+                if self.terminal_executions.lock().unwrap().contains_key(id)
+                    && *origin != InputOrigin::TerminalResponse
+                    && data.as_slice() != [3]
+                {
+                    return Err(AppError::SessionBusy(
+                        "This session is executing an automated command.".into(),
+                    ));
+                }
+            }
             if matches!(cmd, SessionCommand::Write { .. })
                 && handle.info.ssh_runtime_mode == Some(SshRuntimeMode::Sftp)
             {
                 return Err(AppError::Config(
                     "Terminal input is unavailable for SFTP-only sessions".to_string(),
+                ));
+            }
+            if matches!(
+                cmd,
+                SessionCommand::GetEncoding { .. } | SessionCommand::SetEncoding { .. }
+            ) && handle.info.ssh_runtime_mode == Some(SshRuntimeMode::Sftp)
+            {
+                return Err(AppError::Config(
+                    "Terminal encoding is unavailable for SFTP-only sessions".to_string(),
                 ));
             }
             if let SessionCommand::Write {
@@ -1456,6 +1504,7 @@ mod tests {
                 owner_window_label: None,
                 ai_execution_profile: AiExecutionProfile::Auto,
                 injection_active,
+                cwd_tracking_active: false,
                 dynamic_title_capabilities: DynamicTitleCapabilities::default(),
                 remote_file_browser_enabled: true,
                 remote_stats_enabled: true,
@@ -1480,6 +1529,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automated_execution_blocks_other_input_but_allows_interrupts_and_terminal_responses() {
+        let manager = Arc::new(SessionManager::new());
+        let (tx, mut rx) = session_command_channel("busy");
+        manager
+            .add_session(test_handle_with_sender(
+                "busy",
+                SessionType::Local,
+                false,
+                tx,
+            ))
+            .await;
+        let guard = manager
+            .begin_terminal_execution("busy", "first")
+            .await
+            .unwrap();
+        for origin in [InputOrigin::Keyboard, InputOrigin::AiAgent] {
+            let result = manager
+                .send_command(
+                    "busy",
+                    SessionCommand::Write {
+                        data: b"echo other\r".to_vec(),
+                        raw: false,
+                        automated: false,
+                        origin,
+                        sensitivity: super::InputSensitivity::Normal,
+                    },
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::error::AppError::SessionBusy(_))
+            ));
+        }
+        for (data, origin) in [
+            (vec![3], InputOrigin::Keyboard),
+            (b"\x1b[1;1R".to_vec(), InputOrigin::TerminalResponse),
+        ] {
+            manager
+                .send_command(
+                    "busy",
+                    SessionCommand::Write {
+                        data,
+                        raw: true,
+                        automated: false,
+                        origin,
+                        sensitivity: super::InputSensitivity::Normal,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                rx.recv().await,
+                Some(SessionCommand::Write { .. })
+            ));
+        }
+        manager.remove_session("busy").await;
+        let newer = manager
+            .begin_terminal_execution("busy", "newer")
+            .await
+            .unwrap();
+        drop(guard);
+        assert!(
+            manager
+                .begin_terminal_execution("busy", "third")
+                .await
+                .is_err()
+        );
+        drop(newer);
+        assert!(
+            manager
+                .begin_terminal_execution("busy", "third")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
     async fn sftp_only_session_rejects_terminal_input() {
         let manager = SessionManager::new();
         let mut handle = test_handle("sftp-only", SessionType::SSH, false);
@@ -1500,6 +1626,101 @@ mod tests {
             .await
             .expect_err("SFTP-only sessions must reject terminal input");
 
+        assert!(error.to_string().contains("SFTP-only"));
+    }
+
+    #[tokio::test]
+    async fn encoding_commands_are_routed_only_to_the_selected_session() {
+        let manager = SessionManager::new();
+        let (first_tx, mut first_rx) = session_command_channel("encoding-first");
+        let (second_tx, mut second_rx) = session_command_channel("encoding-second");
+        manager
+            .add_session(test_handle_with_sender(
+                "encoding-first",
+                SessionType::Local,
+                false,
+                first_tx,
+            ))
+            .await;
+        manager
+            .add_session(test_handle_with_sender(
+                "encoding-second",
+                SessionType::SSH,
+                false,
+                second_tx,
+            ))
+            .await;
+
+        let (reply, result) = tokio::sync::oneshot::channel();
+        manager
+            .send_command("encoding-first", SessionCommand::GetEncoding { reply })
+            .await
+            .unwrap();
+        if let Some(SessionCommand::GetEncoding { reply }) = first_rx.recv().await {
+            let _ = reply.send("UTF-8".to_string());
+        } else {
+            panic!("expected GetEncoding");
+        }
+        assert_eq!(result.await.unwrap(), "UTF-8");
+
+        let (reply, result) = tokio::sync::oneshot::channel();
+        manager
+            .send_command(
+                "encoding-first",
+                SessionCommand::SetEncoding {
+                    encoding: "GBK".to_string(),
+                    reply,
+                },
+            )
+            .await
+            .unwrap();
+        if let Some(SessionCommand::SetEncoding { encoding, reply }) = first_rx.recv().await {
+            assert_eq!(encoding, "GBK");
+            let _ = reply.send(Ok(encoding));
+        } else {
+            panic!("expected SetEncoding");
+        }
+        assert_eq!(result.await.unwrap().unwrap(), "GBK");
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+
+        manager.remove_session("encoding-first").await;
+        let (reply, _result) = tokio::sync::oneshot::channel();
+        assert!(matches!(
+            manager
+                .send_command("encoding-first", SessionCommand::GetEncoding { reply })
+                .await,
+            Err(crate::error::AppError::SessionNotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn sftp_only_session_rejects_encoding_queries_and_changes() {
+        let manager = SessionManager::new();
+        let mut handle = test_handle("encoding-sftp", SessionType::SSH, false);
+        handle.info.ssh_runtime_mode = Some(crate::config::SshRuntimeMode::Sftp);
+        manager.add_session(handle).await;
+
+        let (reply, _result) = tokio::sync::oneshot::channel();
+        let error = manager
+            .send_command("encoding-sftp", SessionCommand::GetEncoding { reply })
+            .await
+            .expect_err("SFTP-only session cannot report terminal encoding");
+        assert!(error.to_string().contains("SFTP-only"));
+
+        let (reply, _result) = tokio::sync::oneshot::channel();
+        let error = manager
+            .send_command(
+                "encoding-sftp",
+                SessionCommand::SetEncoding {
+                    encoding: "GBK".into(),
+                    reply,
+                },
+            )
+            .await
+            .expect_err("SFTP-only session cannot change terminal encoding");
         assert!(error.to_string().contains("SFTP-only"));
     }
 

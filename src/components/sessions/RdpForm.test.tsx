@@ -18,8 +18,7 @@ vi.mock("react-i18next", () => ({
 
 function renderForm(overrides: Partial<ComponentProps<typeof RdpForm>> = {}) {
   const props: ComponentProps<typeof RdpForm> = {
-    clientMode: "default",
-    defaultClientMode: "windows",
+    clientMode: "builtin",
     setClientMode: vi.fn(),
     host: "rdp.example.com",
     setHost: vi.fn(),
@@ -68,16 +67,21 @@ describe("RDP open method", () => {
     platform.windowsDesktop = true;
   });
 
-  it("shows the effective default and system-client parameter explanation", () => {
+  it("shows the built-in client without global inheritance or system-client explanation", () => {
     renderForm();
     expect(
       screen.getByRole("combobox", { name: "dialog.rdpOpenWith" }).textContent,
-    ).toContain("settings.rdpClientWindows");
-    expect(screen.queryByText("settings.rdpSystemClientDesc")).not.toBeNull();
+    ).toContain("settings.rdpClientBuiltin");
+    expect(screen.queryByText("settings.rdpSystemClientDesc")).toBeNull();
+    fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "dialog.rdpOpenWith" }),
+      { key: "ArrowDown" },
+    );
+    expect(screen.getAllByRole("option")).toHaveLength(2);
   });
 
   it("allows selecting built-in RDP", () => {
-    const props = renderForm();
+    const props = renderForm({ clientMode: "windows" });
     fireEvent.keyDown(
       screen.getByRole("combobox", { name: "dialog.rdpOpenWith" }),
       { key: "ArrowDown" },
@@ -88,9 +92,21 @@ describe("RDP open method", () => {
     expect(props.setClientMode).toHaveBeenCalledWith("builtin");
   });
 
-  it("hides the system-client explanation for an explicit built-in choice", () => {
-    renderForm({ clientMode: "builtin" });
-    expect(screen.queryByText("settings.rdpSystemClientDesc")).toBeNull();
+  it("shows the system-client explanation for Windows Remote Desktop", () => {
+    renderForm({ clientMode: "windows" });
+    expect(screen.queryByText("settings.rdpSystemClientDesc")).not.toBeNull();
+  });
+
+  it("allows selecting Windows Remote Desktop", () => {
+    const props = renderForm();
+    fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "dialog.rdpOpenWith" }),
+      { key: "ArrowDown" },
+    );
+    fireEvent.click(
+      screen.getByRole("option", { name: "settings.rdpClientWindows" }),
+    );
+    expect(props.setClientMode).toHaveBeenCalledWith("windows");
   });
 
   it("hides the selector without rewriting a stored Windows preference on other platforms", () => {

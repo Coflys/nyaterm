@@ -27,7 +27,7 @@ describe("Windows RDP capability", () => {
     const { canUseWindowsRdpClient, supportsSettingsTab } =
       await import("./runtime");
     expect(canUseWindowsRdpClient()).toBe(expected);
-    expect(supportsSettingsTab("remote-desktop")).toBe(expected);
+    expect(supportsSettingsTab("remote-desktop")).toBe(false);
     expect(supportsSettingsTab("general")).toBe(true);
   });
 });

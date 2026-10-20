@@ -553,6 +553,7 @@ function TerminalContentHost({
                 onSelectTab(leafId, tab.id);
                 onActivatePane(tab.id, paneId);
               }}
+              onActivatePaneInTab={onActivatePane}
               onUpdateSplitRatio={(splitId, ratio) =>
                 onUpdatePaneSplitRatio(tab.id, splitId, ratio)
               }

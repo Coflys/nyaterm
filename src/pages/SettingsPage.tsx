@@ -1,4 +1,4 @@
-import { canUseWindowsRdpClient, supportsSettingsTab } from "@/lib/backend/runtime";
+import { supportsSettingsTab } from "@/lib/backend/runtime";
 import { getCurrentWindow } from "@/lib/backend/platform/window";
 import {
   type ComponentType,
@@ -15,7 +15,6 @@ import {
   MdAutoAwesome,
   MdBackup,
   MdDashboard,
-  MdDns,
   MdKeyboard,
   MdKeyboardArrowRight,
   MdMouse,
@@ -34,7 +33,6 @@ import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { AiAgentsTab, AiGeneralTab, AiModelsTab, AiRulesTab } from "@/components/settings/AiTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { GeneralTab } from "@/components/settings/GeneralTab";
-import { RemoteDesktopTab } from "@/components/settings/RemoteDesktopTab";
 import { InteractionTab } from "@/components/settings/InteractionTab";
 import { KeyboardShortcutsTab } from "@/components/settings/KeyboardShortcutsTab";
 import { SearchTab } from "@/components/settings/SearchTab";
@@ -83,7 +81,8 @@ const SETTINGS_GROUP_DEFAULT_TABS: Record<string, string> = {
   terminal_session: "terminal-general",
   transfer_group: "transfer",
   workspace: "general",
-  connections: "remote-desktop",
+  connections: "general",
+  "remote-desktop": "general",
 };
 
 function normalizeSettingsTab(tab: string) {
@@ -172,16 +171,6 @@ export default function SettingsPage() {
         icon: "dashboard",
         items: ["general", "appearance", "interaction", "keybindings"],
       },
-      ...(canUseWindowsRdpClient()
-        ? [
-            {
-              id: "connections",
-              label: t("settings.groupConnections"),
-              icon: "dns",
-              items: ["remote-desktop"],
-            },
-          ]
-        : []),
       {
         id: "terminal_session",
         label: t("settings.groupTerminalSession"),
@@ -247,7 +236,6 @@ export default function SettingsPage() {
   );
 
   const tabs: SettingsTabConfig[] = [
-    { id: "remote-desktop", label: t("settings.remoteDesktop"), icon: "dns", Component: RemoteDesktopTab },
     { id: "general", label: t("settings.general"), icon: "settings", Component: GeneralTab },
     {
       id: "appearance",
@@ -315,7 +303,6 @@ export default function SettingsPage() {
   const iconMap: Record<string, React.ElementType> = {
     cloud_sync: MdBackup,
     dashboard: MdDashboard,
-    dns: MdDns,
     settings: MdSettings,
     palette: MdPalette,
     swap_horiz: MdSwapHoriz,
@@ -543,7 +530,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-2">
                   {categories.map((category) => {
                     const isExpanded = expandedGroups[category.id];
-                    const hasMultiple = category.items.length > 1 || category.id === "connections";
+                    const hasMultiple = category.items.length > 1;
 
                     if (!hasMultiple) {
                       const tabId = category.items[0];

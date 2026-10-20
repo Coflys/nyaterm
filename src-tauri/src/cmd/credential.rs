@@ -9,13 +9,46 @@ fn schedule_cloud_sync_notify(app: tauri::AppHandle) {
     });
 }
 
-#[tauri::command]
-pub fn get_saved_credentials(app: tauri::AppHandle) -> AppResult<Vec<SavedCredential>> {
-    let mut cfg = config::load_credentials(&app)?;
-    for credential in &mut cfg.credentials {
-        credential.password = None;
+/// Frontend-facing credential summary.
+///
+/// The encrypted `password` blob never leaves the backend. `has_password` is a
+/// transient field that `SavedCredential` skips during serialization, so it is
+/// surfaced explicitly here — the terminal credential autofill requires it
+/// before a credential can match a password prompt.
+#[derive(Debug, serde::Serialize)]
+pub struct SavedCredentialSummary {
+    id: String,
+    sort_order: i32,
+    name: String,
+    username: String,
+    username_prompt_regex: Option<String>,
+    password_prompt_regex: Option<String>,
+    enabled: bool,
+    has_password: bool,
+}
+
+impl From<SavedCredential> for SavedCredentialSummary {
+    fn from(entry: SavedCredential) -> Self {
+        Self {
+            id: entry.id,
+            sort_order: entry.sort_order,
+            name: entry.name,
+            username: entry.username,
+            username_prompt_regex: entry.username_prompt_regex,
+            password_prompt_regex: entry.password_prompt_regex,
+            enabled: entry.enabled,
+            has_password: entry.has_password,
+        }
     }
-    Ok(cfg.credentials)
+}
+
+#[tauri::command]
+pub fn get_saved_credentials(app: tauri::AppHandle) -> AppResult<Vec<SavedCredentialSummary>> {
+    Ok(config::load_credentials(&app)?
+        .credentials
+        .into_iter()
+        .map(SavedCredentialSummary::from)
+        .collect())
 }
 
 #[tauri::command]
@@ -67,4 +100,46 @@ pub fn reorder_credentials(
     let _ = app.emit("credentials-changed", ());
     schedule_cloud_sync_notify(app.clone());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn credential(has_password: bool) -> SavedCredential {
+        SavedCredential {
+            id: "cred-1".to_string(),
+            sort_order: 0,
+            name: "Production".to_string(),
+            username: "alice".to_string(),
+            password: if has_password {
+                Some("encrypted-secret".to_string())
+            } else {
+                None
+            },
+            username_prompt_regex: Some("login as:".to_string()),
+            password_prompt_regex: Some("Password:".to_string()),
+            enabled: true,
+            has_password,
+        }
+    }
+
+    #[test]
+    fn saved_credential_list_redacts_password_but_reports_has_password() {
+        let summary = SavedCredentialSummary::from(credential(true));
+        let serialized = serde_json::to_value(&summary).expect("serialize credential summary");
+
+        assert_eq!(serialized["has_password"], true);
+        assert_eq!(serialized["password_prompt_regex"], "Password:");
+        assert_eq!(serialized["username_prompt_regex"], "login as:");
+        assert!(serialized.get("password").is_none());
+    }
+
+    #[test]
+    fn saved_credential_list_reports_missing_password() {
+        let summary = SavedCredentialSummary::from(credential(false));
+        let serialized = serde_json::to_value(&summary).expect("serialize credential summary");
+
+        assert_eq!(serialized["has_password"], false);
+    }
 }

@@ -2,6 +2,7 @@ import type { Terminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
   clearTerminalAll,
+  clearTerminalScreen,
   registerTerminalUserInputMarker,
   sendTerminalClearInput,
 } from "./terminalControlInput";
@@ -26,6 +27,57 @@ describe("terminal control input origin", () => {
     unregister();
   });
 
+  it("clears a Serial screen locally without marking or emitting input", () => {
+    const marker = vi.fn();
+    const terminal = {
+      clearSelection: vi.fn(),
+      write: vi.fn(),
+      input: vi.fn(),
+      focus: vi.fn(),
+    } as unknown as Terminal;
+    const unregister = registerTerminalUserInputMarker(terminal, marker);
+
+    clearTerminalScreen(terminal, { focus: true });
+
+    expect(terminal.clearSelection).toHaveBeenCalledOnce();
+    expect(terminal.write).toHaveBeenCalledExactlyOnceWith("\x1b[2J");
+    expect(terminal.focus).toHaveBeenCalledOnce();
+    expect(terminal.input).not.toHaveBeenCalled();
+    expect(marker).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it("erases only the xterm screen and retains cursor and scrollback without onData", async () => {
+    const { Terminal: XTerminal } = await import("@xterm/xterm");
+    const terminal = new XTerminal({ cols: 20, rows: 3 });
+    await new Promise<void>((resolve) =>
+      terminal.write("history line\r\nold line\r\nsecond line\r\nprompt> abcdef", resolve),
+    );
+    const before = terminal.buffer.active;
+    const { baseY, cursorX, cursorY } = before;
+    const history = before.getLine(0)?.translateToString(true);
+    const onData = vi.fn();
+    const marker = vi.fn();
+    const disposable = terminal.onData(onData);
+    const unregister = registerTerminalUserInputMarker(terminal, marker);
+
+    expect(baseY).toBeGreaterThan(0);
+    clearTerminalScreen(terminal);
+    await new Promise<void>((resolve) => terminal.write("", resolve));
+
+    expect(terminal.buffer.active.baseY).toBe(baseY);
+    expect(terminal.buffer.active.cursorX).toBe(cursorX);
+    expect(terminal.buffer.active.cursorY).toBe(cursorY);
+    expect(terminal.buffer.active.getLine(0)?.translateToString(true)).toBe(history);
+    expect(terminal.buffer.active.getLine(baseY + cursorY)?.translateToString(true)).toBe("");
+    expect(onData).not.toHaveBeenCalled();
+    expect(marker).not.toHaveBeenCalled();
+
+    unregister();
+    disposable.dispose();
+    terminal.dispose();
+  });
+
   it("clears scrollback without sending Ctrl+L or changing the CMD cursor row", async () => {
     const canvas = vi
       .spyOn(HTMLCanvasElement.prototype, "getContext")
@@ -42,6 +94,8 @@ describe("terminal control input origin", () => {
     );
     const input = vi.fn();
     const disposable = terminal.onData(input);
+    const marker = vi.fn();
+    const unregister = registerTerminalUserInputMarker(terminal, marker);
 
     expect(terminal.buffer.active.baseY).toBeGreaterThan(0);
     clearTerminalAll(terminal);
@@ -55,8 +109,10 @@ describe("terminal control input origin", () => {
     expect(terminal.buffer.active.getLine(1)?.translateToString(true)).toBe("");
     expect(terminal.buffer.active.getLine(2)?.translateToString(true)).toBe("prompt> abcdef");
     expect(input).not.toHaveBeenCalled();
+    expect(marker).not.toHaveBeenCalled();
     expect(terminal.modes.applicationCursorKeysMode).toBe(true);
 
+    unregister();
     disposable.dispose();
     terminal.dispose();
     canvas.mockRestore();

@@ -2,9 +2,12 @@ import type { Terminal } from "@xterm/xterm";
 import { type RefObject, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@/lib/backend/platform/window";
 import { logger } from "@/lib/logger";
-import { sendTerminalClearInput } from "@/lib/terminalControlInput";
+import {
+  clearTerminalScreen,
+  sendTerminalClearInput,
+} from "@/lib/terminalControlInput";
+import type { SessionType } from "@/types/global";
 import type { TerminalFitScheduler } from "./terminalFitScheduler";
-import type { PerformanceMode } from "./xterminalTypes";
 
 interface UseTerminalRefreshEffectsParams {
   terminalRef: RefObject<Terminal | null>;
@@ -13,8 +16,8 @@ interface UseTerminalRefreshEffectsParams {
   visible: boolean;
   appLocked: boolean;
   terminalReady: boolean;
-  performanceMode: PerformanceMode;
   sessionId: string;
+  sessionType: SessionType;
   showGutter: boolean;
   showContentPadding: boolean;
   workspacePaddingSetting?: boolean;
@@ -28,8 +31,8 @@ export function useTerminalRefreshEffects({
   visible,
   appLocked,
   terminalReady,
-  performanceMode,
   sessionId,
+  sessionType,
   showGutter,
   showContentPadding,
   workspacePaddingSetting,
@@ -46,7 +49,7 @@ export function useTerminalRefreshEffects({
         refresh: true,
         onComplete: () => {
           if (!terminalRef.current) return;
-          if (showGutter && performanceMode === "normal") {
+          if (showGutter) {
             window.dispatchEvent(
               new CustomEvent("nyaterm:refresh-gutter", {
                 detail: { sessionId },
@@ -56,7 +59,7 @@ export function useTerminalRefreshEffects({
         },
       });
     }
-  }, [fitSchedulerRef, performanceMode, sessionId, showGutter, terminalReady, terminalRef]);
+  }, [fitSchedulerRef, sessionId, showGutter, terminalReady, terminalRef]);
 
   useEffect(() => {
     const paddingEnabled = showContentPadding;
@@ -70,7 +73,7 @@ export function useTerminalRefreshEffects({
         if (paddingEnabled !== (workspacePaddingSetting ?? false)) {
           return;
         }
-        if (showGutter && performanceMode === "normal") {
+        if (showGutter) {
           window.dispatchEvent(
             new CustomEvent("nyaterm:refresh-gutter", {
               detail: { sessionId },
@@ -81,7 +84,6 @@ export function useTerminalRefreshEffects({
     });
   }, [
     fitSchedulerRef,
-    performanceMode,
     sessionId,
     showContentPadding,
     showGutter,
@@ -288,12 +290,16 @@ export function useTerminalRefreshEffects({
     const handleClear = () => {
       const terminal = terminalRef.current;
       if (appLockedRef.current || !active || !terminal) return;
-      sendTerminalClearInput(terminal, { focus: active });
+      if (sessionType === "Serial") {
+        clearTerminalScreen(terminal, { focus: active });
+      } else {
+        sendTerminalClearInput(terminal, { focus: active });
+      }
     };
 
     window.addEventListener("nyaterm:clear-terminal", handleClear);
     return () => {
       window.removeEventListener("nyaterm:clear-terminal", handleClear);
     };
-  }, [active, terminalRef]);
+  }, [active, sessionType, terminalRef]);
 }

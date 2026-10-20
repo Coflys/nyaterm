@@ -16,6 +16,15 @@ pub use linux_appimage_wayland::prepare_appimage_wayland_backend;
 #[cfg(not(target_os = "linux"))]
 pub fn prepare_appimage_wayland_backend() {}
 
+#[cfg(target_os = "linux")]
+mod linux_webkit_renderer;
+
+#[cfg(target_os = "linux")]
+pub use linux_webkit_renderer::prepare_webkit_renderer;
+
+#[cfg(not(target_os = "linux"))]
+pub fn prepare_webkit_renderer() {}
+
 #[cfg(windows)]
 pub use windows_external_drop::install_external_file_drop_bridge;
 

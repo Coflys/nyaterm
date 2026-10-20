@@ -54,6 +54,7 @@ import {
   getCustomProviderBaseUrlPlaceholder,
   getProviderLabel,
   isBuiltinProvider,
+  localizeDefaultAiAction,
   MODEL_REASONING_EFFORTS,
   supportsApiFormatSelection,
 } from "@/lib/aiSettings";
@@ -487,6 +488,7 @@ export function AiAgentsTab() {
     enabled: false,
     permission_mode: "confirm",
     session_scope: "current_window",
+    terminal_display_mode: "inline",
   };
   const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -1000,6 +1002,23 @@ export function AiAgentsTab() {
           >
             <SelectItem value="current_window">{t("ai.externalMcpCurrentWindow")}</SelectItem>
             <SelectItem value="all_sessions">{t("ai.externalMcpAllSessions")}</SelectItem>
+          </SettingSelect>
+          <SettingSelect
+            label={t("ai.externalMcpTerminalDisplay")}
+            value={externalMcp.terminal_display_mode ?? "inline"}
+            onValueChange={(terminal_display_mode) =>
+              updateExternalMcp({
+                terminal_display_mode:
+                  terminal_display_mode as ExternalMcpSettings["terminal_display_mode"],
+              })
+            }
+          >
+            <SelectItem value="inline">
+              {t("ai.externalMcpTerminalInline")}
+            </SelectItem>
+            <SelectItem value="silent">
+              {t("ai.externalMcpTerminalSilent")}
+            </SelectItem>
           </SettingSelect>
         </SettingFieldGrid>
         <div className="text-xs text-muted-foreground">
@@ -2603,6 +2622,9 @@ function ActionListEditor({
   const updateAction = (id: string, patch: Partial<AICustomActionConfig>) => {
     onChange(actions.map((action) => (action.id === id ? { ...action, ...patch } : action)));
   };
+  const localizedActions = actions.map((action) =>
+    localizeDefaultAiAction(action, (key) => t(key)),
+  );
 
   return (
     <SettingSection
@@ -2619,7 +2641,7 @@ function ActionListEditor({
       }
       contentClassName="space-y-4"
     >
-      {actions.map((action) => (
+      {localizedActions.map((action) => (
         <div key={action.id} className="rounded-md border border-border/70 bg-background/75 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="min-w-0 truncate text-sm font-medium">{action.name}</div>

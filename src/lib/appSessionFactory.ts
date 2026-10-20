@@ -89,6 +89,7 @@ export function resolveRdpClientMode(
   }: RdpClientResolutionOptions = {},
 ): RdpClientMode {
   if (!desktop || !windows || connection?.type !== "rdp") return "builtin";
+  // The global mode is retained only for legacy connections; new saves always set a client.
   return (
     rdpClientModeOverride ?? connection.rdp_client_mode ?? mode ?? "builtin"
   );

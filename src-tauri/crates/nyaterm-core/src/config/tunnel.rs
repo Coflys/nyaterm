@@ -24,6 +24,8 @@ pub struct TunnelConfig {
     #[serde(default = "default_false")]
     pub auto_open: bool,
     #[serde(default = "default_true")]
+    pub auto_reconnect: bool,
+    #[serde(default = "default_true")]
     pub bind_localhost: bool,
     #[serde(default)]
     pub group_id: Option<String>,
@@ -54,6 +56,7 @@ impl Default for TunnelConfig {
             target_port: 0,
             is_open: false,
             auto_open: false,
+            auto_reconnect: true,
             bind_localhost: true,
             group_id: None,
         }
@@ -95,4 +98,22 @@ pub fn save_tunnel_groups(app: &impl Sized, groups: &[TunnelGroup]) -> AppResult
             groups: groups.to_vec(),
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_reconnect_defaults_to_true_for_legacy_and_new_configs() {
+        let legacy: TunnelConfig = serde_json::from_str(r#"{"id":"old","is_open":true}"#).unwrap();
+        assert!(legacy.auto_reconnect);
+        assert!(legacy.is_open);
+        assert!(TunnelConfig::default().auto_reconnect);
+        let disabled: TunnelConfig = serde_json::from_str(r#"{"auto_reconnect":false}"#).unwrap();
+        assert!(!disabled.auto_reconnect);
+        let roundtrip: TunnelConfig =
+            serde_json::from_value(serde_json::to_value(disabled).unwrap()).unwrap();
+        assert!(!roundtrip.auto_reconnect);
+    }
 }

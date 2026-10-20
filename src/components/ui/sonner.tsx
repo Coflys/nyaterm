@@ -19,6 +19,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme="dark"
       position="top-right"
+      closeButton
       offset={DEFAULT_OFFSET}
       mobileOffset={DEFAULT_MOBILE_OFFSET}
       className="toaster group"

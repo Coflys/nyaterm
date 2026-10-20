@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { SerialFlowControl } from "@/types/global";
 import { SerialForm } from "./SerialForm";
@@ -51,7 +51,6 @@ describe("SerialForm flow control", () => {
     expect(screen.queryByText("dialog.serialSoftwareFlowControlModemDisabled") !== null).toBe(
       flowControl === "software",
     );
-    fireEvent.click(screen.getByText("dialog.advancedConfig"));
     const protocolSelect = screen.getByText("ZMODEM").closest("button");
     expect(protocolSelect?.disabled).toBe(flowControl === "software");
   });

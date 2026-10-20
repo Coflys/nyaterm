@@ -276,19 +276,11 @@ async fn run_claude_code_stream_inner(
     let mut child = child
         .spawn()
         .map_err(|error| AppError::Config(format!("Failed to start Claude Code: {error}")))?;
-    let mut stdin = child
+    let stdin = child
         .stdin
         .take()
         .ok_or_else(|| AppError::Channel("Claude Code stdin unavailable".to_string()))?;
-    stdin
-        .write_all(invocation.prompt_stdin.as_bytes())
-        .await
-        .map_err(|error| {
-            AppError::Channel(format!("Failed to write Claude Code prompt: {error}"))
-        })?;
-    stdin.shutdown().await.map_err(|error| {
-        AppError::Channel(format!("Failed to close Claude Code stdin: {error}"))
-    })?;
+    write_claude_prompt(stdin, &invocation.prompt_stdin).await?;
     let stdout = child
         .stdout
         .take()
@@ -425,6 +417,19 @@ async fn run_claude_code_stream_inner(
     Ok(())
 }
 
+async fn write_claude_prompt(mut stdin: tokio::process::ChildStdin, prompt: &str) -> AppResult<()> {
+    stdin.write_all(prompt.as_bytes()).await.map_err(|error| {
+        AppError::Channel(format!("Failed to write Claude Code prompt: {error}"))
+    })?;
+    stdin.flush().await.map_err(|error| {
+        AppError::Channel(format!("Failed to flush Claude Code prompt: {error}"))
+    })?;
+    // On Windows, shutdown() does not close the pipe handle. Release the writer
+    // after flushing so Claude Code's print mode receives EOF before we read output.
+    drop(stdin);
+    Ok(())
+}
+
 fn claude_permission_mode(mode: &AiPermissionMode) -> &'static str {
     match mode {
         AiPermissionMode::Observer => "plan",
@@ -517,6 +522,7 @@ fn build_claude_invocation(
 ) -> ClaudeInvocation {
     let mut args = vec![
         "-p".to_string(),
+        "--verbose".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--include-partial-messages".to_string(),
@@ -906,6 +912,7 @@ mod tests {
         assert!(!invocation.args.iter().any(|arg| arg == &prompt));
         for required in [
             "-p",
+            "--verbose",
             "--output-format",
             "stream-json",
             "--include-partial-messages",
@@ -942,6 +949,54 @@ mod tests {
                 "C:\\Users\\test\\.claude".to_string()
             )]
         );
+    }
+
+    #[tokio::test]
+    async fn claude_prompt_reaches_eof_before_reading_output() {
+        // Read the entire prompt before producing output, as Claude Code does
+        // in print mode. A live stdin writer would keep this child waiting.
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$buffer = [System.IO.MemoryStream]::new(); [Console]::OpenStandardInput().CopyTo($buffer); [Console]::OpenStandardOutput().Write($buffer.ToArray(), 0, [int]$buffer.Length)",
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "prompt=$(cat); printf '%s' \"$prompt\""]);
+            command
+        };
+        hide_window(&mut command);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        for prompt in [
+            String::new(),
+            "你好\n\"quoted\" & | < > % ^ ( )\n".repeat(4096) + "end",
+        ] {
+            let mut child = command.spawn().expect("start EOF-reading child");
+            let stdin = child.stdin.take().expect("child stdin");
+            let output = timeout(Duration::from_secs(15), async {
+                write_claude_prompt(stdin, &prompt)
+                    .await
+                    .expect("write prompt");
+                child.wait_with_output().await.expect("read child output")
+            })
+            .await
+            .expect("child should receive EOF and exit");
+
+            assert!(output.status.success(), "{:?}", output.stderr);
+            assert_eq!(output.stdout, prompt.as_bytes());
+        }
     }
 
     #[test]

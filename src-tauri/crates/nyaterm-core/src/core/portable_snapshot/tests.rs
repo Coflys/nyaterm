@@ -812,6 +812,31 @@ mod tests {
     }
 
     #[test]
+    fn telnet_keep_alive_survives_backup_and_sync_snapshot_roundtrip() {
+        for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+            for interval in [0, 60, 120] {
+                let mut snapshot = sample_snapshot();
+                snapshot.snapshot_kind = kind.clone();
+                snapshot.sessions.connections = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "id": "telnet", "name": "Telnet", "type": "telnet",
+                        "host": "example.com", "keep_alive_interval": interval
+                    }))
+                    .expect("connection"),
+                ];
+                snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash");
+                let encoded = encode_portable_snapshot(&snapshot).expect("export");
+                let restored = super::decode_portable_snapshot(&encoded).expect("import");
+                assert_eq!(
+                    restored.sessions.connections[0].config,
+                    snapshot.sessions.connections[0].config
+                );
+                assert_eq!(restored.payload_hash, snapshot.payload_hash);
+            }
+        }
+    }
+
+    #[test]
     fn serial_flow_control_survives_portable_snapshot_roundtrip() {
         for flow_control in [
             config::SerialFlowControl::None,

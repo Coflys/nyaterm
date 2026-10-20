@@ -720,6 +720,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 ai_execution_profile: AiExecutionProfile::Auto,
                 backspace_mode: "del".to_string(),
                 raw_tcp_cli: false,
+                keep_alive_interval: nyaterm_core::telnet::default_telnet_keep_alive_interval(),
                 enter_mode: "cr".to_string(),
                 local_echo: false,
                 local_line_edit: false,

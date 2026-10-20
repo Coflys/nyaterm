@@ -24,6 +24,89 @@ use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 
+/// Owns target/jump handles, including partially authenticated connections.
+#[derive(Clone, Default)]
+pub(super) struct TunnelConnections {
+    handles: Arc<std::sync::Mutex<Vec<SshRawHandle>>>,
+    streams: Arc<std::sync::Mutex<Vec<oneshot::Receiver<()>>>>,
+}
+
+tokio::task_local! {
+    static TUNNEL_CONNECTIONS: TunnelConnections;
+    static TUNNEL_CANCEL: tokio_util::sync::CancellationToken;
+    static TUNNEL_DISCONNECT: mpsc::UnboundedSender<super::client::TunnelDisconnect>;
+}
+
+pub(super) fn tunnel_disconnect_sender()
+-> Option<mpsc::UnboundedSender<super::client::TunnelDisconnect>> {
+    TUNNEL_DISCONNECT.try_with(Clone::clone).ok()
+}
+
+pub(super) fn tunnel_cancel() -> Option<tokio_util::sync::CancellationToken> {
+    TUNNEL_CANCEL.try_with(Clone::clone).ok()
+}
+
+fn track_tunnel_handle(handle: &SshRawHandle) {
+    let _ = TUNNEL_CONNECTIONS.try_with(|connections| {
+        connections
+            .handles
+            .lock()
+            .expect("tunnel connections")
+            .push(handle.clone());
+    });
+}
+
+pub(super) fn track_tunnel_stream() -> Option<oneshot::Sender<()>> {
+    TUNNEL_CONNECTIONS
+        .try_with(|connections| {
+            let (tx, rx) = oneshot::channel();
+            connections.streams.lock().expect("tunnel streams").push(rx);
+            tx
+        })
+        .ok()
+}
+
+impl TunnelConnections {
+    pub(super) async fn close(
+        &self,
+        tunnel: &crate::config::TunnelConfig,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) {
+        let handles = std::mem::take(&mut *self.handles.lock().expect("tunnel connections"));
+        let streams = std::mem::take(&mut *self.streams.lock().expect("tunnel streams"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async move {
+            for (index, handle) in handles.iter().rev().enumerate() {
+                let handle = handle.lock().await;
+                if index == 0 && tunnel.tunnel_type == "remote" {
+                    let bind = if tunnel.bind_localhost {
+                        "127.0.0.1"
+                    } else {
+                        "0.0.0.0"
+                    };
+                    let _ = handle
+                        .cancel_tcpip_forward(bind, tunnel.listen_port.into())
+                        .await;
+                }
+                let _ = handle
+                    .disconnect(russh::Disconnect::ByApplication, "Tunnel stopped", "")
+                    .await;
+            }
+            drop(handles);
+            if let Some(cancel) = cancel {
+                cancel.cancel();
+            }
+            for closed in streams {
+                let _ = closed.await;
+            }
+        })
+        .await;
+        // Even if protocol cleanup timed out, force all transport tasks to exit.
+        if let Some(cancel) = cancel {
+            cancel.cancel();
+        }
+    }
+}
+
 async fn create_authenticated_connection(
     app: &AppHandle,
     config: &SshConfig,
@@ -153,9 +236,7 @@ fn connect_authenticated_chain_boxed<'a>(
                 let jump = jump_handle.lock().await;
                 jump.channel_open_direct_tcpip(&config.host, config.port.into(), "127.0.0.1", 0)
                     .await
-                    .map_err(|error| {
-                        AppError::Channel(format!("Failed to open ProxyJump channel: {}", error))
-                    })?
+                    .map_err(AppError::Ssh)?
             };
             tracing::info!(
                 jump_host = %jump_config.host,
@@ -188,11 +269,14 @@ fn connect_authenticated_chain_boxed<'a>(
                 target_handler = target_handler.with_diagnostics(diagnostics);
             }
             let ssh_client_config = Arc::new(build_client_config(app, config)?);
-            let mut target_handle =
+            let target_handle =
                 connect_via_stream(channel.into_stream(), ssh_client_config, target_handler)
                     .await?;
+            let target_handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
+            track_tunnel_handle(&target_handle);
+            let mut auth_handle = target_handle.lock().await;
             authenticate_handle(
-                &mut target_handle,
+                &mut auth_handle,
                 config,
                 app,
                 "Authentication failed: invalid credentials",
@@ -205,8 +289,8 @@ fn connect_authenticated_chain_boxed<'a>(
                 "SSH host authenticated via ProxyJump"
             );
 
+            drop(auth_handle);
             jumps.push(jump_handle);
-            let target_handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
             return Ok((target_handle, jumps));
         }
 
@@ -233,9 +317,12 @@ fn connect_authenticated_chain_boxed<'a>(
             handler = handler.with_diagnostics(diagnostics);
         }
         let ssh_client_config = Arc::new(build_client_config(app, config)?);
-        let mut handle = connect_with_proxy(config, ssh_client_config, handler).await?;
+        let handle = connect_with_proxy(config, ssh_client_config, handler).await?;
+        let handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(handle));
+        track_tunnel_handle(&handle);
+        let mut auth_handle = handle.lock().await;
         authenticate_handle(
-            &mut handle,
+            &mut auth_handle,
             config,
             app,
             "Authentication failed: invalid credentials",
@@ -248,7 +335,7 @@ fn connect_authenticated_chain_boxed<'a>(
             "SSH host authenticated"
         );
 
-        let handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(handle));
+        drop(auth_handle);
         Ok((handle, Vec::new()))
     })
 }
@@ -463,36 +550,49 @@ pub async fn create_ssh_handle(app: &AppHandle, connection_id: &str) -> AppResul
     Ok(handle)
 }
 
-pub async fn create_ssh_handle_for_tunnel(
+pub(super) async fn create_ssh_handle_for_tunnel(
     app: &AppHandle,
     connection_id: &str,
-    disconnect_tx: mpsc::UnboundedSender<String>,
+    disconnect_tx: mpsc::UnboundedSender<super::client::TunnelDisconnect>,
     remote_forward_tx: Option<mpsc::UnboundedSender<RemoteForwardOpen>>,
+    interactive: bool,
+    connections: &TunnelConnections,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> AppResult<SshHandle> {
     let ssh_config = load_saved_ssh_config(app, connection_id)?;
-    let (handle, _x11_rx) = loop {
-        match create_authenticated_connection_with_notifications(
-            app,
-            &ssh_config,
-            Some(disconnect_tx.clone()),
-            remote_forward_tx.clone(),
-            false,
-            None,
+    TUNNEL_DISCONNECT
+        .scope(
+            disconnect_tx,
+            TUNNEL_CANCEL.scope(
+                cancel,
+                TUNNEL_CONNECTIONS.scope(
+                    connections.clone(),
+                    super::auth::INTERACTIVE.scope(interactive, async {
+                        loop {
+                            match create_authenticated_connection_with_notifications(
+                                app,
+                                &ssh_config,
+                                None,
+                                remote_forward_tx.clone(),
+                                false,
+                                None,
+                            )
+                            .await
+                            {
+                                Err(error) if interactive && is_agent_auth_retry(&error) => {
+                                    connections
+                                        .close(&crate::config::TunnelConfig::default(), None)
+                                        .await;
+                                    continue;
+                                }
+                                result => return result.map(|(handle, _)| handle),
+                            }
+                        }
+                    }),
+                ),
+            ),
         )
         .await
-        {
-            Err(error) if is_agent_auth_retry(&error) => continue,
-            result => break result,
-        }
-    }?;
-
-    tracing::info!(
-        host = %ssh_config.host,
-        port = ssh_config.port,
-        "Tunnel SSH handle created"
-    );
-
-    Ok(handle)
 }
 
 /// Connects via SSH, opens a PTY shell, and spawns the I/O loop.
@@ -692,6 +792,7 @@ async fn create_ssh_session_inner(
         owner_window_label,
         ai_execution_profile: AiExecutionProfile::Posix,
         injection_active,
+        cwd_tracking_active: false,
         dynamic_title_capabilities: DynamicTitleCapabilities::new(config.dynamic_tab_title, None),
         remote_file_browser_enabled: capabilities.remote_file_browser_enabled,
         remote_stats_enabled: capabilities.remote_stats_enabled,
@@ -934,6 +1035,7 @@ pub async fn create_multiplexed_ssh_session(
         owner_window_label,
         ai_execution_profile: AiExecutionProfile::Posix,
         injection_active,
+        cwd_tracking_active: false,
         dynamic_title_capabilities: DynamicTitleCapabilities::new(config.dynamic_tab_title, None),
         remote_file_browser_enabled: capabilities.remote_file_browser_enabled,
         remote_stats_enabled: capabilities.remote_stats_enabled,
@@ -1584,6 +1686,7 @@ mod tests {
             owner_window_label: None,
             ai_execution_profile: crate::config::AiExecutionProfile::Posix,
             injection_active: true,
+            cwd_tracking_active: false,
             dynamic_title_capabilities: DynamicTitleCapabilities::default(),
             remote_file_browser_enabled: false,
             remote_stats_enabled: true,
@@ -1700,6 +1803,7 @@ mod tests {
             owner_window_label: None,
             ai_execution_profile: crate::config::AiExecutionProfile::Posix,
             injection_active: true,
+            cwd_tracking_active: false,
             dynamic_title_capabilities: DynamicTitleCapabilities::default(),
             remote_file_browser_enabled: false,
             remote_stats_enabled: true,

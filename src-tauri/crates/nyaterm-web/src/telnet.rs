@@ -27,6 +27,7 @@ pub async fn create(state: Arc<State>, owner: &str, args: Value) -> Result<Strin
         username,
         backspace_mode,
         raw_tcp_cli,
+        keep_alive_interval,
         enter_mode,
         local_echo,
         local_line_edit,
@@ -80,6 +81,7 @@ pub async fn create(state: Arc<State>, owner: &str, args: Value) -> Result<Strin
         password,
         backspace_mode,
         raw_tcp_cli,
+        keep_alive_interval,
         enter_mode: TelnetEnterMode::from_config_value(&enter_mode),
         local_echo,
         local_line_edit,
@@ -191,9 +193,16 @@ async fn run(
         None
     };
     let mut login_tick = tokio::time::interval(std::time::Duration::from_millis(250));
+    let mut keep_alive = telnet_keep_alive_interval(&config);
     let transfer = async {
         loop {
             tokio::select! {
+                _ = tick_telnet_keep_alive(&mut keep_alive) => {
+                    stream.write_all(&TELNET_NOP).await.map_err(|error| {
+                        tracing::warn!(event="telnet.keep_alive_write_error", session_id=%session.id, connection_id=?session.connection_id, error=%error, "Telnet keep-alive write failed");
+                        WebError::bad("Telnet keep-alive write failed")
+                    })?;
+                },
                 _ = async { tokio::time::sleep_until(startup_deadline.unwrap()).await }, if startup_deadline.is_some() => {
                     startup_deadline = None;
                     if let Some(data) = startup_input.take() {

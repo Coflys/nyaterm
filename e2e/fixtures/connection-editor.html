@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Connection editor fixture</title>
+  </head>
+  <body>
+    <div id="root" style="height: 100vh"></div>
+    <script>
+      // Exercise the production Desktop adapter without a native backend or real credentials.
+      if (!new URLSearchParams(location.search).has("web")) {
+        let callbackId = 0;
+        window.__TAURI_INTERNALS__ = {
+          metadata: {
+            currentWindow: { label: "new-session" },
+            currentWebview: {
+              label: "new-session",
+              windowLabel: "new-session",
+            },
+          },
+          transformCallback: () => ++callbackId,
+          unregisterCallback: () => {},
+          invoke: (command, args) => window.editorFixtureInvoke(command, args),
+        };
+      }
+    </script>
+    <script type="module" src="./connection-editor.tsx"></script>
+  </body>
+</html>

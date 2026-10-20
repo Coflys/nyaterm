@@ -117,6 +117,7 @@ fn encode_portable_snapshot_redb(snapshot: &PortableSnapshot) -> AppResult<Vec<u
     fs::read(temp.path()).map_err(Into::into)
 }
 
+/// Cross-crate fixture encoder, available only with test support.
 #[cfg(any(test, feature = "test-support"))]
 pub fn encode_v3_raw_snapshot_redb_for_test(
     snapshot: &PortableSnapshot,

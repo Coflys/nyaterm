@@ -156,6 +156,15 @@ impl ZmodemUploadDrain {
         false
     }
 
+    /// Inspect the drain window without extending it for periodic keep-alive ticks.
+    pub fn is_suppressing(&mut self, now: Instant) -> bool {
+        if self.suppress_until.is_some_and(|until| now <= until) {
+            return true;
+        }
+        self.suppress_until = None;
+        false
+    }
+
     pub fn filter<'a>(&mut self, data: &'a [u8], now: Instant) -> &'a [u8] {
         let Some(until) = self.suppress_until else {
             return data;
@@ -197,6 +206,16 @@ impl ZmodemDownloadOoDrain {
 
     pub fn is_active(&self) -> bool {
         self.suppress_until.is_some()
+    }
+
+    /// Inspect the drain window even if no more remote bytes arrive.
+    pub fn is_suppressing(&mut self, now: Instant) -> bool {
+        if self.suppress_until.is_some_and(|until| now <= until) {
+            return true;
+        }
+        self.suppress_until = None;
+        self.remaining_o = 0;
+        false
     }
 
     pub fn filter<'a>(&mut self, data: &'a [u8], now: Instant) -> &'a [u8] {

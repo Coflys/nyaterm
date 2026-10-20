@@ -103,6 +103,11 @@ pub enum SshAuth {
 
 pub(crate) type SshRawHandle = Arc<Mutex<client::Handle<SshHandler>>>;
 
+pub(super) struct TunnelDisconnect {
+    pub message: String,
+    pub retryable: bool,
+}
+
 pub struct RemoteForwardOpen {
     pub channel: russh::Channel<client::Msg>,
     pub connected_address: String,
@@ -288,6 +293,9 @@ pub struct SshHandler {
     agent_forwarding_endpoint: Option<SshAgentEndpoint>,
     agent_broker: Option<Arc<AgentBrokerFactory>>,
     diagnostics: Option<SshDiagnosticContext>,
+    interactive: bool,
+    tunnel_cancel: Option<tokio_util::sync::CancellationToken>,
+    tunnel_disconnect_tx: Option<mpsc::UnboundedSender<TunnelDisconnect>>,
 }
 
 impl SshHandler {
@@ -308,6 +316,9 @@ impl SshHandler {
             agent_forwarding_endpoint: None,
             agent_broker: None,
             diagnostics: None,
+            interactive: super::auth::interaction_allowed(),
+            tunnel_cancel: super::session::tunnel_cancel(),
+            tunnel_disconnect_tx: super::session::tunnel_disconnect_sender(),
         }
     }
 
@@ -500,6 +511,9 @@ impl client::Handler for SshHandler {
                 Ok(true)
             }
             _ => {
+                if !self.interactive {
+                    return Ok(false);
+                }
                 // "prompt" mode: ask user via frontend dialog
                 let verify_mgr = self
                     .app
@@ -530,19 +544,30 @@ impl client::Handler for SshHandler {
 
                 // 120s timeout prevents indefinite hang if the frontend
                 // isn't ready (e.g. startup reconnect before listeners register).
-                let accepted =
-                    match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
-                        Ok(Ok(v)) => v,
-                        _ => {
-                            // Clean up the dangling sender so it doesn't leak.
-                            let _ = verify_mgr.respond(&request_id, false).await;
-                            tracing::warn!(
-                                host = %self.host, port = self.port,
-                                "Host key verification timed out or channel dropped, rejecting"
-                            );
-                            false
+                let accepted = match tokio::select! {
+                    result = tokio::time::timeout(std::time::Duration::from_secs(120), rx) => result,
+                    _ = async {
+                        match &self.tunnel_cancel {
+                            Some(cancel) => cancel.cancelled().await,
+                            None => std::future::pending::<()>().await,
                         }
-                    };
+                    } => {
+                        let _ = verify_mgr.respond(&request_id, false).await;
+                        let _ = self.app.emit("host-key-verify-resolved", serde_json::json!({ "requestId": request_id }));
+                        return Ok(false);
+                    }
+                } {
+                    Ok(Ok(v)) => v,
+                    _ => {
+                        // Clean up the dangling sender so it doesn't leak.
+                        let _ = verify_mgr.respond(&request_id, false).await;
+                        tracing::warn!(
+                            host = %self.host, port = self.port,
+                            "Host key verification timed out or channel dropped, rejecting"
+                        );
+                        false
+                    }
+                };
                 let _ = self.app.emit(
                     "host-key-verify-resolved",
                     serde_json::json!({ "requestId": request_id }),
@@ -602,6 +627,12 @@ impl client::Handler for SshHandler {
     ) -> Result<(), Self::Error> {
         match reason {
             client::DisconnectReason::ReceivedDisconnect(info) => {
+                if let Some(tx) = &self.tunnel_disconnect_tx {
+                    let _ = tx.send(TunnelDisconnect {
+                        message: format!("SSH server disconnected: {}", info.message),
+                        retryable: true,
+                    });
+                }
                 if let Some(tx) = &self.disconnect_tx {
                     let _ = tx.send(format!("SSH server disconnected: {}", info.message));
                 }
@@ -623,6 +654,12 @@ impl client::Handler for SshHandler {
                 Ok(())
             }
             client::DisconnectReason::Error(error) => {
+                if let Some(tx) = &self.tunnel_disconnect_tx {
+                    let _ = tx.send(TunnelDisconnect {
+                        message: error.to_string(),
+                        retryable: super::tunnel::is_retryable_ssh(&error),
+                    });
+                }
                 if let Some(tx) = &self.disconnect_tx {
                     let _ = tx.send(format!("SSH connection error: {error}"));
                 }
@@ -1122,7 +1159,7 @@ pub(super) async fn connect_with_proxy(
                 let transport =
                     nyaterm_core::network::open_proxy_transport(proxy, &config.host, config.port)
                         .await?;
-                client::connect_stream(ssh_config, transport.stream, handler).await
+                connect_cancellable(ssh_config, transport.stream, handler).await
             }
             "proxycommand" => {
                 let stream = open_proxy_command_stream(
@@ -1132,7 +1169,7 @@ pub(super) async fn connect_with_proxy(
                     &config.username,
                 )
                 .await?;
-                client::connect_stream(ssh_config, stream, handler).await
+                connect_cancellable(ssh_config, stream, handler).await
             }
             other => {
                 return Err(AppError::Config(format!(
@@ -1146,9 +1183,25 @@ pub(super) async fn connect_with_proxy(
             port = config.port,
             "Opening direct SSH transport"
         );
-        nyaterm_core::ssh::protocol::connect(ssh_config, target.0, target.1, handler).await
+        if handler.tunnel_cancel.is_some() {
+            // DNS lookup failures can be temporary while the network is offline.
+            // Keep their source, but classify them at the transport boundary.
+            let addresses: Vec<_> = tokio::net::lookup_host(target)
+                .await
+                .map_err(|error| {
+                    AppError::Io(std::io::Error::new(
+                        std::io::ErrorKind::HostUnreachable,
+                        error,
+                    ))
+                })?
+                .collect();
+            let stream = tokio::net::TcpStream::connect(addresses.as_slice()).await?;
+            connect_cancellable(ssh_config, stream, handler).await
+        } else {
+            nyaterm_core::ssh::protocol::connect(ssh_config, target.0, target.1, handler).await
+        }
     }
-    .map_err(|error| AppError::Auth(format!("SSH connection failed: {}", error)))?;
+    .map_err(AppError::Ssh)?;
 
     tracing::info!(
         host = %handler_host,
@@ -1172,6 +1225,7 @@ pub(crate) async fn open_proxy_command_stream(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|error| AppError::Auth(format!("ProxyCommand failed to start: {}", error)))?;
 
@@ -1208,26 +1262,17 @@ pub(crate) async fn open_proxy_command_stream(
         });
     }
 
-    tokio::spawn(async move {
-        match process.wait().await {
-            Ok(status) if status.success() => {
-                tracing::debug!(%status, "ProxyCommand exited");
-            }
-            Ok(status) => {
-                tracing::warn!(%status, "ProxyCommand exited with failure");
-            }
-            Err(error) => {
-                tracing::warn!(%error, "Failed to wait for ProxyCommand");
-            }
-        }
-    });
-
-    Ok(ProxyCommandStream { stdout, stdin })
+    Ok(ProxyCommandStream {
+        stdout,
+        stdin,
+        _process: process,
+    })
 }
 
 pub(crate) struct ProxyCommandStream {
     stdout: tokio::process::ChildStdout,
     stdin: tokio::process::ChildStdin,
+    _process: tokio::process::Child,
 }
 
 impl AsyncRead for ProxyCommandStream {
@@ -1363,9 +1408,9 @@ where
         "Opening SSH transport over existing stream"
     );
 
-    let handle = client::connect_stream(ssh_config, stream, handler)
+    let handle = connect_cancellable(ssh_config, stream, handler)
         .await
-        .map_err(|error| AppError::Auth(format!("SSH connection failed: {}", error)))?;
+        .map_err(AppError::Ssh)?;
 
     tracing::info!(
         host = %handler_host,
@@ -1374,4 +1419,199 @@ where
     );
 
     Ok(handle)
+}
+
+// Dropping the connect future alone cannot cancel russh's spawned handshake task.
+// The stream also observes cancellation, so even a stalled KEX releases its socket.
+struct CancellableStream<S> {
+    closed: Option<oneshot::Sender<()>>,
+    stream: Option<S>,
+    cancelled: std::pin::Pin<Box<tokio_util::sync::WaitForCancellationFutureOwned>>,
+}
+
+impl<S> Drop for CancellableStream<S> {
+    fn drop(&mut self) {
+        drop(self.stream.take());
+        if let Some(closed) = self.closed.take() {
+            let _ = closed.send(());
+        }
+    }
+}
+
+impl<S: Unpin> CancellableStream<S> {
+    fn check_cancel(&mut self, cx: &mut std::task::Context<'_>) -> std::io::Result<()> {
+        use std::future::Future;
+        if self.cancelled.as_mut().poll(cx).is_ready() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "Tunnel cancelled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for CancellableStream<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.check_cancel(cx)?;
+        std::pin::Pin::new(self.stream.as_mut().expect("tunnel stream")).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for CancellableStream<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.check_cancel(cx)?;
+        std::pin::Pin::new(self.stream.as_mut().expect("tunnel stream")).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.check_cancel(cx)?;
+        std::pin::Pin::new(self.stream.as_mut().expect("tunnel stream")).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(self.stream.as_mut().expect("tunnel stream")).poll_shutdown(cx)
+    }
+}
+
+async fn connect_cancellable<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    config: Arc<client::Config>,
+    stream: S,
+    handler: SshHandler,
+) -> Result<client::Handle<SshHandler>, russh::Error> {
+    if let Some(cancel) = handler.tunnel_cancel.clone() {
+        client::connect_stream(
+            config,
+            CancellableStream {
+                closed: super::session::track_tunnel_stream(),
+                stream: Some(stream),
+                cancelled: Box::pin(cancel.cancelled_owned()),
+            },
+            handler,
+        )
+        .await
+    } else {
+        client::connect_stream(config, stream, handler).await
+    }
+}
+
+#[cfg(test)]
+mod tunnel_transport_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::{Duration, timeout};
+    use tokio_util::sync::CancellationToken;
+
+    struct TestClient;
+    impl client::Handler for TestClient {
+        type Error = russh::Error;
+        async fn check_server_key(
+            &mut self,
+            _: &russh::keys::PublicKey,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn tunnel_cancel_closes_a_stalled_russh_handshake_task() {
+        let (stream, mut server) = tokio::io::duplex(4096);
+        server.write_all(b"SSH-2.0-stalled-test\r\n").await.unwrap();
+        let cancel = CancellationToken::new();
+        let (closed_tx, closed_rx) = oneshot::channel();
+        let stream = CancellableStream {
+            stream: Some(stream),
+            cancelled: Box::pin(cancel.clone().cancelled_owned()),
+            closed: Some(closed_tx),
+        };
+        let task = tokio::spawn(client::connect_stream(
+            Arc::new(client::Config::default()),
+            stream,
+            TestClient,
+        ));
+        let mut banner = [0; 64];
+        assert!(server.read(&mut banner).await.unwrap() > 0);
+        cancel.cancel();
+        assert!(
+            timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        timeout(Duration::from_secs(2), closed_rx)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    struct TestServer;
+    impl russh::server::Handler for TestServer {
+        type Error = russh::Error;
+        async fn auth_none(&mut self, _: &str) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+    }
+
+    #[tokio::test]
+    async fn tunnel_cancel_closes_an_authenticated_local_ssh_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = Arc::new(russh::server::Config {
+            keys: vec![
+                russh::keys::PrivateKey::random(
+                    &mut russh::keys::key::safe_rng(),
+                    russh::keys::Algorithm::Ed25519,
+                )
+                .unwrap(),
+            ],
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            ..Default::default()
+        });
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let session = russh::server::run_stream(config, stream, TestServer)
+                .await
+                .unwrap();
+            let _ = session.await;
+        });
+        let cancel = CancellationToken::new();
+        let (closed_tx, closed_rx) = oneshot::channel();
+        let stream = CancellableStream {
+            stream: Some(tokio::net::TcpStream::connect(addr).await.unwrap()),
+            cancelled: Box::pin(cancel.clone().cancelled_owned()),
+            closed: Some(closed_tx),
+        };
+        let mut client =
+            client::connect_stream(Arc::new(client::Config::default()), stream, TestClient)
+                .await
+                .unwrap();
+        assert!(matches!(
+            client.authenticate_none("test").await.unwrap(),
+            client::AuthResult::Success
+        ));
+        cancel.cancel();
+        timeout(Duration::from_secs(2), closed_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }
