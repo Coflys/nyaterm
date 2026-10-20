@@ -1158,7 +1158,9 @@ mod tests {
             if let Some(workspace) = app.file_manager.workspace(&manager_id) {
                 let workspace = workspace.read(cx);
                 assert_eq!(
-                    workspace.pane(crate::features::file_manager::PaneId::Right).endpoint,
+                    workspace
+                        .pane(crate::features::file_manager::PaneId::Right)
+                        .endpoint,
                     crate::features::file_manager::PaneEndpoint::Session("local-2".into())
                 );
             }

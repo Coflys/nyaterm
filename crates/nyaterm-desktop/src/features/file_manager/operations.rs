@@ -77,6 +77,9 @@ mod tests {
         assert!(plan.rejects(&file("/tmp/dest")));
         let later_directory = RemoteFilePath::new("/tmp/elsewhere");
         assert_eq!(plan.target_directory.display_path, captured);
-        assert_ne!(plan.target_directory.display_path, later_directory.display_path);
+        assert_ne!(
+            plan.target_directory.display_path,
+            later_directory.display_path
+        );
     }
 }

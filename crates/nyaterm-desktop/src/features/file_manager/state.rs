@@ -35,10 +35,7 @@ pub(in crate::features) struct FileManagerJobTarget {
 }
 
 impl FileManagerFeatureState {
-    pub(in crate::features) fn workspace(
-        &self,
-        id: &str,
-    ) -> Option<Entity<FileManagerWorkspace>> {
+    pub(in crate::features) fn workspace(&self, id: &str) -> Option<Entity<FileManagerWorkspace>> {
         self.workspaces.get(id).cloned()
     }
 
@@ -87,18 +84,26 @@ impl FileManagerFeatureState {
         self.job_targets.get(job_id)
     }
 
-    pub(in crate::features) fn references_session(&self, session_id: &str, cx: &AppContext) -> bool {
-        self.workspaces.values().any(|workspace| {
-            workspace
-                .read(cx)
-                .references_session(session_id)
-        }) || self.job_targets.values().any(|target| {
-            target.source.session_id() == Some(session_id)
-                || target.target.session_id() == Some(session_id)
-        })
+    pub(in crate::features) fn references_session(
+        &self,
+        session_id: &str,
+        cx: &AppContext,
+    ) -> bool {
+        self.workspaces
+            .values()
+            .any(|workspace| workspace.read(cx).references_session(session_id))
+            || self.job_targets.values().any(|target| {
+                target.source.session_id() == Some(session_id)
+                    || target.target.session_id() == Some(session_id)
+            })
     }
 
-    pub(in crate::features) fn replace_session_id(&mut self, old_id: &str, new_id: &str, cx: &mut AppContext) {
+    pub(in crate::features) fn replace_session_id(
+        &mut self,
+        old_id: &str,
+        new_id: &str,
+        cx: &mut AppContext,
+    ) {
         for workspace in self.workspaces.values() {
             workspace.update(cx, |workspace, cx| {
                 workspace.replace_session_id(old_id, new_id);
@@ -122,7 +127,9 @@ impl FileManagerFeatureState {
         self.sidebar_restore_suppressed = false;
     }
 
-    pub(in crate::features) fn take_sidebar_restore(&mut self) -> Option<FileManagerSidebarRestore> {
+    pub(in crate::features) fn take_sidebar_restore(
+        &mut self,
+    ) -> Option<FileManagerSidebarRestore> {
         if self.sidebar_restore_suppressed {
             self.sidebar_restore = None;
             return None;

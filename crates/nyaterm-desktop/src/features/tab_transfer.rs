@@ -75,10 +75,10 @@ impl NyaTermApp {
     ) {
         if !crate::models::WorkspaceTabId::key_is_session(&root_tab_id)
             || (source_workspace_id == self.workspace_id
-            && self
-                .tab_tree_session_ids(&root_tab_id)
-                .iter()
-                .any(|id| self.workspace_references_session(id, cx)))
+                && self
+                    .tab_tree_session_ids(&root_tab_id)
+                    .iter()
+                    .any(|id| self.workspace_references_session(id, cx)))
         {
             self.shell.set_status(
                 "Close the referencing file editors before moving this session to another window",

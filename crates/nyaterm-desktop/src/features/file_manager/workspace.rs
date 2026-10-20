@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, WeakEntity,
-};
+use gpui::{Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, WeakEntity};
 use nyaterm_core::FileManagerPaneSide;
 use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
 
@@ -129,7 +127,10 @@ impl FileManagerWorkspace {
         self.right.replace_session_id(old_id, new_id);
     }
 
-    pub(in crate::features) fn restore_settings(&mut self, settings: &nyaterm_core::FileManagerUiSettings) {
+    pub(in crate::features) fn restore_settings(
+        &mut self,
+        settings: &nyaterm_core::FileManagerUiSettings,
+    ) {
         if !settings.remember_layout {
             return;
         }

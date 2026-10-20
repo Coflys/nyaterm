@@ -11,13 +11,13 @@ use super::pane::{PaneEndpoint, PaneId};
 use super::state::FileManagerJobTarget;
 use super::view::FileManagerNameKind;
 use super::workspace::{FileManagerListResult, FileManagerWorkspace};
+use crate::features::NyaTermApp;
 use crate::features::pages::transfers::file_ops::clipboard::{
     ClipboardCopyRequest, run_clipboard_copy,
 };
 use crate::features::runtime_jobs::await_blocking_job;
 use crate::features::text_inputs::TextInputSetup;
 use crate::features::transfers::transfer_jobs::TransferProgressEventSender;
-use crate::features::NyaTermApp;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus,
@@ -78,7 +78,11 @@ impl NyaTermApp {
         };
         let task = self.blocking_jobs.submit_task("file-manager-list", {
             let path = path.clone();
-            move |_| service.list_dir_path(&path).map_err(|error| error.to_string())
+            move |_| {
+                service
+                    .list_dir_path(&path)
+                    .map_err(|error| error.to_string())
+            }
         });
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task).await.and_then(|result| result);
@@ -127,12 +131,7 @@ impl NyaTermApp {
                     pane.home_dir = home.clone();
                     pane.home_dir_pending = false;
                 });
-                self.navigate_file_manager_pane(
-                    manager_id,
-                    pane_id,
-                    RemoteFilePath::new(home),
-                    cx,
-                );
+                self.navigate_file_manager_pane(manager_id, pane_id, RemoteFilePath::new(home), cx);
             }
             Err(error) => {
                 workspace.update(cx, |workspace, cx| {
@@ -269,11 +268,7 @@ impl NyaTermApp {
                     target_parent_path: plan.target_directory.display_path.clone(),
                 },
                 status: TransferJobStatus::Running,
-                detail: format!(
-                    "{} {}",
-                    if cut { "Moving" } else { "Copying" },
-                    entry.path
-                ),
+                detail: format!("{} {}", if cut { "Moving" } else { "Copying" }, entry.path),
                 created_at_ms: TransferJobState::now_ms(),
                 display_name: String::new(),
                 entries: Vec::new(),
@@ -316,9 +311,8 @@ impl NyaTermApp {
             });
             started += 1;
         }
-        self.shell.set_status(
-            t!("fileManager.copyJobsStarted", count = started).to_string(),
-        );
+        self.shell
+            .set_status(t!("fileManager.copyJobsStarted", count = started).to_string());
         cx.notify();
     }
 
@@ -364,18 +358,14 @@ impl NyaTermApp {
         let mut moved = 0;
         for entry in entries {
             let name = file_browser_name(service.kind(), &entry.path);
-            let destination = file_browser_join(
-                service.kind(),
-                &target_directory.display_path,
-                &name,
-            );
+            let destination =
+                file_browser_join(service.kind(), &target_directory.display_path, &name);
             if destination == entry.path {
                 continue;
             }
-            if let Err(error) = service.rename_remote_paths(
-                &entry.remote_path(),
-                &RemoteFilePath::new(destination),
-            ) {
+            if let Err(error) =
+                service.rename_remote_paths(&entry.remote_path(), &RemoteFilePath::new(destination))
+            {
                 self.shell.set_status(error.to_string());
             } else {
                 moved += 1;
@@ -626,7 +616,11 @@ impl NyaTermApp {
         true
     }
 
-    pub(in crate::features) fn workspace_references_session(&self, session_id: &str, cx: &gpui::App) -> bool {
+    pub(in crate::features) fn workspace_references_session(
+        &self,
+        session_id: &str,
+        cx: &gpui::App,
+    ) -> bool {
         self.transfer.editor_references_session(session_id)
             || self.file_manager.references_session(session_id, cx)
     }

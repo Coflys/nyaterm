@@ -235,7 +235,13 @@ impl NyaTermApp {
                                     } else {
                                         palette.surface
                                     }))
-                                    .child(ordinals.get(&key).copied().unwrap_or(index + 1).to_string())
+                                    .child(
+                                        ordinals
+                                            .get(&key)
+                                            .copied()
+                                            .unwrap_or(index + 1)
+                                            .to_string(),
+                                    )
                                     .child(if document.dirty {
                                         format!("● {}", document.name)
                                     } else {

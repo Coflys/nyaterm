@@ -39,11 +39,11 @@ mod terminal_directory;
 pub(in crate::features::pages::transfers) mod tests_support;
 mod tree;
 
+pub(in crate::features) use entry_row::format_browser_file_size;
 use entry_row::{
     TransferBrowserEntryRowPresentation, transfer_browser_entry_row,
     transfer_browser_parent_entry_row,
 };
-pub(in crate::features) use entry_row::format_browser_file_size;
 pub(in crate::features) use helpers::format_sftp_modified;
 use helpers::*;
 

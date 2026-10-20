@@ -6,9 +6,7 @@ use std::sync::Arc;
 use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
 use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
 
-use crate::features::transfers::{
-    BrowserFilterCache, BrowserFilterKey, record_browser_history,
-};
+use crate::features::transfers::{BrowserFilterCache, BrowserFilterKey, record_browser_history};
 use crate::models::{
     TransferBrowserColumnWidths, TransferBrowserSortColumn, TransferBrowserSortDirection,
 };
@@ -117,7 +115,10 @@ impl BrowserPaneState {
         }
     }
 
-    pub(in crate::features) fn visible_entries(&mut self, show_hidden: bool) -> Arc<[SftpFileEntry]> {
+    pub(in crate::features) fn visible_entries(
+        &mut self,
+        show_hidden: bool,
+    ) -> Arc<[SftpFileEntry]> {
         let key = BrowserFilterKey::new(
             &self.entries,
             &self.search,
@@ -294,10 +295,8 @@ mod tests {
         let cx = TestAppContext::single();
         cx.update(|cx| {
             let mut left = BrowserPaneState::new(PaneEndpoint::Local, cx.focus_handle());
-            let mut right = BrowserPaneState::new(
-                PaneEndpoint::Session("ssh-a".into()),
-                cx.focus_handle(),
-            );
+            let mut right =
+                BrowserPaneState::new(PaneEndpoint::Session("ssh-a".into()), cx.focus_handle());
             left.entries = std::sync::Arc::new(vec![entry("alpha", "/a"), entry("beta", "/b")]);
             right.entries = std::sync::Arc::new(vec![entry("gamma", "/g"), entry("delta", "/d")]);
             left.select_entry("/a".into());
@@ -351,10 +350,8 @@ mod tests {
         let cx = TestAppContext::single();
         cx.update(|cx| {
             let mut left = BrowserPaneState::new(PaneEndpoint::Local, cx.focus_handle());
-            let mut right = BrowserPaneState::new(
-                PaneEndpoint::Session("ssh-a".into()),
-                cx.focus_handle(),
-            );
+            let mut right =
+                BrowserPaneState::new(PaneEndpoint::Session("ssh-a".into()), cx.focus_handle());
             left.select_entry("/a".into());
             left.search = "alpha".into();
             right.select_entry("/g".into());

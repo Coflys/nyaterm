@@ -27,6 +27,7 @@ use crate::features::commands::{
     quick_command_sort_mode_from_setting, quick_command_view_mode_from_setting,
 };
 use crate::features::connections::{ConnectionFeatureFocus, ConnectionFeatureState};
+use crate::features::file_manager::FileManagerFeatureState;
 use crate::features::mcp::McpHostFeatureState;
 use crate::features::notes::{NotesFeatureState, NotesPanel};
 use crate::features::pages::connections::panel::ConnectionPanel;
@@ -47,7 +48,6 @@ use crate::features::sync::CloudSyncFeatureState;
 use crate::features::sync_input::SyncInputFeatureState;
 use crate::features::terminal::{TerminalFeatureFocus, TerminalFeatureState};
 use crate::features::text_inputs::TextInputRegistry;
-use crate::features::file_manager::FileManagerFeatureState;
 use crate::features::transfers::{TransferFeatureFocus, TransferFeatureState};
 use crate::features::translation::TranslationFeatureState;
 use crate::features::tunnels::{TunnelCatalogState, TunnelFeatureState};

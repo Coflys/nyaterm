@@ -1,7 +1,5 @@
 use gpui::{Context, div, prelude::*};
-use nyaterm_core::{
-    FileManagerPaneRestore, FileManagerPaneSide, FileManagerSourceRestore,
-};
+use nyaterm_core::{FileManagerPaneRestore, FileManagerPaneSide, FileManagerSourceRestore};
 use nyaterm_transport::RemoteFilePath;
 use rust_i18n::t;
 
@@ -53,9 +51,9 @@ impl NyaTermApp {
 
     pub(in crate::features) fn default_file_manager_seed(&self) -> FileManagerSeed {
         let restore = &self.settings.summary().ui_file_manager;
-        let (right, right_path) = self.seed_from_browser().unwrap_or_else(|| {
-            self.resolve_pane_restore(&restore.right)
-        });
+        let (right, right_path) = self
+            .seed_from_browser()
+            .unwrap_or_else(|| self.resolve_pane_restore(&restore.right));
         let (left, left_path) = self.resolve_pane_restore(&restore.left);
         FileManagerSeed {
             left,
@@ -67,7 +65,8 @@ impl NyaTermApp {
 
     fn seed_from_browser(&self) -> Option<(PaneEndpoint, Option<RemoteFilePath>)> {
         let session_id = self.session.active_id()?;
-        self.session.file_browser_backend_support_for_session(session_id)?;
+        self.session
+            .file_browser_backend_support_for_session(session_id)?;
         let path = self.transfer.browser_view().path.clone();
         let path = (!path.is_empty()).then(|| RemoteFilePath::new(path));
         Some((PaneEndpoint::Session(session_id.to_string()), path))
@@ -91,15 +90,26 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn session_id_for_connection(&self, connection_id: &str) -> Option<String> {
-        self.session.metadata_entries().find_map(|(session_id, metadata)| {
-            (metadata.source_connection_id.as_deref() == Some(connection_id)
-                && self.session.file_browser_backend_support_for_session(session_id).is_some())
-            .then(|| session_id.to_string())
-        })
+    pub(in crate::features) fn session_id_for_connection(
+        &self,
+        connection_id: &str,
+    ) -> Option<String> {
+        self.session
+            .metadata_entries()
+            .find_map(|(session_id, metadata)| {
+                (metadata.source_connection_id.as_deref() == Some(connection_id)
+                    && self
+                        .session
+                        .file_browser_backend_support_for_session(session_id)
+                        .is_some())
+                .then(|| session_id.to_string())
+            })
     }
 
-    pub(in crate::features) fn connection_id_for_session(&self, session_id: &str) -> Option<String> {
+    pub(in crate::features) fn connection_id_for_session(
+        &self,
+        session_id: &str,
+    ) -> Option<String> {
         self.session
             .metadata(session_id)
             .and_then(|metadata| metadata.source_connection_id.clone())
@@ -193,7 +203,12 @@ impl NyaTermApp {
     }
 
     fn collapse_sidebars_for_file_manager(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.summary().ui_file_manager.auto_collapse_sidebar {
+        if !self
+            .settings
+            .summary()
+            .ui_file_manager
+            .auto_collapse_sidebar
+        {
             return;
         }
         if self.file_manager.sidebar_restore_pending() {
@@ -206,14 +221,15 @@ impl NyaTermApp {
         if !left_is_transfers && !right_is_transfers {
             return;
         }
-        self.file_manager.set_sidebar_restore(FileManagerSidebarRestore {
-            left_open: left_is_transfers,
-            left_item,
-            left_collapsed: self.shell.panels.left_collapsed,
-            right_open: right_is_transfers,
-            right_item,
-            right_collapsed: self.shell.panels.right_collapsed,
-        });
+        self.file_manager
+            .set_sidebar_restore(FileManagerSidebarRestore {
+                left_open: left_is_transfers,
+                left_item,
+                left_collapsed: self.shell.panels.left_collapsed,
+                right_open: right_is_transfers,
+                right_item,
+                right_collapsed: self.shell.panels.right_collapsed,
+            });
         if left_is_transfers {
             self.shell.panels.left_collapsed = true;
         }
@@ -223,7 +239,10 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn restore_sidebars_from_file_manager(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn restore_sidebars_from_file_manager(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
         let Some(restore) = self.file_manager.take_sidebar_restore() else {
             return;
         };
@@ -257,7 +276,11 @@ impl NyaTermApp {
         let open = self.file_manager.workspaces().next().is_some();
         let mut settings = self.settings.summary().ui_file_manager.clone();
         settings.open = open;
-        if let Some(workspace) = self.file_manager.workspaces().next().map(|(_, workspace)| workspace.clone())
+        if let Some(workspace) = self
+            .file_manager
+            .workspaces()
+            .next()
+            .map(|(_, workspace)| workspace.clone())
         {
             let snapshot = workspace.read(cx);
             settings.split_percent = snapshot.split_percent;
@@ -286,17 +309,21 @@ impl NyaTermApp {
         FileManagerPaneRestore {
             source: match &pane.endpoint {
                 PaneEndpoint::Local => FileManagerSourceRestore::Local,
-                PaneEndpoint::Session(session_id) => match self.connection_id_for_session(session_id)
-                {
-                    Some(id) => FileManagerSourceRestore::Connection { id },
-                    None => FileManagerSourceRestore::Local,
-                },
+                PaneEndpoint::Session(session_id) => {
+                    match self.connection_id_for_session(session_id) {
+                        Some(id) => FileManagerSourceRestore::Connection { id },
+                        None => FileManagerSourceRestore::Local,
+                    }
+                }
             },
             path: pane.path.display_path.clone(),
         }
     }
 
-    pub(in crate::features) fn restore_file_manager_after_sessions(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn restore_file_manager_after_sessions(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
         if !self.settings.summary().ui_file_manager.open {
             return;
         }

@@ -458,6 +458,46 @@ impl NyaTermApp {
                 true,
             ));
         }
+        let mut account_options = password_options.clone();
+        if let Some(choice) = account_options
+            .first_mut()
+            .filter(|choice| choice.value.is_none())
+        {
+            choice.label = t!("authForm.manualIdentity").to_string();
+        }
+        for choice in account_options
+            .iter_mut()
+            .filter(|choice| choice.value.is_some())
+        {
+            let Some(id) = choice.value.as_deref() else {
+                continue;
+            };
+            let Some(account) = self
+                .security
+                .passwords()
+                .iter()
+                .find(|entry| entry.id == id)
+            else {
+                continue;
+            };
+            let username = account.username.trim();
+            let username = if username.is_empty() {
+                t!("authForm.accountUsernameFallback").to_string()
+            } else {
+                username.to_string()
+            };
+            let password_status = if account.has_password {
+                t!("authForm.passwordSaved")
+            } else {
+                t!("authForm.passwordNotSaved")
+            };
+            choice.subtitle = Some(format!("{username} · {password_status}"));
+        }
+        let account_placeholder = if editor.account_id.is_none() {
+            t!("authForm.manualIdentity").to_string()
+        } else {
+            password_label.clone()
+        };
         let mut otp_options = vec![ConnectionEditorChoice::new(
             None,
             t!("dialog.noOtp"),
@@ -1000,8 +1040,8 @@ impl NyaTermApp {
             ),
             (
                 ConnectionEditorSelect::Account,
-                password_options.as_slice(),
-                password_label.clone(),
+                account_options.as_slice(),
+                account_placeholder,
             ),
             (
                 ConnectionEditorSelect::SshKey,
@@ -3185,7 +3225,9 @@ mod tests {
             password_source: ConnectionEditorPasswordSource::Ask,
             password_id: None,
             account_id: None,
-            account_source_saved: false,
+            username_source: nyaterm_core::ConnectionUsernameSource::Connection,
+            password_source_touched: false,
+            password_source_demoted: false,
             password_edit: crate::models::ConnectionPasswordEdit::Replace,
             field_errors: Default::default(),
             password: nyaterm_core::SecretString::default(),
@@ -3667,7 +3709,6 @@ mod tests {
                     crate::models::ConnectionEditorSection::Authentication,
                     cx,
                 );
-                app.set_connection_account_source(true, cx);
             })
         });
         draw_editor(&app, vcx);

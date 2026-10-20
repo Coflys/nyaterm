@@ -1,10 +1,11 @@
 use gpui::{Context, Div, div, prelude::*, rgb};
-use nyaterm_ui::{NyaButton, NyaTabItem, NyaTabs};
+use nyaterm_core::ConnectionUsernameSource;
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaTabItem, NyaTabs};
 use rust_i18n::t;
 
 use super::super::super::list::{
-    ConnectionEditorRenderContext, EditorSecretFieldOptions, connection_editor_select,
-    editor_field, editor_secret_field, required,
+    ConnectionEditorFields, ConnectionEditorRenderContext, EditorSecretFieldOptions,
+    connection_editor_select, editor_field, editor_secret_field, required,
 };
 use super::ConnectionEditorSectionContext;
 use crate::features::NyaTermApp;
@@ -24,26 +25,34 @@ pub(super) fn login_identity(
         fields,
         ..
     } = section;
+    let account_username = fields
+        .account
+        .as_ref()
+        .map(|entry| entry.username.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let follows_account =
+        editor.username_source == ConnectionUsernameSource::Account && account_username.is_some();
+    if let Some(input) = fields.get(&ConnectionEditorField::Username) {
+        let shown = if follows_account {
+            account_username.clone().unwrap_or_default()
+        } else {
+            editor.username.clone()
+        };
+        input.update(cx, |state, cx| {
+            state.set_readonly(follows_account, cx);
+            if state.value(cx) != shown {
+                state.set_content_silent(&shown, cx);
+            }
+        });
+    }
+    let id = editor.account_id.clone();
     let mut body = div()
         .debug_selector(|| "connection-login-identity".to_string())
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().text_xs().child(t!("authForm.loginIdentity")))
         .child(
-            NyaTabs::new("connection-account-source")
-                .items([
-                    NyaTabItem::new(t!("authForm.manualIdentity")),
-                    NyaTabItem::new(t!("authForm.savedIdentity")),
-                ])
-                .selected_index(usize::from(editor.account_source_saved))
-                .on_select(cx.listener(|this, index, _, cx| {
-                    this.set_connection_account_source(*index == 1, cx)
-                })),
-        );
-    if editor.account_source_saved {
-        let id = editor.account_id.clone();
-        body = body.child(
             div()
                 .flex()
                 .flex_wrap()
@@ -75,65 +84,97 @@ pub(super) fn login_identity(
                         })),
                 ),
         );
-        if fields.account.is_none() {
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.danger))
-                    .child(t!("passwordManager.missingAccount")),
-            );
-        }
+    if editor.account_id.is_some() && fields.account.is_none() {
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.danger))
+                .child(t!("passwordManager.missingAccount")),
+        );
     }
-    let account_username = fields
-        .account
-        .as_ref()
-        .filter(|_| editor.account_source_saved)
-        .map(|entry| entry.username.trim())
-        .filter(|value| !value.is_empty());
-    if let Some(username) = account_username {
-        body = body
-            .child(div().text_xs().child(t!("dialog.username")))
-            .child(
-                div()
-                    .debug_selector(|| "connection-account-username".to_string())
-                    .text_xs()
-                    .child(username.to_owned()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(t!(
-                        "authForm.usernameFromAccount",
-                        name = fields
-                            .account
-                            .as_ref()
-                            .map(|account| account.name.as_str())
-                            .unwrap_or_default()
-                    )),
-            );
-    } else {
-        body = body.child(editor_field(
+    body = body.child(editor_field(
+        palette,
+        if editor.kind == ConnectionKindTab::Ssh {
+            required(t!("dialog.username"))
+        } else {
+            t!("credentialManager.usernameOptionalLabel").into()
+        },
+        ConnectionEditorField::Username,
+        fields,
+        cx,
+    ));
+    if follows_account {
+        body = body.child(
+            div()
+                .debug_selector(|| "connection-account-username".to_string())
+                .child(username_source_row(
+                    palette,
+                    t!("authForm.usernameProvidedByAccount"),
+                    "connection-username-override",
+                    t!("authForm.useConnectionUsername"),
+                    cx.listener(|this, _, _, cx| this.use_connection_editor_username(cx)),
+                )),
+        );
+    } else if account_username.is_some()
+        && editor.username_source == ConnectionUsernameSource::Connection
+    {
+        body = body.child(username_source_row(
             palette,
-            if editor.kind == ConnectionKindTab::Ssh {
-                required(t!("dialog.username"))
-            } else {
-                t!("credentialManager.usernameOptionalLabel").into()
-            },
-            ConnectionEditorField::Username,
-            fields,
-            cx,
+            t!("authForm.usernameForConnection"),
+            "connection-username-restore",
+            t!("authForm.restoreAccountUsername"),
+            cx.listener(|this, _, _, cx| this.follow_connection_editor_account_username(cx)),
         ));
-        if editor.account_source_saved && fields.account.is_some() {
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(t!("authForm.accountUsernameEmpty")),
-            );
-        }
+    } else if fields.account.is_some() && account_username.is_none() {
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("authForm.accountUsernameFallbackDescription")),
+        );
     }
     body
+}
+
+fn account_password_prompt(fields: &ConnectionEditorFields, has_password: bool) -> String {
+    let Some(account) = fields.account.as_ref() else {
+        return t!("passwordManager.missingAccount").to_string();
+    };
+    if has_password && fields.account_password_locked {
+        return t!("authForm.passwordLocked").to_string();
+    }
+    let name = account.name.clone();
+    if has_password {
+        t!("authForm.accountPasswordDescription", name = name).to_string()
+    } else {
+        t!("authForm.accountPasswordMissingDescription", name = name).to_string()
+    }
+}
+
+fn username_source_row(
+    palette: crate::theme::ThemePalette,
+    hint: impl Into<gpui::SharedString>,
+    id: &'static str,
+    label: impl Into<gpui::SharedString>,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(hint.into()),
+        )
+        .child(
+            NyaButton::new(id, label)
+                .variant(NyaButtonVariant::Ghost)
+                .small()
+                .on_click(on_click),
+        )
 }
 
 pub(super) fn password_source(
@@ -154,27 +195,50 @@ pub(super) fn password_source(
         .account
         .as_ref()
         .is_some_and(|entry| entry.has_password);
-    let tabs = NyaTabs::new("connection-password-source-tabs")
-        .items([
-            NyaTabItem::new(t!("dialog.askWhenConnecting")),
-            NyaTabItem::new(t!("authForm.connectionPassword")),
+    let account_linked = uses_identity && editor.account_id.is_some();
+    let mut items = vec![
+        if account_linked {
             NyaTabItem::new(t!("authForm.useAccountPassword"))
-                .disabled(uses_identity && !account_available),
-        ])
-        .selected_index(match editor.password_source {
+        } else {
+            NyaTabItem::new(t!("dialog.askWhenConnecting"))
+        },
+        NyaTabItem::new(t!("authForm.connectionPassword")),
+    ];
+    if !uses_identity {
+        items.push(NyaTabItem::new(t!("authForm.useAccountPassword")));
+    }
+    let selected_index = if uses_identity {
+        match editor.password_source {
+            ConnectionEditorPasswordSource::Direct => Some(1),
+            ConnectionEditorPasswordSource::Saved => Some(0),
+            ConnectionEditorPasswordSource::Ask if account_available => None,
+            ConnectionEditorPasswordSource::Ask => Some(0),
+        }
+    } else {
+        Some(match editor.password_source {
             ConnectionEditorPasswordSource::Ask => 0,
             ConnectionEditorPasswordSource::Direct => 1,
             ConnectionEditorPasswordSource::Saved => 2,
         })
-        .on_select(cx.listener(|this, index, _, cx| {
-            this.set_connection_editor_password_source(
+    };
+    let tabs = NyaTabs::new("connection-password-source-tabs")
+        .items(items)
+        .selected_index_if_visible(selected_index)
+        .on_select(cx.listener(move |this, index, _, cx| {
+            let source = if uses_identity {
+                match index {
+                    0 if account_available => ConnectionEditorPasswordSource::Saved,
+                    0 => ConnectionEditorPasswordSource::Ask,
+                    _ => ConnectionEditorPasswordSource::Direct,
+                }
+            } else {
                 match index {
                     0 => ConnectionEditorPasswordSource::Ask,
                     1 => ConnectionEditorPasswordSource::Direct,
                     _ => ConnectionEditorPasswordSource::Saved,
-                },
-                cx,
-            )
+                }
+            };
+            this.set_connection_editor_password_source(source, cx);
         }));
     let mut body = div()
         .debug_selector(|| "connection-password-controls".to_string())
@@ -183,21 +247,20 @@ pub(super) fn password_source(
         .gap_2()
         .child(div().text_xs().child(t!("dialog.passwordSource")))
         .child(tabs);
-    if uses_identity && !account_available {
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(rgb(palette.text_muted))
-                .child(t!("authForm.accountPasswordUnavailable")),
-        );
-    }
     match editor.password_source {
         ConnectionEditorPasswordSource::Ask => {
+            let message = if account_linked && !account_available {
+                account_password_prompt(fields, false)
+            } else if editor.password_source_demoted {
+                t!("authForm.passwordSourceAdjusted").to_string()
+            } else {
+                t!("dialog.askPasswordDescription").to_string()
+            };
             body = body.child(
                 div()
                     .text_xs()
                     .text_color(rgb(palette.text_muted))
-                    .child(t!("dialog.askPasswordDescription")),
+                    .child(message),
             )
         }
         ConnectionEditorPasswordSource::Saved => {
@@ -242,14 +305,16 @@ pub(super) fn password_source(
                             .child(t!("authForm.passwordOnlyReference")),
                     );
             }
-            let status = if fields.account.is_none() {
-                t!("passwordManager.missingAccount")
+            let status = if uses_identity {
+                account_password_prompt(fields, account_available)
+            } else if fields.account.is_none() {
+                t!("passwordManager.missingAccount").to_string()
             } else if !account_available {
-                t!("authForm.passwordNotSaved")
+                t!("authForm.passwordNotSaved").to_string()
             } else if fields.account_password_locked {
-                t!("authForm.passwordLocked")
+                t!("authForm.passwordLocked").to_string()
             } else {
-                t!("authForm.passwordSaved")
+                t!("authForm.passwordSaved").to_string()
             };
             body = body.child(div().text_xs().child(status));
         }

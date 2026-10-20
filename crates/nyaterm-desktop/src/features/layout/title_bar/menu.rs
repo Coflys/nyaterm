@@ -74,35 +74,35 @@ impl NyaTermApp {
                     _ => {}
                 }
             }
-        if let crate::models::WorkspaceTabId::Editor(id) = tab {
-            match command {
-                TitleMenuCommand::TerminalCopy
-                | TitleMenuCommand::TerminalPaste
-                | TitleMenuCommand::TerminalFind
-                | TitleMenuCommand::TerminalSelectAll => {
-                    if let Some(view) = self.transfer.workspace_editor_view(&id) {
-                        view.update(cx, |view, cx| {
-                            view.execute_edit_command(command, window, cx)
-                        });
+            if let crate::models::WorkspaceTabId::Editor(id) = tab {
+                match command {
+                    TitleMenuCommand::TerminalCopy
+                    | TitleMenuCommand::TerminalPaste
+                    | TitleMenuCommand::TerminalFind
+                    | TitleMenuCommand::TerminalSelectAll => {
+                        if let Some(view) = self.transfer.workspace_editor_view(&id) {
+                            view.update(cx, |view, cx| {
+                                view.execute_edit_command(command, window, cx)
+                            });
+                        }
+                        return;
                     }
-                    return;
+                    TitleMenuCommand::TerminalClear | TitleMenuCommand::ToggleBroadcast => return,
+                    TitleMenuCommand::ZoomIn => {
+                        self.adjust_transfer_internal_editor_font_size(1, cx);
+                        return;
+                    }
+                    TitleMenuCommand::ZoomOut => {
+                        self.adjust_transfer_internal_editor_font_size(-1, cx);
+                        return;
+                    }
+                    TitleMenuCommand::ResetZoom => {
+                        self.reset_transfer_internal_editor_font_size(cx);
+                        return;
+                    }
+                    _ => {}
                 }
-                TitleMenuCommand::TerminalClear | TitleMenuCommand::ToggleBroadcast => return,
-                TitleMenuCommand::ZoomIn => {
-                    self.adjust_transfer_internal_editor_font_size(1, cx);
-                    return;
-                }
-                TitleMenuCommand::ZoomOut => {
-                    self.adjust_transfer_internal_editor_font_size(-1, cx);
-                    return;
-                }
-                TitleMenuCommand::ResetZoom => {
-                    self.reset_transfer_internal_editor_font_size(cx);
-                    return;
-                }
-                _ => {}
             }
-        }
         }
         match command {
             TitleMenuCommand::OpenFileManager => {
