@@ -1911,14 +1911,6 @@ pub(super) async fn ssh_io_loop(
         stats_sampler.clear_session(&session_id).await;
     }
 
-    if let Some(ref conn_id) = connection_id {
-        if let Some(tunnel_mgr) = app.try_state::<Arc<super::TunnelManager>>() {
-            tunnel_mgr
-                .close_auto_tunnels_for_connection(&app, conn_id)
-                .await;
-        }
-    }
-
     tracing::info!(
         session_id = %session_id,
         close_reason,
@@ -1999,7 +1991,7 @@ pub(super) async fn sftp_only_ssh_lifecycle_loop(
     _handle: SshHandle,
     cmd_rx: SessionCommandReceiver,
     disconnect_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
-    connection_id: Option<String>,
+    _connection_id: Option<String>,
 ) {
     tracing::info!(session_id = %session_id, "SFTP-only SSH lifecycle loop started");
     let close_reason =
@@ -2007,14 +1999,6 @@ pub(super) async fn sftp_only_ssh_lifecycle_loop(
 
     if let Some(stats_sampler) = app.try_state::<Arc<RemoteStatsSampler>>() {
         stats_sampler.clear_session(&session_id).await;
-    }
-
-    if let Some(ref conn_id) = connection_id {
-        if let Some(tunnel_mgr) = app.try_state::<Arc<super::TunnelManager>>() {
-            tunnel_mgr
-                .close_auto_tunnels_for_connection(&app, conn_id)
-                .await;
-        }
     }
 
     tracing::info!(

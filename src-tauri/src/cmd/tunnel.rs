@@ -2,6 +2,7 @@ use crate::config;
 use crate::core::ssh::{TunnelManager, TunnelRuntimeState};
 use crate::error::{AppError, AppResult};
 use std::sync::Arc;
+use tauri::Emitter;
 
 fn schedule_cloud_sync_notify(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -34,8 +35,8 @@ pub async fn save_tunnel(
     tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     tunnel: config::TunnelConfig,
 ) -> AppResult<()> {
+    let _control = tunnel_mgr.control.lock().await;
     let should_reopen = tunnel.is_open;
-    tunnel_mgr.close(&app, &tunnel.id).await;
 
     let mut tunnels = config::load_tunnels(&app)?;
     if let Some(existing) = tunnels.iter_mut().find(|t| t.id == tunnel.id) {
@@ -46,6 +47,7 @@ pub async fn save_tunnel(
     config::save_tunnels(&app, &tunnels)?;
     schedule_cloud_sync_notify(app.clone());
 
+    tunnel_mgr.close_for_update(&app, &tunnel.id).await;
     if should_reopen {
         let saved = tunnels
             .iter()
@@ -57,10 +59,12 @@ pub async fn save_tunnel(
 }
 
 #[tauri::command]
-pub fn save_tunnel_group(
+pub async fn save_tunnel_group(
     app: tauri::AppHandle,
+    tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     mut group: config::TunnelGroup,
 ) -> AppResult<String> {
+    let _control = tunnel_mgr.control.lock().await;
     let mut groups = config::load_tunnel_groups(&app)?;
 
     if group.id.is_empty() {
@@ -79,11 +83,13 @@ pub fn save_tunnel_group(
 }
 
 #[tauri::command]
-pub fn set_tunnel_group(
+pub async fn set_tunnel_group(
     app: tauri::AppHandle,
+    tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     tunnel_id: String,
     group_id: Option<String>,
 ) -> AppResult<()> {
+    let _control = tunnel_mgr.control.lock().await;
     let mut tunnels = config::load_tunnels(&app)?;
     if let Some(tunnel) = tunnels.iter_mut().find(|tunnel| tunnel.id == tunnel_id) {
         tunnel.group_id = group_id;
@@ -99,6 +105,7 @@ pub async fn delete_tunnel(
     tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     tunnel_id: String,
 ) -> AppResult<()> {
+    let _control = tunnel_mgr.control.lock().await;
     tunnel_mgr.delete_runtime_state(&app, &tunnel_id).await;
     let mut tunnels = config::load_tunnels(&app)?;
     tunnels.retain(|t| t.id != tunnel_id);
@@ -113,6 +120,7 @@ pub async fn delete_tunnel_group(
     tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     group_id: String,
 ) -> AppResult<()> {
+    let _control = tunnel_mgr.control.lock().await;
     let mut groups = config::load_tunnel_groups(&app)?;
     groups.retain(|group| group.id != group_id);
     config::save_tunnel_groups(&app, &groups)?;
@@ -136,6 +144,7 @@ pub async fn open_tunnel(
     tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     tunnel_id: String,
 ) -> AppResult<()> {
+    let _control = tunnel_mgr.control.lock().await;
     let mut tunnels = config::load_tunnels(&app)?;
     let tunnel = tunnels
         .iter_mut()
@@ -158,38 +167,27 @@ pub async fn close_tunnel(
     tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
     tunnel_id: String,
 ) -> AppResult<()> {
+    let _control = tunnel_mgr.control.lock().await;
+    tunnel_mgr.close(&app, &tunnel_id).await;
     let mut tunnels = config::load_tunnels(&app)?;
     if let Some(tunnel) = tunnels.iter_mut().find(|t| t.id == tunnel_id) {
         tunnel.is_open = false;
     }
     config::save_tunnels(&app, &tunnels)?;
     schedule_cloud_sync_notify(app.clone());
-    tunnel_mgr.close(&app, &tunnel_id).await;
+    let _ = app.emit("tunnel-saved", ());
+    Ok(())
+}
+
+// Compatibility endpoints: independent tunnel supervisors own their status.
+#[tauri::command]
+pub async fn mark_tunnels_reconnecting_for_connection(connection_id: String) -> AppResult<()> {
+    let _ = connection_id;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn mark_tunnels_reconnecting_for_connection(
-    app: tauri::AppHandle,
-    tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
-    connection_id: String,
-) -> AppResult<()> {
-    let tunnels = config::load_tunnels(&app)?;
-    tunnel_mgr
-        .mark_connection_reconnecting(&app, &tunnels, &connection_id)
-        .await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mark_tunnels_disconnected_for_connection(
-    app: tauri::AppHandle,
-    tunnel_mgr: tauri::State<'_, Arc<TunnelManager>>,
-    connection_id: String,
-) -> AppResult<()> {
-    let tunnels = config::load_tunnels(&app)?;
-    tunnel_mgr
-        .mark_connection_disconnected(&app, &tunnels, &connection_id)
-        .await;
+pub async fn mark_tunnels_disconnected_for_connection(connection_id: String) -> AppResult<()> {
+    let _ = connection_id;
     Ok(())
 }

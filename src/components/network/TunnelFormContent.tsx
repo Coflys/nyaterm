@@ -30,21 +30,21 @@ function getBindHost(bindLocalhost: boolean) {
 }
 
 export function createTunnelDraft(tunnel?: TunnelConfig | null): TunnelConfig {
-  return (
-    tunnel ?? {
-      id: "",
-      name: "",
-      tunnel_type: "local",
-      connection_id: undefined,
-      listen_port: 0,
-      target_host: "127.0.0.1",
-      target_port: 0,
-      is_open: false,
-      auto_open: false,
-      bind_localhost: true,
-      group_id: undefined,
-    }
-  );
+  if (tunnel) return { ...tunnel, auto_reconnect: tunnel.auto_reconnect ?? true };
+  return {
+    id: "",
+    name: "",
+    tunnel_type: "local",
+    connection_id: undefined,
+    listen_port: 0,
+    target_host: "127.0.0.1",
+    target_port: 0,
+    is_open: false,
+    auto_open: false,
+    auto_reconnect: true,
+    bind_localhost: true,
+    group_id: undefined,
+  };
 }
 
 function getTunnelFieldCopy(
@@ -408,6 +408,24 @@ export function TunnelFormContent({
             <Switch
               checked={form.auto_open}
               onCheckedChange={(checked) => updateForm({ auto_open: checked })}
+            />
+          </label>
+
+          <label
+            className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+            style={{ borderColor: "var(--df-border)" }}
+          >
+            <div>
+              <div className="text-sm font-medium" style={{ color: "var(--df-text)" }}>
+                {t("network.autoReconnect")}
+              </div>
+              <p className="text-xs" style={{ color: "var(--df-text-dimmed)" }}>
+                {t("network.autoReconnectHint")}
+              </p>
+            </div>
+            <Switch
+              checked={form.auto_reconnect}
+              onCheckedChange={(checked) => updateForm({ auto_reconnect: checked })}
             />
           </label>
 

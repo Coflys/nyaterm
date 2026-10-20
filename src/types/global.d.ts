@@ -1875,6 +1875,7 @@ export interface TunnelConfig {
   target_port: number;
   is_open: boolean;
   auto_open: boolean;
+  auto_reconnect: boolean;
   bind_localhost: boolean;
   group_id?: string;
 }
@@ -1888,6 +1889,9 @@ export type TunnelRuntimeStatus =
   | "error";
 
 export interface TunnelRuntimeState {
+  revision?: number;
+  retryAttempt: number;
+  nextRetryAt?: number | null;
   tunnelId: string;
   status: TunnelRuntimeStatus;
   error?: string | null;

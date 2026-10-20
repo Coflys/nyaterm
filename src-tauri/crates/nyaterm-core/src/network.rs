@@ -113,7 +113,20 @@ pub async fn open_proxy_transport(
                     .await
                 }
             }
-            .map_err(|error| AppError::Auth(format!("SOCKS5 proxy connection failed: {error}")))?
+            .map_err(|error| match error {
+                tokio_socks::Error::Io(error) => AppError::Io(error),
+                tokio_socks::Error::ProxyServerUnreachable
+                | tokio_socks::Error::HostUnreachable => {
+                    AppError::Io(std::io::Error::from(std::io::ErrorKind::HostUnreachable))
+                }
+                tokio_socks::Error::NetworkUnreachable => {
+                    AppError::Io(std::io::Error::from(std::io::ErrorKind::NetworkUnreachable))
+                }
+                tokio_socks::Error::ConnectionRefused => {
+                    AppError::Io(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+                }
+                error => AppError::Auth(format!("SOCKS5 proxy connection failed: {error}")),
+            })?
             .into_inner();
             let local_addr = stream.local_addr().ok();
             Ok(OpenedTransport {
@@ -122,12 +135,9 @@ pub async fn open_proxy_transport(
             })
         }
         "http" => {
-            let mut stream =
-                tokio::net::TcpStream::connect(&proxy_addr)
-                    .await
-                    .map_err(|error| {
-                        AppError::Channel(format!("HTTP proxy connection failed: {error}"))
-                    })?;
+            let mut stream = tokio::net::TcpStream::connect(&proxy_addr)
+                .await
+                .map_err(AppError::Io)?;
             match (&proxy.username, &proxy.password) {
                 (Some(user), Some(pass)) => {
                     async_http_proxy::http_connect_tokio_with_basic_auth(
@@ -144,7 +154,10 @@ pub async fn open_proxy_transport(
                         .await
                 }
             }
-            .map_err(|error| AppError::Auth(format!("HTTP proxy tunnel failed: {error}")))?;
+            .map_err(|error| match error {
+                async_http_proxy::HttpError::IoError(error) => AppError::Io(error),
+                error => AppError::Auth(format!("HTTP proxy tunnel failed: {error}")),
+            })?;
             let local_addr = stream.local_addr().ok();
             Ok(OpenedTransport {
                 stream: Box::new(stream),

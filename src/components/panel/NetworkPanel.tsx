@@ -1,3 +1,4 @@
+import { mergeTunnelRuntimeStates } from "@/lib/tunnelRuntime";
 import { runtime } from "@/lib/backend/runtime";
 import { randomUUID } from "@/lib/uuid";
 import { listen } from "@/lib/backend/api";
@@ -231,7 +232,7 @@ function ProxyRow({
   );
 }
 
-function TunnelRow({
+export function TunnelRow({
   tunnel,
   runtimeState,
   groups,
@@ -299,6 +300,11 @@ function TunnelRow({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {tunnel.is_open && (runtimeState?.status === "error" || runtimeState?.status === "disconnected") ? (
+            <DropdownMenuItem onClick={() => onToggle(tunnel.id, true)}>
+              {t("network.retryTunnel")}
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem onClick={() => onEdit(tunnel)}>
             <MdEdit className="mr-2 text-base" />
             {t("common.edit")}
@@ -327,7 +333,7 @@ function getTunnelRuntimeStatus(enabled: boolean, state?: TunnelRuntimeState): T
   return enabled ? "disconnected" : "stopped";
 }
 
-function TunnelRuntimeBadge({
+export function TunnelRuntimeBadge({
   state,
   enabled,
 }: {
@@ -341,7 +347,7 @@ function TunnelRuntimeBadge({
       stopped: t("network.tunnelStatusStopped"),
       starting: t("network.tunnelStatusStarting"),
       running: t("network.tunnelStatusRunning"),
-      reconnecting: t("network.tunnelStatusReconnecting"),
+      reconnecting: t("network.tunnelStatusReconnectingAttempt", { count: state?.retryAttempt ?? 0 }),
       disconnected: t("network.tunnelStatusDisconnected"),
       error: t("network.tunnelStatusError"),
     }[status] ?? status;
@@ -365,12 +371,17 @@ function TunnelRuntimeBadge({
     </span>
   );
 
-  if (status !== "error" || !state?.error) return badge;
+  if (!state?.error && !state?.nextRetryAt) return badge;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent className="max-w-72 break-words">{state.error}</TooltipContent>
+      <TooltipContent className="max-w-72 break-words">
+        {state.error ? <div>{state.error}</div> : null}
+        {state.nextRetryAt ? (
+          <div>{t("network.tunnelNextRetry", { time: new Date(state.nextRetryAt).toLocaleTimeString() })}</div>
+        ) : null}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -676,7 +687,7 @@ export default function NetworkPanel() {
     if (runtime === "web") return;
     try {
       const next = await invoke<TunnelRuntimeState[]>("get_tunnel_runtime_states");
-      setTunnelRuntimeStates(Object.fromEntries(next.map((state) => [state.tunnelId, state])));
+      setTunnelRuntimeStates((prev) => mergeTunnelRuntimeStates(prev, next));
     } catch (error) {
       toast.error(String(error));
     }
@@ -697,10 +708,10 @@ export default function NetworkPanel() {
     const unlistenRuntimePromise = listen<TunnelRuntimeState>(
       "tunnel-runtime-state-changed",
       (event) => {
-        setTunnelRuntimeStates((prev) => ({
-          ...prev,
-          [event.payload.tunnelId]: event.payload,
-        }));
+        if (event.payload.status === "starting" || event.payload.status === "stopped") {
+          void loadTunnels();
+        }
+        setTunnelRuntimeStates((prev) => mergeTunnelRuntimeStates(prev, [event.payload]));
       },
     );
     const unlistenProxySavedPromise = listen("proxy-saved", () => {

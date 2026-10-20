@@ -1,18 +1,24 @@
-//! SSH tunnel manager for local, remote, and dynamic (SOCKS5) port forwarding.
+//! Independent SSH tunnel supervisors for local, remote and SOCKS forwarding.
 
-use super::{RemoteForwardOpen, SshHandle, SshRawHandle, create_ssh_handle_for_tunnel};
+use super::RemoteForwardOpen;
+use super::client::TunnelDisconnect;
+use super::session::{TunnelConnections, create_ssh_handle_for_tunnel};
 use crate::config::{self, TunnelConfig};
 use crate::error::{AppError, AppResult};
-use crate::observability::{StructuredLog, StructuredLogLevel, log_event, log_rate_limited};
+use crate::observability::{StructuredLog, StructuredLogLevel, log_rate_limited};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::sync::{Mutex, mpsc};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -30,86 +36,68 @@ pub enum TunnelRuntimeStatus {
 pub struct TunnelRuntimeState {
     pub tunnel_id: String,
     pub status: TunnelRuntimeStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
+    pub revision: u64,
+    pub retry_attempt: u32,
+    pub next_retry_at: Option<i64>,
 }
 
 struct TunnelRuntimeEntry {
     generation: u64,
-    status: TunnelRuntimeStatus,
-    error: Option<String>,
-    updated_at: Option<i64>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    task_handle: Option<JoinHandle<()>>,
-    ssh_handle: Option<SshHandle>,
-    connection_id: Option<String>,
+    state: TunnelRuntimeState,
+    cancel: CancellationToken,
+    task: Option<JoinHandle<()>>,
 }
 
 impl TunnelRuntimeEntry {
-    fn new(connection_id: Option<String>) -> Self {
-        Self {
-            generation: 0,
-            status: TunnelRuntimeStatus::Stopped,
-            error: None,
-            updated_at: None,
-            shutdown_tx: None,
-            task_handle: None,
-            ssh_handle: None,
-            connection_id,
-        }
-    }
-
-    fn state(&self, tunnel_id: &str) -> TunnelRuntimeState {
-        TunnelRuntimeState {
-            tunnel_id: tunnel_id.to_string(),
-            status: self.status,
-            error: self.error.clone(),
-            updated_at: self.updated_at,
-        }
-    }
-
     fn has_live_task(&self) -> bool {
-        self.shutdown_tx.is_some()
+        !self.cancel.is_cancelled()
             && matches!(
-                self.status,
+                self.state.status,
                 TunnelRuntimeStatus::Starting
                     | TunnelRuntimeStatus::Running
                     | TunnelRuntimeStatus::Reconnecting
             )
+            && self.task.as_ref().is_some_and(|task| !task.is_finished())
     }
 }
 
-enum TunnelTaskExit {
-    Stopped,
-    Disconnected(String),
-    Error(String),
+#[derive(Default)]
+struct Runtime {
+    entries: HashMap<String, TunnelRuntimeEntry>,
+    suppressed_auto_open: HashSet<String>,
 }
 
+impl Runtime {
+    fn apply(&mut self, generation: u64, state: TunnelRuntimeState) -> Option<&TunnelRuntimeState> {
+        let entry = self.entries.get_mut(&state.tunnel_id)?;
+        if entry.generation != generation {
+            return None;
+        }
+        entry.state = state;
+        Some(&entry.state)
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct TunnelManager {
-    runtime: Arc<Mutex<HashMap<String, TunnelRuntimeEntry>>>,
+    runtime: Arc<Mutex<Runtime>>,
+    generation: Arc<AtomicU64>,
+    // Serialize config read/modify/write and activation, never network I/O.
+    pub(crate) control: Arc<Mutex<()>>,
 }
 
 impl TunnelManager {
     pub fn new() -> Self {
-        Self {
-            runtime: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    pub async fn is_open(&self, tunnel_id: &str) -> bool {
-        self.runtime
-            .lock()
-            .await
-            .get(tunnel_id)
-            .is_some_and(TunnelRuntimeEntry::has_live_task)
+        Self::default()
     }
 
     pub async fn active_count(&self) -> usize {
         self.runtime
             .lock()
             .await
+            .entries
             .values()
             .filter(|entry| entry.has_live_task())
             .count()
@@ -120,561 +108,325 @@ impl TunnelManager {
         tunnels
             .iter()
             .map(|tunnel| {
-                runtime.get(&tunnel.id).map_or_else(
-                    || TunnelRuntimeState {
-                        tunnel_id: tunnel.id.clone(),
-                        status: if tunnel.is_open {
-                            TunnelRuntimeStatus::Disconnected
-                        } else {
-                            TunnelRuntimeStatus::Stopped
-                        },
-                        error: None,
-                        updated_at: None,
+                runtime.entries.get(&tunnel.id).map_or_else(
+                    || {
+                        empty_state(
+                            &tunnel.id,
+                            if tunnel.is_open {
+                                TunnelRuntimeStatus::Disconnected
+                            } else {
+                                TunnelRuntimeStatus::Stopped
+                            },
+                        )
                     },
-                    |entry| entry.state(&tunnel.id),
+                    |entry| entry.state.clone(),
                 )
             })
             .collect()
     }
 
     pub async fn open(&self, tunnel: &TunnelConfig, app: &AppHandle) -> AppResult<()> {
-        if self.is_open(&tunnel.id).await {
-            return Ok(());
+        self.ensure_running(tunnel, app, true).await;
+        Ok(())
+    }
+
+    async fn ensure_running(&self, tunnel: &TunnelConfig, app: &AppHandle, manual: bool) {
+        let manager = self.clone();
+        let task_app = app.clone();
+        let config = tunnel.clone();
+        self.ensure_task(
+            &tunnel.id,
+            manual,
+            move |generation, cancel, previous| {
+                tokio::spawn(async move {
+                    if let Some(previous) = previous {
+                        let _ = previous.await;
+                    }
+                    manager
+                        .supervise(&task_app, &config, generation, cancel, manual)
+                        .await;
+                })
+            },
+            |state| emit_runtime_state(app, state),
+        )
+        .await;
+    }
+
+    async fn ensure_task<F, E>(&self, id: &str, manual: bool, spawn: F, emit: E)
+    where
+        F: FnOnce(u64, CancellationToken, Option<JoinHandle<()>>) -> JoinHandle<()>,
+        E: FnOnce(&TunnelRuntimeState),
+    {
+        let mut runtime = self.runtime.lock().await;
+        if manual {
+            runtime.suppressed_auto_open.remove(id);
+        } else if runtime.suppressed_auto_open.contains(id)
+            || runtime
+                .entries
+                .get(id)
+                .is_some_and(|entry| entry.state.status == TunnelRuntimeStatus::Error)
+        {
+            return;
         }
+        if runtime
+            .entries
+            .get(id)
+            .is_some_and(TunnelRuntimeEntry::has_live_task)
+        {
+            return;
+        }
+        let previous = runtime.entries.get_mut(id).and_then(|entry| {
+            entry.cancel.cancel();
+            entry.task.take()
+        });
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let cancel = CancellationToken::new();
+        let mut state = empty_state(id, TunnelRuntimeStatus::Starting);
+        state.revision = generation;
+        let task = spawn(generation, cancel.clone(), previous);
+        emit(&state);
+        runtime.entries.insert(
+            id.to_string(),
+            TunnelRuntimeEntry {
+                generation,
+                state,
+                cancel,
+                task: Some(task),
+            },
+        );
+    }
 
-        let generation = self
-            .begin_starting(app, &tunnel.id, tunnel.connection_id.clone())
+    /// Request stop immediately. Retain the join handle as a resource-release barrier
+    /// for a subsequent open, including delete/recreate of the same ID.
+    pub async fn close(&self, app: &AppHandle, tunnel_id: &str) {
+        self.stop(tunnel_id, true, |state| emit_runtime_state(app, state))
             .await;
+    }
 
+    pub async fn close_for_update(&self, app: &AppHandle, tunnel_id: &str) {
+        self.stop(tunnel_id, false, |state| emit_runtime_state(app, state))
+            .await;
+    }
+
+    async fn stop<E: FnOnce(&TunnelRuntimeState)>(
+        &self,
+        tunnel_id: &str,
+        suppress_auto_open: bool,
+        emit: E,
+    ) {
+        let mut runtime = self.runtime.lock().await;
+        if suppress_auto_open {
+            runtime.suppressed_auto_open.insert(tunnel_id.to_string());
+        }
+        if let Some(entry) = runtime.entries.get_mut(tunnel_id) {
+            entry.cancel.cancel();
+            entry.generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            entry.state = empty_state(tunnel_id, TunnelRuntimeStatus::Stopped);
+            entry.state.revision = entry.generation;
+            emit(&entry.state);
+        } else {
+            let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            let mut state = empty_state(tunnel_id, TunnelRuntimeStatus::Stopped);
+            state.revision = generation;
+            emit(&state);
+            runtime.entries.insert(
+                tunnel_id.to_string(),
+                TunnelRuntimeEntry {
+                    generation,
+                    state,
+                    cancel: CancellationToken::new(),
+                    task: None,
+                },
+            );
+        }
+    }
+
+    pub async fn delete_runtime_state(&self, app: &AppHandle, tunnel_id: &str) {
+        // Keep a tombstone until cleanup completes so ID reuse cannot race a listener.
+        self.close(app, tunnel_id).await;
+    }
+
+    async fn publish(&self, app: &AppHandle, generation: u64, mut state: TunnelRuntimeState) {
+        let mut runtime = self.runtime.lock().await;
+        state.revision = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(state) = runtime.apply(generation, state) {
+            emit_runtime_state(app, state);
+        }
+    }
+
+    async fn supervise(
+        &self,
+        app: &AppHandle,
+        tunnel: &TunnelConfig,
+        generation: u64,
+        cancel: CancellationToken,
+        interactive: bool,
+    ) {
+        drive_supervisor(
+            &tunnel.id,
+            tunnel.auto_reconnect,
+            cancel.clone(),
+            interactive,
+            |interactive| {
+                self.execute_attempt(app, tunnel, generation, interactive, cancel.clone())
+            },
+            |state| self.publish(app, generation, state),
+        )
+        .await;
+    }
+
+    async fn execute_attempt(
+        &self,
+        app: &AppHandle,
+        tunnel: &TunnelConfig,
+        generation: u64,
+        interactive: bool,
+        cancel: CancellationToken,
+    ) -> AppResult<TunnelTaskExit> {
+        let connections = TunnelConnections::default();
+        let mut children = JoinSet::new();
+        let attempt_cancel = CancellationToken::new();
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Ok(TunnelTaskExit::Stopped),
+            result = self.run_attempt(app, tunnel, generation, interactive, &connections, &mut children, attempt_cancel.clone()) => result,
+        };
+        children.abort_all();
+        while children.join_next().await.is_some() {}
+        connections.close(tunnel, Some(&attempt_cancel)).await;
+        result
+    }
+
+    async fn run_attempt(
+        &self,
+        app: &AppHandle,
+        tunnel: &TunnelConfig,
+        generation: u64,
+        interactive: bool,
+        connections: &TunnelConnections,
+        children: &mut JoinSet<()>,
+        cancel: CancellationToken,
+    ) -> AppResult<TunnelTaskExit> {
         let connection_id = tunnel
             .connection_id
             .as_deref()
-            .ok_or_else(|| AppError::Channel("Tunnel has no connection_id".to_string()))?;
-        let (disconnect_tx, disconnect_rx) = mpsc::unbounded_channel::<String>();
-        let (remote_forward_tx, remote_forward_rx) = if tunnel.tunnel_type == "remote" {
-            let (tx, rx) = mpsc::unbounded_channel::<RemoteForwardOpen>();
-            (Some(tx), Some(rx))
-        } else {
-            (None, None)
-        };
-
-        let ssh_handle = match create_ssh_handle_for_tunnel(
+            .ok_or_else(|| AppError::Config("Tunnel has no connection_id".into()))?;
+        if !matches!(tunnel.tunnel_type.as_str(), "local" | "remote" | "dynamic") {
+            return Err(AppError::Config(format!(
+                "Unknown tunnel type: {}",
+                tunnel.tunnel_type
+            )));
+        }
+        let (disconnect_tx, disconnect_rx) = mpsc::unbounded_channel();
+        let (remote_tx, remote_rx) = mpsc::unbounded_channel();
+        let handle = create_ssh_handle_for_tunnel(
             app,
             connection_id,
             disconnect_tx,
-            remote_forward_tx,
+            (tunnel.tunnel_type == "remote").then_some(remote_tx),
+            interactive,
+            connections,
+            cancel.clone(),
         )
-        .await
-        {
-            Ok(handle) => handle,
-            Err(error) => {
-                self.set_generation_status(
-                    app,
-                    &tunnel.id,
-                    generation,
-                    TunnelRuntimeStatus::Error,
-                    Some(user_facing_tunnel_error(&error)),
-                    true,
-                )
-                .await;
-                return Err(error);
-            }
-        };
-        let target_handle = ssh_handle.target_handle();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let bind_addr = if tunnel.bind_localhost {
+        .await?;
+        let target = handle.target_handle();
+        let bind = if tunnel.bind_localhost {
             "127.0.0.1"
         } else {
             "0.0.0.0"
         };
-
-        let task =
-            match tunnel.tunnel_type.as_str() {
-                "local" => {
-                    let listener =
-                        match TcpListener::bind(format!("{}:{}", bind_addr, tunnel.listen_port))
-                            .await
-                        {
-                            Ok(listener) => listener,
-                            Err(error) => {
-                                let message = format!(
-                                    "Failed to bind local port {}: {}",
-                                    tunnel.listen_port, error
-                                );
-                                self.set_generation_status(
-                                    app,
-                                    &tunnel.id,
-                                    generation,
-                                    TunnelRuntimeStatus::Error,
-                                    Some(message.clone()),
-                                    true,
-                                )
-                                .await;
-                                return Err(AppError::Channel(message));
-                            }
-                        };
-                    let target_host = tunnel.target_host.clone();
-                    let target_port = tunnel.target_port;
-                    spawn_tunnel_task(
-                        self.clone(),
-                        app.clone(),
-                        tunnel.id.clone(),
-                        generation,
-                        async move {
-                            Self::run_local_tunnel(
-                                listener,
-                                target_handle,
-                                target_host,
-                                target_port,
-                                shutdown_rx,
-                                disconnect_rx,
-                            )
-                            .await
-                        },
-                    )
-                }
-                "remote" => {
-                    {
-                        let handle = target_handle.lock().await;
-                        if let Err(error) = handle
-                            .tcpip_forward(bind_addr.to_string(), tunnel.listen_port.into())
-                            .await
-                        {
-                            let message = format!(
-                                "Remote port forwarding was rejected for {}:{}: {}",
-                                bind_addr, tunnel.listen_port, error
-                            );
-                            self.set_generation_status(
-                                app,
-                                &tunnel.id,
-                                generation,
-                                TunnelRuntimeStatus::Error,
-                                Some(message.clone()),
-                                true,
-                            )
-                            .await;
-                            return Err(AppError::Channel(message));
-                        }
-                    }
-                    log_event(StructuredLog {
-                        level: StructuredLogLevel::Info,
-                        domain: "session.lifecycle".to_string(),
-                        event: "tunnel.forward_requested".to_string(),
-                        message: "Remote tunnel forwarding requested".to_string(),
-                        ids: Some(serde_json::json!({ "tunnel_id": tunnel.id.clone() })),
-                        data: Some(serde_json::json!({
-                            "listen_addr": bind_addr,
-                            "listen_port": tunnel.listen_port,
-                        })),
-                        error: None,
-                        client_timestamp: None,
-                    });
-                    let target_host = tunnel.target_host.clone();
-                    let target_port = tunnel.target_port;
-                    let listen_addr = bind_addr.to_string();
-                    let listen_port = tunnel.listen_port;
-                    spawn_tunnel_task(
-                        self.clone(),
-                        app.clone(),
-                        tunnel.id.clone(),
-                        generation,
-                        async move {
-                            Self::run_remote_tunnel(
-                                target_handle,
-                                listen_addr,
-                                listen_port,
-                                target_host,
-                                target_port,
-                                shutdown_rx,
-                                disconnect_rx,
-                                remote_forward_rx.expect("remote receiver"),
-                            )
-                            .await
-                        },
-                    )
-                }
-                "dynamic" => {
-                    let listener =
-                        match TcpListener::bind(format!("{}:{}", bind_addr, tunnel.listen_port))
-                            .await
-                        {
-                            Ok(listener) => listener,
-                            Err(error) => {
-                                let message = format!(
-                                    "Failed to bind SOCKS5 port {}: {}",
-                                    tunnel.listen_port, error
-                                );
-                                self.set_generation_status(
-                                    app,
-                                    &tunnel.id,
-                                    generation,
-                                    TunnelRuntimeStatus::Error,
-                                    Some(message.clone()),
-                                    true,
-                                )
-                                .await;
-                                return Err(AppError::Channel(message));
-                            }
-                        };
-                    spawn_tunnel_task(
-                        self.clone(),
-                        app.clone(),
-                        tunnel.id.clone(),
-                        generation,
-                        async move {
-                            Self::run_dynamic_tunnel(
-                                listener,
-                                target_handle,
-                                shutdown_rx,
-                                disconnect_rx,
-                            )
-                            .await
-                        },
-                    )
-                }
-                other => {
-                    let message = format!("Unknown tunnel type: {}", other);
-                    self.set_generation_status(
-                        app,
-                        &tunnel.id,
-                        generation,
-                        TunnelRuntimeStatus::Error,
-                        Some(message.clone()),
-                        true,
-                    )
-                    .await;
-                    return Err(AppError::Channel(message));
-                }
-            };
-
-        self.install_task(
-            app,
-            &tunnel.id,
-            generation,
-            shutdown_tx,
-            ssh_handle,
-            task,
-            tunnel.connection_id.clone(),
-        )
-        .await;
-
-        log_event(StructuredLog {
-            level: StructuredLogLevel::Info,
-            domain: "session.lifecycle".to_string(),
-            event: "tunnel.opened".to_string(),
-            message: "Tunnel opened".to_string(),
-            ids: Some(serde_json::json!({
-                "tunnel_id": tunnel.id.clone(),
-                "connection_id": tunnel.connection_id.clone(),
-            })),
-            data: Some(serde_json::json!({
-                "tunnel_type": tunnel.tunnel_type.clone(),
-                "listen_port": tunnel.listen_port,
-                "target_host": tunnel.target_host.clone(),
-                "target_port": tunnel.target_port,
-                "bind_localhost": tunnel.bind_localhost,
-            })),
-            error: None,
-            client_timestamp: None,
-        });
-        Ok(())
-    }
-
-    pub async fn close(&self, app: &AppHandle, tunnel_id: &str) {
-        let (state, shutdown_tx) = {
-            let mut runtime = self.runtime.lock().await;
-            let entry = runtime
-                .entry(tunnel_id.to_string())
-                .or_insert_with(|| TunnelRuntimeEntry::new(None));
-            entry.generation = entry.generation.saturating_add(1);
-            let shutdown_tx = entry.shutdown_tx.take();
-            entry.task_handle = None;
-            entry.ssh_handle = None;
-            entry.status = TunnelRuntimeStatus::Stopped;
-            entry.error = None;
-            entry.updated_at = Some(now_ms());
-            (entry.state(tunnel_id), shutdown_tx)
-        };
-        if let Some(tx) = shutdown_tx {
-            let _ = tx.send(());
-        }
-        emit_runtime_state(app, &state);
-        log_event(StructuredLog {
-            level: StructuredLogLevel::Info,
-            domain: "session.lifecycle".to_string(),
-            event: "tunnel.closed".to_string(),
-            message: "Tunnel closed".to_string(),
-            ids: Some(serde_json::json!({ "tunnel_id": tunnel_id })),
-            data: None,
-            error: None,
-            client_timestamp: None,
-        });
-    }
-
-    pub async fn delete_runtime_state(&self, app: &AppHandle, tunnel_id: &str) {
-        let (shutdown_tx, state) = {
-            let mut runtime = self.runtime.lock().await;
-            let shutdown_tx = runtime
-                .remove(tunnel_id)
-                .and_then(|mut entry| entry.shutdown_tx.take());
-            (
-                shutdown_tx,
-                TunnelRuntimeState {
-                    tunnel_id: tunnel_id.to_string(),
-                    status: TunnelRuntimeStatus::Stopped,
-                    error: None,
-                    updated_at: Some(now_ms()),
-                },
+        let listener = if tunnel.tunnel_type == "remote" {
+            let result = target
+                .lock()
+                .await
+                .tcpip_forward(bind, tunnel.listen_port.into())
+                .await;
+            result.map_err(|error| match error {
+                russh::Error::RequestDenied => AppError::Channel(format!(
+                    "Remote port forwarding rejected for {bind}:{}",
+                    tunnel.listen_port
+                )),
+                error => AppError::Ssh(error),
+            })?;
+            None
+        } else {
+            Some(
+                TcpListener::bind((bind, tunnel.listen_port))
+                    .await
+                    .map_err(|error| {
+                        AppError::Channel(format!(
+                            "Failed to bind local port {}: {error}",
+                            tunnel.listen_port
+                        ))
+                    })?,
             )
         };
-        if let Some(tx) = shutdown_tx {
-            let _ = tx.send(());
-        }
-        emit_runtime_state(app, &state);
-    }
-
-    pub async fn mark_connection_reconnecting(
-        &self,
-        app: &AppHandle,
-        tunnels: &[TunnelConfig],
-        connection_id: &str,
-    ) {
-        self.mark_enabled_tunnels_for_connection(
+        self.publish(
             app,
-            tunnels,
-            connection_id,
-            TunnelRuntimeStatus::Reconnecting,
-            None,
-            false,
+            generation,
+            empty_state(&tunnel.id, TunnelRuntimeStatus::Running),
         )
         .await;
-    }
-
-    pub async fn mark_connection_disconnected(
-        &self,
-        app: &AppHandle,
-        tunnels: &[TunnelConfig],
-        connection_id: &str,
-    ) {
-        self.mark_enabled_tunnels_for_connection(
-            app,
-            tunnels,
-            connection_id,
-            TunnelRuntimeStatus::Disconnected,
-            Some("SSH session disconnected".to_string()),
-            true,
-        )
-        .await;
-    }
-
-    async fn begin_starting(
-        &self,
-        app: &AppHandle,
-        tunnel_id: &str,
-        connection_id: Option<String>,
-    ) -> u64 {
-        let (state, shutdown_tx, generation) = {
-            let mut runtime = self.runtime.lock().await;
-            let entry = runtime
-                .entry(tunnel_id.to_string())
-                .or_insert_with(|| TunnelRuntimeEntry::new(connection_id.clone()));
-            entry.generation = entry.generation.saturating_add(1);
-            entry.connection_id = connection_id;
-            let shutdown_tx = entry.shutdown_tx.take();
-            entry.task_handle = None;
-            entry.ssh_handle = None;
-            entry.status = TunnelRuntimeStatus::Starting;
-            entry.error = None;
-            entry.updated_at = Some(now_ms());
-            (entry.state(tunnel_id), shutdown_tx, entry.generation)
-        };
-        if let Some(tx) = shutdown_tx {
-            let _ = tx.send(());
-        }
-        emit_runtime_state(app, &state);
-        generation
-    }
-
-    async fn install_task(
-        &self,
-        app: &AppHandle,
-        tunnel_id: &str,
-        generation: u64,
-        shutdown_tx: oneshot::Sender<()>,
-        ssh_handle: SshHandle,
-        task_handle: JoinHandle<()>,
-        connection_id: Option<String>,
-    ) {
-        let mut shutdown_tx = Some(shutdown_tx);
-        let mut task_handle = Some(task_handle);
-        let mut ssh_handle = Some(ssh_handle);
-        let state = {
-            let mut runtime = self.runtime.lock().await;
-            runtime.get_mut(tunnel_id).and_then(|entry| {
-                if entry.generation == generation && entry.status == TunnelRuntimeStatus::Starting {
-                    entry.status = TunnelRuntimeStatus::Running;
-                    entry.error = None;
-                    entry.updated_at = Some(now_ms());
-                    entry.shutdown_tx = shutdown_tx.take();
-                    entry.task_handle = task_handle.take();
-                    entry.ssh_handle = ssh_handle.take();
-                    entry.connection_id = connection_id;
-                    Some(entry.state(tunnel_id))
-                } else {
-                    None
-                }
-            })
-        };
-        if let Some(tx) = shutdown_tx {
-            let _ = tx.send(());
-        }
-        if let Some(state) = state {
-            emit_runtime_state(app, &state);
-        }
-    }
-
-    async fn finish_task(
-        &self,
-        app: &AppHandle,
-        tunnel_id: &str,
-        generation: u64,
-        exit: TunnelTaskExit,
-    ) {
-        let state = {
-            let mut runtime = self.runtime.lock().await;
-            let Some(entry) = runtime.get_mut(tunnel_id) else {
-                return;
-            };
-            if entry.generation != generation {
-                return;
+        Ok(match tunnel.tunnel_type.as_str() {
+            "local" => {
+                Self::run_local_tunnel(
+                    listener.expect("local listener"),
+                    target,
+                    tunnel.target_host.clone(),
+                    tunnel.target_port,
+                    cancel,
+                    children,
+                    disconnect_rx,
+                )
+                .await
             }
-
-            entry.shutdown_tx = None;
-            entry.task_handle = None;
-            entry.ssh_handle = None;
-            match exit {
-                TunnelTaskExit::Stopped => {
-                    if entry.status == TunnelRuntimeStatus::Stopped {
-                        return;
-                    }
-                    entry.status = TunnelRuntimeStatus::Stopped;
-                    entry.error = None;
-                }
-                TunnelTaskExit::Disconnected(message) => {
-                    if entry.status == TunnelRuntimeStatus::Reconnecting {
-                        return;
-                    }
-                    entry.status = TunnelRuntimeStatus::Disconnected;
-                    entry.error = Some(message);
-                }
-                TunnelTaskExit::Error(message) => {
-                    entry.status = TunnelRuntimeStatus::Error;
-                    entry.error = Some(message);
-                }
+            "dynamic" => {
+                Self::run_dynamic_tunnel(
+                    listener.expect("SOCKS listener"),
+                    target,
+                    cancel,
+                    children,
+                    disconnect_rx,
+                )
+                .await
             }
-            entry.updated_at = Some(now_ms());
-            entry.state(tunnel_id)
-        };
-        emit_runtime_state(app, &state);
+            _ => {
+                Self::run_remote_tunnel(
+                    tunnel.target_host.clone(),
+                    tunnel.target_port,
+                    cancel,
+                    children,
+                    disconnect_rx,
+                    remote_rx,
+                )
+                .await
+            }
+        })
     }
 
-    async fn set_generation_status(
-        &self,
-        app: &AppHandle,
-        tunnel_id: &str,
-        generation: u64,
-        status: TunnelRuntimeStatus,
-        error: Option<String>,
-        clear_handles: bool,
-    ) {
-        let state = {
-            let mut runtime = self.runtime.lock().await;
-            let Some(entry) = runtime.get_mut(tunnel_id) else {
-                return;
-            };
-            if entry.generation != generation {
-                return;
-            }
-            if clear_handles {
-                entry.shutdown_tx = None;
-                entry.task_handle = None;
-                entry.ssh_handle = None;
-            }
-            entry.status = status;
-            entry.error = error;
-            entry.updated_at = Some(now_ms());
-            entry.state(tunnel_id)
-        };
-        emit_runtime_state(app, &state);
-    }
-
-    async fn mark_enabled_tunnels_for_connection(
-        &self,
-        app: &AppHandle,
-        tunnels: &[TunnelConfig],
-        connection_id: &str,
-        status: TunnelRuntimeStatus,
-        error: Option<String>,
-        stop_task: bool,
-    ) {
-        let mut states = Vec::new();
-        let mut shutdowns = Vec::new();
-        {
-            let mut runtime = self.runtime.lock().await;
-            for tunnel in tunnels.iter().filter(|tunnel| {
-                tunnel.is_open && tunnel.connection_id.as_deref() == Some(connection_id)
-            }) {
-                let entry = runtime
-                    .entry(tunnel.id.clone())
-                    .or_insert_with(|| TunnelRuntimeEntry::new(tunnel.connection_id.clone()));
-                if entry.status == TunnelRuntimeStatus::Reconnecting
-                    && status == TunnelRuntimeStatus::Disconnected
-                {
-                    continue;
-                }
-                if stop_task {
-                    entry.generation = entry.generation.saturating_add(1);
-                    if let Some(tx) = entry.shutdown_tx.take() {
-                        shutdowns.push(tx);
-                    }
-                    entry.task_handle = None;
-                    entry.ssh_handle = None;
-                }
-                entry.status = status;
-                entry.error = error.clone();
-                entry.updated_at = Some(now_ms());
-                states.push(entry.state(&tunnel.id));
-            }
-        }
-        for tx in shutdowns {
-            let _ = tx.send(());
-        }
-        for state in states {
-            emit_runtime_state(app, &state);
-        }
-    }
-
-    async fn run_local_tunnel(
+    async fn run_local_tunnel<H: russh::client::Handler + Send + 'static>(
         listener: TcpListener,
-        ssh_handle: SshRawHandle,
+        ssh_handle: Arc<Mutex<russh::client::Handle<H>>>,
         target_host: String,
         target_port: u16,
-        mut shutdown_rx: oneshot::Receiver<()>,
-        mut disconnect_rx: mpsc::UnboundedReceiver<String>,
+        cancel: CancellationToken,
+        children: &mut JoinSet<()>,
+        mut disconnect_rx: mpsc::UnboundedReceiver<TunnelDisconnect>,
     ) -> TunnelTaskExit {
         loop {
             tokio::select! {
-                _ = &mut shutdown_rx => return TunnelTaskExit::Stopped,
+                biased;
+                () = cancel.cancelled() => return TunnelTaskExit::Stopped,
                 message = disconnect_rx.recv() => {
-                    return TunnelTaskExit::Disconnected(message.unwrap_or_else(|| "SSH connection disconnected".to_string()));
+                    return TunnelTaskExit::Disconnected(message.unwrap_or_else(|| TunnelDisconnect { message: "SSH connection disconnected".into(), retryable: true }));
                 }
+                _ = children.join_next(), if !children.is_empty() => {},
                 accept = listener.accept() => {
                     match accept {
                         Ok((mut local_stream, peer_addr)) => {
                             let handle_mtx = ssh_handle.clone();
                             let host = target_host.clone();
-                            tokio::spawn(async move {
+                            children.spawn(async move {
                                 let channel = {
                                     let handle = handle_mtx.lock().await;
                                     match handle.channel_open_direct_tcpip(
@@ -727,31 +479,29 @@ impl TunnelManager {
     }
 
     async fn run_remote_tunnel(
-        ssh_handle: SshRawHandle,
-        listen_addr: String,
-        listen_port: u16,
         target_host: String,
         target_port: u16,
-        mut shutdown_rx: oneshot::Receiver<()>,
-        mut disconnect_rx: mpsc::UnboundedReceiver<String>,
+        cancel: CancellationToken,
+        children: &mut JoinSet<()>,
+        mut disconnect_rx: mpsc::UnboundedReceiver<TunnelDisconnect>,
         mut remote_forward_rx: mpsc::UnboundedReceiver<RemoteForwardOpen>,
     ) -> TunnelTaskExit {
         loop {
             tokio::select! {
-                _ = &mut shutdown_rx => {
-                    let handle = ssh_handle.lock().await;
-                    let _ = handle.cancel_tcpip_forward(&listen_addr, listen_port.into()).await;
+                biased;
+                () = cancel.cancelled() => {
                     return TunnelTaskExit::Stopped;
                 }
                 message = disconnect_rx.recv() => {
-                    return TunnelTaskExit::Disconnected(message.unwrap_or_else(|| "SSH connection disconnected".to_string()));
+                    return TunnelTaskExit::Disconnected(message.unwrap_or_else(|| TunnelDisconnect { message: "SSH connection disconnected".into(), retryable: true }));
                 }
+                _ = children.join_next(), if !children.is_empty() => {},
                 open = remote_forward_rx.recv() => {
                     let Some(open) = open else {
-                        return TunnelTaskExit::Disconnected("Remote forwarding channel closed".to_string());
+                        return TunnelTaskExit::Disconnected(TunnelDisconnect { message: "Remote forwarding channel closed".into(), retryable: true });
                     };
                     let host = target_host.clone();
-                    tokio::spawn(async move {
+                    children.spawn(async move {
                         Self::handle_remote_forward_connection(open, host, target_port).await;
                     });
                 }
@@ -792,23 +542,26 @@ impl TunnelManager {
         }
     }
 
-    async fn run_dynamic_tunnel(
+    async fn run_dynamic_tunnel<H: russh::client::Handler + Send + 'static>(
         listener: TcpListener,
-        ssh_handle: SshRawHandle,
-        mut shutdown_rx: oneshot::Receiver<()>,
-        mut disconnect_rx: mpsc::UnboundedReceiver<String>,
+        ssh_handle: Arc<Mutex<russh::client::Handle<H>>>,
+        cancel: CancellationToken,
+        children: &mut JoinSet<()>,
+        mut disconnect_rx: mpsc::UnboundedReceiver<TunnelDisconnect>,
     ) -> TunnelTaskExit {
         loop {
             tokio::select! {
-                _ = &mut shutdown_rx => return TunnelTaskExit::Stopped,
+                biased;
+                () = cancel.cancelled() => return TunnelTaskExit::Stopped,
                 message = disconnect_rx.recv() => {
-                    return TunnelTaskExit::Disconnected(message.unwrap_or_else(|| "SSH connection disconnected".to_string()));
+                    return TunnelTaskExit::Disconnected(message.unwrap_or_else(|| TunnelDisconnect { message: "SSH connection disconnected".into(), retryable: true }));
                 }
+                _ = children.join_next(), if !children.is_empty() => {},
                 accept = listener.accept() => {
                     match accept {
                         Ok((stream, peer_addr)) => {
                             let handle = ssh_handle.clone();
-                            tokio::spawn(Self::handle_socks5_connection(stream, handle, peer_addr));
+                            children.spawn(Self::handle_socks5_connection(stream, handle, peer_addr));
                         }
                         Err(error) => {
                             let message = format!("SOCKS5 accept failed: {error}");
@@ -830,9 +583,9 @@ impl TunnelManager {
         }
     }
 
-    async fn handle_socks5_connection(
+    async fn handle_socks5_connection<H: russh::client::Handler + Send + 'static>(
         mut stream: tokio::net::TcpStream,
-        ssh_handle: SshRawHandle,
+        ssh_handle: Arc<Mutex<russh::client::Handle<H>>>,
         peer_addr: std::net::SocketAddr,
     ) {
         let mut buf = [0u8; 2];
@@ -947,86 +700,176 @@ impl TunnelManager {
         let _ = tokio::io::copy_bidirectional(&mut stream, &mut ssh_stream).await;
     }
 
-    /// Auto-open tunnels for a connection that just connected.
     pub async fn auto_open_for_connection(&self, app: &AppHandle, connection_id: &str) {
-        let mut tunnels = match config::load_tunnels(app) {
-            Ok(t) => t,
-            Err(_) => return,
+        let _control = self.control.lock().await;
+        let Ok(mut tunnels) = config::load_tunnels(app) else {
+            return;
         };
-
         let mut changed = false;
         for tunnel in &mut tunnels {
-            if (tunnel.auto_open || tunnel.is_open)
-                && tunnel.connection_id.as_deref() == Some(connection_id)
+            if tunnel.connection_id.as_deref() != Some(connection_id)
+                || !(tunnel.auto_open || tunnel.is_open)
             {
-                tunnel.is_open = true;
-                changed = true;
-                if let Err(e) = self.open(tunnel, app).await {
-                    log_event(StructuredLog {
-                        level: StructuredLogLevel::Warn,
-                        domain: "session.lifecycle".to_string(),
-                        event: "tunnel.auto_open_failed".to_string(),
-                        message: "Failed to auto-open tunnel".to_string(),
-                        ids: Some(serde_json::json!({
-                            "tunnel_id": tunnel.id.clone(),
-                            "connection_id": connection_id,
-                        })),
-                        data: Some(serde_json::json!({
-                            "tunnel_type": tunnel.tunnel_type.clone(),
-                        })),
-                        error: Some(serde_json::json!({ "message": e.to_string() })),
-                        client_timestamp: None,
-                    });
+                continue;
+            }
+            {
+                let runtime = self.runtime.lock().await;
+                if runtime.suppressed_auto_open.contains(&tunnel.id)
+                    || runtime
+                        .entries
+                        .get(&tunnel.id)
+                        .is_some_and(|entry| entry.state.status == TunnelRuntimeStatus::Error)
+                {
+                    continue;
                 }
             }
+            if !tunnel.is_open {
+                tunnel.is_open = true;
+                changed = true;
+            }
         }
-        if changed {
-            let _ = config::save_tunnels(app, &tunnels);
+        // Persist before scheduling, so a concurrent close cannot be overwritten later.
+        if changed && config::save_tunnels(app, &tunnels).is_err() {
+            return;
         }
-    }
-
-    /// Mark associated enabled tunnels as disconnected after an SSH session closes.
-    pub async fn close_auto_tunnels_for_connection(&self, app: &AppHandle, connection_id: &str) {
-        let tunnels = match config::load_tunnels(app) {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-
-        self.mark_connection_disconnected(app, &tunnels, connection_id)
-            .await;
-    }
-}
-
-impl Clone for TunnelManager {
-    fn clone(&self) -> Self {
-        Self {
-            runtime: self.runtime.clone(),
+        for tunnel in tunnels
+            .iter()
+            .filter(|t| t.is_open && t.connection_id.as_deref() == Some(connection_id))
+        {
+            self.ensure_running(tunnel, app, false).await;
         }
     }
 }
 
-fn spawn_tunnel_task<F>(
-    manager: TunnelManager,
-    app: AppHandle,
-    tunnel_id: String,
-    generation: u64,
-    future: F,
-) -> JoinHandle<()>
-where
-    F: std::future::Future<Output = TunnelTaskExit> + Send + 'static,
+enum TunnelTaskExit {
+    Stopped,
+    Disconnected(TunnelDisconnect),
+    Error(String),
+}
+
+/// The retry driver is independent of transport and UI, allowing deterministic
+/// outage/cancellation tests while each attempt owns its complete cleanup.
+async fn drive_supervisor<F, Fut, U, UFut>(
+    id: &str,
+    auto_reconnect: bool,
+    cancel: CancellationToken,
+    mut interactive: bool,
+    mut run: F,
+    mut publish: U,
+) where
+    F: FnMut(bool) -> Fut,
+    Fut: std::future::Future<Output = AppResult<TunnelTaskExit>>,
+    U: FnMut(TunnelRuntimeState) -> UFut,
+    UFut: std::future::Future<Output = ()>,
 {
-    tokio::spawn(async move {
-        let exit = future.await;
-        manager
-            .finish_task(&app, &tunnel_id, generation, exit)
-            .await;
-    })
+    let mut attempt = 0u32;
+    loop {
+        if cancel.is_cancelled() {
+            return;
+        }
+        let result = run(interactive).await;
+        if cancel.is_cancelled() {
+            return;
+        }
+        interactive = false;
+        let (error, retryable, was_running) = match result {
+            Ok(TunnelTaskExit::Stopped) => return,
+            Ok(TunnelTaskExit::Disconnected(error)) => (error.message, error.retryable, true),
+            Ok(TunnelTaskExit::Error(message)) => (message, false, true),
+            Err(error) => (error.to_string(), is_retryable(&error), false),
+        };
+        if !retryable || !auto_reconnect {
+            let mut state = empty_state(
+                id,
+                if retryable && was_running {
+                    TunnelRuntimeStatus::Disconnected
+                } else {
+                    TunnelRuntimeStatus::Error
+                },
+            );
+            state.error = Some(error);
+            publish(state).await;
+            return;
+        }
+        if was_running {
+            attempt = 0;
+        }
+        attempt = attempt.saturating_add(1);
+        let delay = retry_delay(attempt);
+        let mut state = empty_state(id, TunnelRuntimeStatus::Reconnecting);
+        state.error = Some(error);
+        state.retry_attempt = attempt;
+        state.next_retry_at = Some(now_ms() + delay.as_millis() as i64);
+        publish(state.clone()).await;
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            () = tokio::time::sleep(delay) => {}
+        }
+        state.next_retry_at = None;
+        state.updated_at = Some(now_ms());
+        publish(state).await;
+    }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs((1u64 << attempt.saturating_sub(1).min(5)).min(30))
+}
+
+fn is_retryable(error: &AppError) -> bool {
+    match error {
+        AppError::Io(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NetworkUnreachable
+                | std::io::ErrorKind::HostUnreachable
+        ),
+        AppError::Ssh(error) => is_retryable_ssh(error),
+        _ => false,
+    }
+}
+
+pub(super) fn is_retryable_ssh(error: &russh::Error) -> bool {
+    match error {
+        russh::Error::IO(error) => is_retryable_io(error),
+        russh::Error::Disconnect
+        | russh::Error::SendError
+        | russh::Error::HUP
+        | russh::Error::ConnectionTimeout
+        | russh::Error::KeepaliveTimeout
+        | russh::Error::InactivityTimeout
+        | russh::Error::Elapsed(_) => true,
+        _ => false,
+    }
+}
+
+fn is_retryable_io(error: &std::io::Error) -> bool {
+    // Preserve the IO kind without relying on platform-specific error messages.
+    is_retryable(&AppError::Io(std::io::Error::from(error.kind())))
+}
+
+fn empty_state(id: &str, status: TunnelRuntimeStatus) -> TunnelRuntimeState {
+    TunnelRuntimeState {
+        tunnel_id: id.to_string(),
+        status,
+        error: None,
+        updated_at: Some(now_ms()),
+        revision: 0,
+        retry_attempt: 0,
+        next_retry_at: None,
+    }
 }
 
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or_default()
 }
 
@@ -1034,66 +877,303 @@ fn emit_runtime_state(app: &AppHandle, state: &TunnelRuntimeState) {
     let _ = app.emit("tunnel-runtime-state-changed", state);
 }
 
-fn user_facing_tunnel_error(error: &AppError) -> String {
-    error.to_string()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::VecDeque, future::ready, sync::atomic::AtomicUsize};
+    use tokio::time::Instant;
+
+    fn offline() -> AppResult<TunnelTaskExit> {
+        Err(AppError::Io(std::io::ErrorKind::ConnectionRefused.into()))
+    }
+
+    fn disconnected() -> AppResult<TunnelTaskExit> {
+        Ok(TunnelTaskExit::Disconnected(TunnelDisconnect {
+            message: "offline".into(),
+            retryable: true,
+        }))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_supervisor_retries_initial_failure_indefinitely_with_capped_backoff() {
+        let mut calls = Vec::new();
+        let mut states = Vec::new();
+        drive_supervisor(
+            "t",
+            true,
+            CancellationToken::new(),
+            true,
+            |interactive| {
+                calls.push((Instant::now(), interactive));
+                ready(if calls.len() <= 9 {
+                    offline()
+                } else {
+                    Ok(TunnelTaskExit::Stopped)
+                })
+            },
+            |state| {
+                states.push(state);
+                ready(())
+            },
+        )
+        .await;
+        assert_eq!(calls.len(), 10);
+        assert!(calls[0].1);
+        assert!(calls.iter().skip(1).all(|call| !call.1));
+        let delays: Vec<_> = calls
+            .windows(2)
+            .map(|pair| (pair[1].0 - pair[0].0).as_secs())
+            .collect();
+        assert_eq!(delays, [1, 2, 4, 8, 16, 30, 30, 30, 30]);
+        assert_eq!(states.len(), 18);
+        for (index, pair) in states.chunks_exact(2).enumerate() {
+            assert_eq!(pair[0].status, TunnelRuntimeStatus::Reconnecting);
+            assert_eq!(pair[0].retry_attempt, index as u32 + 1);
+            assert!(pair[0].next_retry_at.is_some());
+            assert!(pair[1].next_retry_at.is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_supervisor_resets_backoff_after_a_running_connection() {
+        let mut results = VecDeque::from([
+            offline(),
+            offline(),
+            disconnected(),
+            offline(),
+            Ok(TunnelTaskExit::Stopped),
+        ]);
+        let mut attempts = Vec::new();
+        drive_supervisor(
+            "t",
+            true,
+            CancellationToken::new(),
+            false,
+            |_| ready(results.pop_front().unwrap()),
+            |state| {
+                if state.next_retry_at.is_some() {
+                    attempts.push(state.retry_attempt);
+                }
+                ready(())
+            },
+        )
+        .await;
+        assert_eq!(attempts, [1, 2, 1, 2]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_supervisor_stops_on_permanent_errors_and_when_reconnect_is_disabled() {
+        for (enabled, result, expected) in [
+            (
+                true,
+                Err(AppError::Auth("rejected".into())),
+                TunnelRuntimeStatus::Error,
+            ),
+            (
+                true,
+                Err(AppError::Ssh(russh::Error::UnknownKey)),
+                TunnelRuntimeStatus::Error,
+            ),
+            (
+                true,
+                Err(AppError::Channel("bind failed".into())),
+                TunnelRuntimeStatus::Error,
+            ),
+            (false, disconnected(), TunnelRuntimeStatus::Disconnected),
+            (false, offline(), TunnelRuntimeStatus::Error),
+        ] {
+            let mut result = Some(result);
+            let mut states = Vec::new();
+            drive_supervisor(
+                "t",
+                enabled,
+                CancellationToken::new(),
+                false,
+                |_| ready(result.take().expect("must not retry")),
+                |state| {
+                    states.push(state);
+                    ready(())
+                },
+            )
+            .await;
+            assert_eq!(states.len(), 1);
+            assert_eq!(states[0].status, expected);
+            assert_eq!(states[0].retry_attempt, 0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_supervisor_cancel_during_backoff_prevents_another_attempt() {
+        let cancel = CancellationToken::new();
+        let mut calls = 0;
+        let mut states = Vec::new();
+        drive_supervisor(
+            "t",
+            true,
+            cancel.clone(),
+            false,
+            |_| {
+                calls += 1;
+                ready(offline())
+            },
+            |state| {
+                states.push(state);
+                cancel.cancel();
+                ready(())
+            },
+        )
+        .await;
+        assert_eq!(calls, 1);
+        assert_eq!(states.len(), 1);
+    }
+
+    async fn start_fake(manager: &TunnelManager, manual: bool, starts: Arc<AtomicUsize>) {
+        manager
+            .ensure_task(
+                "t",
+                manual,
+                move |_, cancel, previous| {
+                    tokio::spawn(async move {
+                        if let Some(previous) = previous {
+                            let _ = previous.await;
+                        }
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        cancel.cancelled().await;
+                        // Model asynchronous listener/connection cleanup.
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    })
+                },
+                |_| {},
+            )
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_concurrent_starts_are_idempotent_and_manual_stop_suppresses_auto_open() {
+        let manager = TunnelManager::new();
+        let starts = Arc::new(AtomicUsize::new(0));
+        tokio::join!(
+            start_fake(&manager, true, starts.clone()),
+            start_fake(&manager, false, starts.clone()),
+            start_fake(&manager, true, starts.clone())
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.active_count().await, 1);
+        manager.stop("t", true, |_| {}).await;
+        start_fake(&manager, false, starts.clone()).await;
+        assert_eq!(manager.active_count().await, 0);
+        start_fake(&manager, true, starts.clone()).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            1,
+            "new connection must wait for old cleanup"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(starts.load(Ordering::SeqCst), 2);
+        manager.stop("t", true, |_| {}).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_stale_generation_cannot_overwrite_stop_or_recreated_tunnel() {
+        let manager = TunnelManager::new();
+        let starts = Arc::new(AtomicUsize::new(0));
+        start_fake(&manager, true, starts.clone()).await;
+        let old_generation = manager.runtime.lock().await.entries["t"].generation;
+        manager.stop("t", true, |_| {}).await;
+        assert!(
+            manager
+                .runtime
+                .lock()
+                .await
+                .apply(
+                    old_generation,
+                    empty_state("t", TunnelRuntimeStatus::Running)
+                )
+                .is_none()
+        );
+        start_fake(&manager, true, starts).await;
+        let mut runtime = manager.runtime.lock().await;
+        assert!(runtime.entries["t"].generation > old_generation);
+        assert!(
+            runtime
+                .apply(old_generation, empty_state("t", TunnelRuntimeStatus::Error))
+                .is_none()
+        );
+        runtime.entries["t"].cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn tunnel_auto_open_does_not_restart_error_but_manual_retry_does() {
+        let manager = TunnelManager::new();
+        manager.stop("t", true, |_| {}).await;
+        {
+            let mut runtime = manager.runtime.lock().await;
+            runtime.suppressed_auto_open.clear();
+            runtime.entries.get_mut("t").unwrap().state.status = TunnelRuntimeStatus::Error;
+        }
+        let starts = Arc::new(AtomicUsize::new(0));
+        start_fake(&manager, false, starts.clone()).await;
+        assert_eq!(manager.active_count().await, 0);
+        start_fake(&manager, true, starts).await;
+        assert_eq!(manager.active_count().await, 1);
+        manager.stop("t", true, |_| {}).await;
+    }
+
+    #[tokio::test]
+    async fn tunnel_config_save_does_not_suppress_new_auto_open_or_clear_manual_suppression() {
+        let manager = TunnelManager::new();
+        let starts = Arc::new(AtomicUsize::new(0));
+        manager.stop("t", false, |_| {}).await;
+        start_fake(&manager, false, starts.clone()).await;
+        assert_eq!(manager.active_count().await, 1);
+        manager.stop("t", true, |_| {}).await;
+        manager.stop("t", false, |_| {}).await;
+        start_fake(&manager, false, starts).await;
+        assert_eq!(manager.active_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn tunnel_stopping_one_supervisor_does_not_stop_another() {
+        let manager = TunnelManager::new();
+        start_fake(&manager, true, Arc::new(AtomicUsize::new(0))).await;
+        manager
+            .ensure_task(
+                "other",
+                false,
+                |_, cancel, _| {
+                    tokio::spawn(async move {
+                        cancel.cancelled().await;
+                    })
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(manager.active_count().await, 2);
+        manager.stop("t", true, |_| {}).await;
+        assert_eq!(manager.active_count().await, 1);
+        manager.stop("other", true, |_| {}).await;
+    }
+
+    #[test]
+    fn tunnel_error_classification_preserves_security_and_configuration_failures() {
+        assert!(is_retryable(&AppError::Ssh(russh::Error::KeepaliveTimeout)));
+        assert!(is_retryable(&AppError::Ssh(russh::Error::IO(
+            std::io::ErrorKind::ConnectionReset.into()
+        ))));
+        for error in [
+            AppError::Ssh(russh::Error::UnknownKey),
+            AppError::Ssh(russh::Error::RequestDenied),
+            AppError::Auth("timeout".into()),
+            AppError::Config("invalid".into()),
+            AppError::Io(std::io::ErrorKind::AddrInUse.into()),
+        ] {
+            assert!(!is_retryable(&error));
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{TunnelRuntimeEntry, TunnelRuntimeStatus};
-
-    #[test]
-    fn stopped_starting_running_transition_is_representable() {
-        let mut entry = TunnelRuntimeEntry::new(Some("conn".to_string()));
-        entry.status = TunnelRuntimeStatus::Stopped;
-        entry.generation += 1;
-        entry.status = TunnelRuntimeStatus::Starting;
-        entry.status = TunnelRuntimeStatus::Running;
-
-        assert_eq!(entry.status, TunnelRuntimeStatus::Running);
-        assert_eq!(entry.generation, 1);
-    }
-
-    #[test]
-    fn starting_error_preserves_message() {
-        let mut entry = TunnelRuntimeEntry::new(None);
-        entry.status = TunnelRuntimeStatus::Starting;
-        entry.status = TunnelRuntimeStatus::Error;
-        entry.error = Some("bind failed".to_string());
-
-        assert_eq!(entry.status, TunnelRuntimeStatus::Error);
-        assert_eq!(entry.error.as_deref(), Some("bind failed"));
-    }
-
-    #[test]
-    fn disconnected_reconnecting_running_transition_is_representable() {
-        let mut entry = TunnelRuntimeEntry::new(None);
-        entry.status = TunnelRuntimeStatus::Running;
-        entry.status = TunnelRuntimeStatus::Disconnected;
-        entry.status = TunnelRuntimeStatus::Reconnecting;
-        entry.status = TunnelRuntimeStatus::Running;
-
-        assert_eq!(entry.status, TunnelRuntimeStatus::Running);
-    }
-
-    #[test]
-    fn running_stopped_clears_error() {
-        let mut entry = TunnelRuntimeEntry::new(None);
-        entry.status = TunnelRuntimeStatus::Running;
-        entry.error = Some("old".to_string());
-        entry.status = TunnelRuntimeStatus::Stopped;
-        entry.error = None;
-
-        assert_eq!(entry.status, TunnelRuntimeStatus::Stopped);
-        assert!(entry.error.is_none());
-    }
-
-    #[test]
-    fn stale_generation_cannot_match_new_generation() {
-        let mut entry = TunnelRuntimeEntry::new(None);
-        entry.generation = 2;
-        let stale_generation = 1;
-
-        assert_ne!(entry.generation, stale_generation);
-    }
-}
+mod forwarding_tests;
