@@ -65,8 +65,10 @@ impl RenderOnce for NyaTabCloseButton {
             .read(cx)
             .is_focused(window);
         let close_group = SharedString::from(format!("{}-hover", self.id));
+        let debug_id = self.id.clone();
         let palette = self.palette;
         Button::new(self.id)
+            .debug_selector(move || debug_id.to_string())
             .ghost()
             .size(px(20.))
             .p_0()

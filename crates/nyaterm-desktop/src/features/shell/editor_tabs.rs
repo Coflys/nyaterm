@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use nyaterm_transport::RemoteTextGeneration;
 use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
 
-use gpui::{Context, Window, div, prelude::*};
+use gpui::{AppContext as _, Context, Window, div, prelude::*};
 use nyaterm_core::InternalEditorDisplay;
 use nyaterm_ui::{NyaButton, NyaDialogWindowExt};
 use rust_i18n::t;
@@ -307,7 +307,9 @@ impl NyaTermApp {
             let handle = self.shell.main_window();
             if let Some(handle) = handle {
                 cx.defer(move |cx| {
-                    let _ = handle.update(cx, |_, window, cx| {
+                    // Opening a dialog reads the component root. Do not lease
+                    // that root through the typed WindowHandle::update here.
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
                         app.update(cx, |app, cx| {
                             app.open_workspace_editor_close_dialog(id, window, cx)
                         });
@@ -346,7 +348,7 @@ impl NyaTermApp {
             let app = cx.entity();
             if let Some(handle) = self.shell.main_window() {
                 cx.defer(move |cx| {
-                    let _ = handle.update(cx, |_, window, cx| {
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
                         app.update(cx, |app, cx| {
                             app.handle_window_close_request_with_count(0, window, cx)
                         });
@@ -599,14 +601,103 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use gpui::TestAppContext;
+    use gpui::{
+        Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window, div, prelude::*,
+    };
     use nyaterm_core::{InternalEditorDisplay, test_support::TestTempDir};
     use nyaterm_transport::RemoteTextWriteResult;
+    use nyaterm_ui::NyaDialogWindowExt as _;
 
+    use crate::features::NyaTermApp;
     use crate::features::test_support::{
         app_with_visible_local_session, editor_document as document,
     };
     use crate::models::{SmartSplitMode, TabDockEdge, TabDockZone, WorkspaceTabId};
+
+    struct EditorCloseHost {
+        app: Entity<NyaTermApp>,
+        display: InternalEditorDisplay,
+    }
+
+    impl Render for EditorCloseHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .child(self.app.update(cx, |app, cx| match self.display {
+                    InternalEditorDisplay::Workspace => app.workspace_view(cx).into_any_element(),
+                    InternalEditorDisplay::Window => app.transfer_editor_window_view(cx),
+                }))
+        }
+    }
+
+    #[test]
+    fn clicking_dirty_editor_close_shows_confirmation_and_cancel_keeps_document() {
+        for display in [
+            InternalEditorDisplay::Workspace,
+            InternalEditorDisplay::Window,
+        ] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let root = TestTempDir::new("nyaterm-editor-close-confirmation");
+            let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+            let id = app.update(&mut cx, |app, cx| {
+                app.sync_component_theme(cx);
+                let mut doc = document("local", "/dirty.txt", display);
+                doc.id = "confirmation-document".to_string();
+                let id = doc.id.clone();
+                app.transfer.open_editor_tab(doc);
+                app.transfer
+                    .sync_editor_content(&id, "unsaved editor content");
+                if display == InternalEditorDisplay::Workspace {
+                    app.open_workspace_editor_tab(&id, cx);
+                }
+                id
+            });
+            let (_, cx) = cx.add_window_view(|window, cx| {
+                let host = cx.new(|cx| {
+                    cx.observe(&app, |_, _, cx| cx.notify()).detach();
+                    EditorCloseHost {
+                        app: app.clone(),
+                        display,
+                    }
+                });
+                nyaterm_ui::nya_root(host, window, cx)
+            });
+            let handle = cx.update(|window, _| window.window_handle().downcast().unwrap());
+            app.update(cx, |app, _| app.shell.remember_main_window(handle));
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let selector = match display {
+                InternalEditorDisplay::Workspace => "editor-tab-close-confirmation-document",
+                InternalEditorDisplay::Window => "editor-window-tab-close-confirmation-document",
+            };
+            let close = cx
+                .debug_bounds(selector)
+                .expect("editor close button is rendered");
+            cx.simulate_mouse_move(close.center(), None, Modifiers::default());
+            cx.simulate_click(close.center(), Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+                assert!(window.has_active_nya_dialog(cx));
+            });
+            app.read_with(cx, |app, _| {
+                assert!(app.shell.workspace.editor_close.is_some());
+                assert!(app.transfer.editor_tab_snapshot(&id).unwrap().dirty);
+            });
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            cx.update(|window, cx| assert!(!window.has_active_nya_dialog(cx)));
+            app.read_with(cx, |app, _| {
+                assert!(app.shell.workspace.editor_close.is_none());
+                let document = app.transfer.editor_tab_snapshot(&id).unwrap();
+                assert!(document.dirty);
+                assert_eq!(document.content.as_str(), "unsaved editor content");
+            });
+        }
+    }
 
     #[test]
     fn workspace_files_share_tabs_without_becoming_terminal_sessions() {
