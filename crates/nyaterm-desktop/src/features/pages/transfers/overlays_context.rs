@@ -425,7 +425,7 @@ impl NyaTermApp {
                         .cloned()
                         .map(|target| {
                             let session_id = target.session_id.clone();
-                            let mut item = NyaMenuItem::action(target.label.clone())
+                            NyaMenuItem::action(target.label.clone())
                                 .icon("icons/send.svg")
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.start_send_selected_transfers_to_session(
@@ -434,11 +434,7 @@ impl NyaTermApp {
                                         cx,
                                     );
                                     this.defer_transfer_panel_snapshot_flush(cx);
-                                }));
-                            if let Some(meta) = target.meta {
-                                item = item.shortcut(meta);
-                            }
-                            item
+                                }))
                         })
                         .collect::<Vec<_>>();
                     NyaMenuItem::submenu(t!("fileExplorer.cmSendTo"), send_items)
