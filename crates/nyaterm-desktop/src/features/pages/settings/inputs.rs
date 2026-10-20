@@ -454,7 +454,10 @@ impl NyaTermApp {
             self.ensure_number_input(
                 id,
                 &format!("{}", value as i64),
-                NyaNumberInputOptions::default().range(min, max).step(step),
+                NyaNumberInputOptions::default()
+                    .range(min, max)
+                    .step(step)
+                    .decimal_places(0),
                 cx,
             );
         }
