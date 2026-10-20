@@ -7,7 +7,9 @@ export function readCurrentInputLine(terminal: Terminal): string {
   const y = buffer.baseY + buffer.cursorY;
   const line = buffer.getLine(y);
   if (!line) return "";
-  const fullLine = line.translateToString(true, 0, buffer.cursorX);
+  // Keep the prompt's trailing separator (e.g. "$ ") when the cursor is
+  // after it: trimming would make an empty shell prompt indistinguishable.
+  const fullLine = line.translateToString(false, 0, buffer.cursorX);
   return fullLine;
 }
 

@@ -2498,13 +2498,20 @@ export default function XTerminal({
         }
       }
 
+      const inputState = inputStateRef.current;
+      const isCompletionKey = data === "\t" || data === "\x1b[Z";
       if (
-        data !== "\t" &&
-        inputStateRef.current.desynced &&
-        inputStateRef.current.desyncReason === "tab"
+        inputState.desynced &&
+        !inputState.pasteMode &&
+        !inputState.multiline &&
+        terminal.buffer.active.type !== "alternate" &&
+        (isPlainTextInputData(data) || data === "\r" ||
+          (inputState.desyncReason === "history" && isCompletionKey)) &&
+        (inputState.desyncReason === "history" ||
+          (inputState.desyncReason === "tab" && !isCompletionKey))
       ) {
         const recovered = resyncFromTerminalLine(
-          inputStateRef.current,
+          inputState,
           readCurrentInputLine(terminal),
         );
         if (recovered) {
