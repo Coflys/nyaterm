@@ -84,6 +84,8 @@ A paused script keeps going to the session you clicked the command in, rather th
 
 `\n` and `\t` only affect the script itself: the execution mode still decides whether the last chunk gets a carriage return, and a script that already ends in `\r` or `\n` does not get another one.
 
+Values you fill into the variable prompt are sent literally: their backslashes are never interpreted as escapes or pauses. Only a `\p` written in the template pauses.
+
 ## Categories, search, sorting, and view modes
 
 The Quick Commands panel supports these management patterns:
