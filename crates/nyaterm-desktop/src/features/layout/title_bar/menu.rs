@@ -519,7 +519,6 @@ impl NyaTermApp {
             .into_iter()
             .flat_map(|zone| self.shell.activity_bar_layout().zone(zone))
             .filter_map(|id| ActivityBarEntry::from_persistence_id(id))
-            .filter(|entry| self.activity_entry_visible(*entry))
             .filter(|entry| match entry {
                 ActivityBarEntry::Panel(item) => !item.opens_settings(),
                 ActivityBarEntry::Recording => true,

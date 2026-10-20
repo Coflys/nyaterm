@@ -164,6 +164,8 @@ impl NyaTermApp {
             show_labels: settings.ui_activity_bar_show_labels,
         };
         activity_bar_layout.ensure_plugin_entry();
+        activity_bar_layout.ensure_remote_monitor_entries();
+        settings.ui_activity_bar_right_top = activity_bar_layout.right_top.clone();
         settings.ui_activity_bar_left_bottom = activity_bar_layout.left_bottom.clone();
         let mut active_left_panel = settings
             .ui_active_left_panel

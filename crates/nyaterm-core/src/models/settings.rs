@@ -1,3 +1,5 @@
+pub mod panel_visibility;
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -256,22 +258,12 @@ pub struct AppSettingsSummary {
     /// Online search engines for terminal selection context menu (Tauri search.custom_engines).
     #[serde(default = "default_search_engines")]
     pub search_custom_engines: Vec<SearchEngineConfig>,
-    /// Whether the Tauri-compatible Notes panel is available in the activity bar.
-    #[serde(default = "default_true")]
-    pub ui_show_notes_panel: bool,
-    pub ui_show_remote_stats: bool,
     pub ui_remote_stats_interval: u32,
-    #[serde(default)]
-    pub ui_show_gpu_monitor: bool,
     #[serde(default = "default_hardware_monitor_interval")]
     pub ui_gpu_monitor_interval: u32,
-    #[serde(default)]
-    pub ui_show_ascend_npu_monitor: bool,
     #[serde(default = "default_hardware_monitor_interval")]
     pub ui_ascend_npu_monitor_interval: u32,
-    pub ui_show_process_manager: bool,
     pub ui_process_manager_interval: u32,
-    pub ui_show_docker_manager: bool,
     pub ui_docker_manager_interval: u32,
     #[serde(default = "default_quick_cmd_view_mode")]
     pub ui_quick_cmd_view_mode: String,
@@ -345,10 +337,8 @@ pub struct AppSettingsSummary {
     pub ui_activity_bar_right_bottom: Vec<String>,
     #[serde(default)]
     pub ui_activity_bar_show_labels: bool,
-    /// Activity-bar item ids the user has hidden from the rail (Tauri
-    /// `ui.activity_bar_layout.hidden_items`). Empty by default so legacy
-    /// data with no hidden entries keeps every item visible.
-    #[serde(default)]
+    /// Hidden activity-bar entries. Legacy switches are migrated by the store.
+    #[serde(default = "panel_visibility::default_hidden_items")]
     pub ui_activity_bar_hidden_items: Vec<String>,
     /// Docked multi-open preference. This is independent from
     /// `ui_panel_open_mode`: main keeps multi-open configured while floating
@@ -536,16 +526,10 @@ impl Default for AppSettingsSummary {
             terminal_action_links_enabled: false,
             terminal_action_links_matchers: ActionLinksMatcherSettings::default(),
             search_custom_engines: default_search_engines(),
-            ui_show_notes_panel: true,
-            ui_show_remote_stats: true,
             ui_remote_stats_interval: 3,
-            ui_show_gpu_monitor: false,
             ui_gpu_monitor_interval: 3,
-            ui_show_ascend_npu_monitor: false,
             ui_ascend_npu_monitor_interval: 3,
-            ui_show_process_manager: true,
             ui_process_manager_interval: 5,
-            ui_show_docker_manager: true,
             ui_docker_manager_interval: 10,
             ui_quick_cmd_view_mode: default_quick_cmd_view_mode(),
             ui_quick_cmd_sort_mode: default_quick_cmd_sort_mode(),
@@ -578,7 +562,7 @@ impl Default for AppSettingsSummary {
             ui_activity_bar_right_top: default_activity_right_top(),
             ui_activity_bar_right_bottom: default_activity_right_bottom(),
             ui_activity_bar_show_labels: false,
-            ui_activity_bar_hidden_items: Vec::new(),
+            ui_activity_bar_hidden_items: panel_visibility::default_hidden_items(),
             ui_panel_multi_open: false,
             ui_panel_open_mode: default_panel_open_mode(),
             ui_left_open_panels: Vec::new(),
@@ -877,7 +861,10 @@ mod tests {
     #[test]
     fn summary_default_has_empty_hidden_items_and_docked_mode() {
         let summary = AppSettingsSummary::default();
-        assert!(summary.ui_activity_bar_hidden_items.is_empty());
+        assert_eq!(
+            summary.ui_activity_bar_hidden_items,
+            crate::models::settings::panel_visibility::default_hidden_items()
+        );
         assert_eq!(summary.ui_panel_open_mode, "docked");
         assert!(!summary.ui_panel_multi_open);
         assert_eq!(
@@ -954,7 +941,10 @@ mod tests {
 
         let summary: AppSettingsSummary =
             serde_json::from_str(json).expect("legacy summary deserializes");
-        assert!(summary.ui_activity_bar_hidden_items.is_empty());
+        assert_eq!(
+            summary.ui_activity_bar_hidden_items,
+            crate::models::settings::panel_visibility::default_hidden_items()
+        );
         assert_eq!(summary.ui_panel_open_mode, "docked");
         assert!(!summary.ui_panel_multi_open);
         // Legacy documents lack the asset/start-workspace UI settings; they must

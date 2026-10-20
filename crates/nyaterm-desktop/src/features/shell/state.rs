@@ -396,6 +396,11 @@ impl ShellFeatureState {
         self.viewport.size
     }
 
+    #[cfg(test)]
+    pub(in crate::features) fn set_viewport_size_for_test(&mut self, size: (f32, f32)) {
+        self.viewport.update_size(size, Instant::now());
+    }
+
     pub(in crate::features) fn wallpaper_asset(&self) -> Option<&WallpaperAsset> {
         self.viewport.wallpaper.asset.as_ref()
     }

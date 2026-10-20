@@ -606,44 +606,20 @@ impl SettingsFeatureState {
         self.summary.terminal_paste_image_as_path = !self.summary.terminal_paste_image_as_path;
     }
 
-    pub(in crate::features) fn toggle_remote_stats_panel(&mut self) {
-        self.summary.ui_show_remote_stats = !self.summary.ui_show_remote_stats;
-    }
-
-    pub(in crate::features) fn toggle_notes_panel(&mut self) {
-        self.summary.ui_show_notes_panel = !self.summary.ui_show_notes_panel;
-    }
-
     pub(in crate::features) fn set_remote_stats_interval(&mut self, value: u32) {
         self.summary.ui_remote_stats_interval = value.clamp(1, 60);
-    }
-
-    pub(in crate::features) fn toggle_gpu_monitor_panel(&mut self) {
-        self.summary.ui_show_gpu_monitor = !self.summary.ui_show_gpu_monitor;
     }
 
     pub(in crate::features) fn set_gpu_monitor_interval(&mut self, value: u32) {
         self.summary.ui_gpu_monitor_interval = value.clamp(3, 120);
     }
 
-    pub(in crate::features) fn toggle_ascend_npu_monitor_panel(&mut self) {
-        self.summary.ui_show_ascend_npu_monitor = !self.summary.ui_show_ascend_npu_monitor;
-    }
-
     pub(in crate::features) fn set_ascend_npu_monitor_interval(&mut self, value: u32) {
         self.summary.ui_ascend_npu_monitor_interval = value.clamp(3, 120);
     }
 
-    pub(in crate::features) fn toggle_process_manager_panel(&mut self) {
-        self.summary.ui_show_process_manager = !self.summary.ui_show_process_manager;
-    }
-
     pub(in crate::features) fn set_process_manager_interval(&mut self, value: u32) {
         self.summary.ui_process_manager_interval = value.clamp(3, 120);
-    }
-
-    pub(in crate::features) fn toggle_docker_manager_panel(&mut self) {
-        self.summary.ui_show_docker_manager = !self.summary.ui_show_docker_manager;
     }
 
     pub(in crate::features) fn set_docker_manager_interval(&mut self, value: u32) {

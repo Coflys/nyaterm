@@ -82,19 +82,6 @@ impl NyaTermApp {
         !NON_PANEL_IDS.contains(&id) && !Self::is_exclusive_panel_id(id)
     }
 
-    fn panel_id_visible(&self, id: &str) -> bool {
-        let summary = self.settings.summary();
-        match NavItem::from_persistence_id(id) {
-            Some(NavItem::Notes) => summary.ui_show_notes_panel,
-            Some(NavItem::Stats) => summary.ui_show_remote_stats,
-            Some(NavItem::GpuMonitor) => summary.ui_show_gpu_monitor,
-            Some(NavItem::AscendNpuMonitor) => summary.ui_show_ascend_npu_monitor,
-            Some(NavItem::Processes) => summary.ui_show_process_manager,
-            Some(NavItem::Docker) => summary.ui_show_docker_manager,
-            _ => true,
-        }
-    }
-
     pub(in crate::features) fn toggle_panel_multi_open(&mut self, cx: &mut Context<Self>) {
         let browser_was_visible = self.transfer_browser_is_visible();
         let next = !self.shell.panels.multi_open;
@@ -249,10 +236,7 @@ impl NyaTermApp {
         let mut ordered = Vec::new();
         for zone in zones {
             for id in self.shell.chrome.activity_bar_layout.zone(zone) {
-                if open_set.contains(id)
-                    && Self::is_stackable_panel_id(id)
-                    && self.panel_id_visible(id)
-                {
+                if open_set.contains(id) && Self::is_stackable_panel_id(id) {
                     ordered.push(id.clone());
                 }
             }
@@ -268,16 +252,31 @@ impl NyaTermApp {
     /// otherwise a single-entry list or single-panel mode shows the first id while a
     /// multi-open stack shows all of them.
     ///
-    /// Deliberately *not* mirrored: `has_*_activity_items`, the narrow-viewport overlay
-    /// modes, and the mobile drawers from `root.rs`. Those can also stop a side being
-    /// laid out, but the predicate this replaced consulted only `current_*_panel`, so
-    /// including them would be a separate behaviour change rather than a faithful move.
     pub(in crate::features) fn panel_is_rendered(&self, item: NavItem) -> bool {
+        if self.shell.main_mode() == MainMode::Page
+            && self.shell.selected_nav() == NavItem::Settings
+        {
+            return false;
+        }
         let Some(side) = self.panel_side_for_item(item) else {
             return false;
         };
+        let activity_side = match side {
+            PanelSide::Left => crate::features::runtime_jobs::ActivitySide::Left,
+            PanelSide::Right => crate::features::runtime_jobs::ActivitySide::Right,
+        };
         if self.shell.panels.open_mode.is_floating() {
             return self.shell.panels.floating_panel(side) == Some(item);
+        }
+        if !self.activity_side_has_items(activity_side) {
+            return false;
+        }
+        let (threshold, drawer_open) = match side {
+            PanelSide::Left => (1024., self.shell.mobile_left_panel_open()),
+            PanelSide::Right => (768., self.shell.mobile_right_panel_open()),
+        };
+        if !cfg!(target_os = "macos") && self.shell.viewport_size().0 < threshold && !drawer_open {
+            return false;
         }
         let side_open = match side {
             PanelSide::Left => self.left_side_open(),
@@ -1372,5 +1371,35 @@ mod tests {
             side_panel_stack_render_mode(None),
             SidePanelStackRenderMode::Stack
         );
+    }
+
+    #[test]
+    fn floating_panel_visibility_is_independent_of_hidden_activity_rail() {
+        let test_dir = TestConfigDir::new("nyaterm-floating-monitor-demand");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, test_dir.path(), "monitor-test");
+        app.update(&mut cx, |app, cx| {
+            app.set_panel_open_mode(PanelOpenMode::Floating, cx);
+            let ids = app
+                .shell
+                .chrome
+                .activity_bar_layout
+                .right_top
+                .iter()
+                .chain(&app.shell.chrome.activity_bar_layout.right_bottom)
+                .cloned()
+                .collect::<Vec<_>>();
+            for id in ids {
+                app.shell.chrome.activity_bar_layout.hide_entry(&id);
+            }
+            assert!(
+                !app.activity_side_has_items(crate::features::runtime_jobs::ActivitySide::Right)
+            );
+            app.open_or_toggle_panel(NavItem::GpuMonitor, cx);
+            assert!(app.panel_is_rendered(NavItem::GpuMonitor));
+            app.close_floating_panel(PanelSide::Right, cx);
+            assert!(!app.panel_is_rendered(NavItem::GpuMonitor));
+        });
     }
 }

@@ -560,6 +560,14 @@ impl NyaTermApp {
         )
     }
 
+    pub(in crate::features) fn header_status_needs_stats(&self) -> bool {
+        self.settings.summary().ui_header_status_visible
+            && matches!(
+                HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode),
+                HeaderStatusMode::Resources | HeaderStatusMode::Host
+            )
+    }
+
     pub(in crate::features) fn header_status_needs_gpu(&self) -> bool {
         self.settings.summary().ui_header_status_visible
             && HeaderStatusMode::from_setting(&self.settings.summary().ui_header_status_mode)

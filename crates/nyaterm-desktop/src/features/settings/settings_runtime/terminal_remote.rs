@@ -103,30 +103,12 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
-    pub(in crate::features) fn toggle_remote_stats_panel(&mut self, cx: &mut Context<Self>) {
-        self.settings.toggle_remote_stats_panel();
-        self.reconcile_activity_panel_availability();
-        self.save_terminal_settings(cx);
-    }
-
-    pub(in crate::features) fn toggle_notes_panel(&mut self, cx: &mut Context<Self>) {
-        self.settings.toggle_notes_panel();
-        self.reconcile_activity_panel_availability();
-        self.save_terminal_settings(cx);
-    }
-
     pub(in crate::features) fn set_remote_stats_interval(
         &mut self,
         value: u32,
         cx: &mut Context<Self>,
     ) {
         self.settings.set_remote_stats_interval(value);
-        self.save_terminal_settings(cx);
-    }
-
-    pub(in crate::features) fn toggle_gpu_monitor_panel(&mut self, cx: &mut Context<Self>) {
-        self.settings.toggle_gpu_monitor_panel();
-        self.reconcile_activity_panel_availability();
         self.save_terminal_settings(cx);
     }
 
@@ -139,24 +121,12 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
-    pub(in crate::features) fn toggle_ascend_npu_monitor_panel(&mut self, cx: &mut Context<Self>) {
-        self.settings.toggle_ascend_npu_monitor_panel();
-        self.reconcile_activity_panel_availability();
-        self.save_terminal_settings(cx);
-    }
-
     pub(in crate::features) fn set_ascend_npu_monitor_interval(
         &mut self,
         value: u32,
         cx: &mut Context<Self>,
     ) {
         self.settings.set_ascend_npu_monitor_interval(value);
-        self.save_terminal_settings(cx);
-    }
-
-    pub(in crate::features) fn toggle_process_manager_panel(&mut self, cx: &mut Context<Self>) {
-        self.settings.toggle_process_manager_panel();
-        self.reconcile_activity_panel_availability();
         self.save_terminal_settings(cx);
     }
 
@@ -169,12 +139,6 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
-    pub(in crate::features) fn toggle_docker_manager_panel(&mut self, cx: &mut Context<Self>) {
-        self.settings.toggle_docker_manager_panel();
-        self.reconcile_activity_panel_availability();
-        self.save_terminal_settings(cx);
-    }
-
     pub(in crate::features) fn set_docker_manager_interval(
         &mut self,
         value: u32,
@@ -182,6 +146,58 @@ impl NyaTermApp {
     ) {
         self.settings.set_docker_manager_interval(value);
         self.save_terminal_settings(cx);
+    }
+
+    pub(in crate::features) fn reset_remote_monitoring_intervals(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let defaults = nyaterm_core::AppSettingsSummary::default();
+        self.settings
+            .set_remote_stats_interval(defaults.ui_remote_stats_interval);
+        self.settings
+            .set_gpu_monitor_interval(defaults.ui_gpu_monitor_interval);
+        self.settings
+            .set_ascend_npu_monitor_interval(defaults.ui_ascend_npu_monitor_interval);
+        self.settings
+            .set_process_manager_interval(defaults.ui_process_manager_interval);
+        self.settings
+            .set_docker_manager_interval(defaults.ui_docker_manager_interval);
+        self.sync_remote_monitoring_inputs(cx);
+        self.save_terminal_settings(cx);
+    }
+
+    pub(in crate::features) fn sync_remote_monitoring_inputs(&mut self, cx: &mut Context<Self>) {
+        let settings = self.settings.summary();
+        let inputs = self.number_input_fields_snapshot();
+        for (id, value) in [
+            (
+                "settings.number.remote-stats-interval",
+                settings.ui_remote_stats_interval,
+            ),
+            (
+                "settings.number.gpu-monitor-interval",
+                settings.ui_gpu_monitor_interval,
+            ),
+            (
+                "settings.number.ascend-npu-monitor-interval",
+                settings.ui_ascend_npu_monitor_interval,
+            ),
+            (
+                "settings.number.process-manager-interval",
+                settings.ui_process_manager_interval,
+            ),
+            (
+                "settings.number.docker-manager-interval",
+                settings.ui_docker_manager_interval,
+            ),
+        ] {
+            if let Some(input) = inputs.get(id) {
+                input.update(cx, |input, cx| {
+                    input.set_content_silent(&value.to_string(), cx)
+                });
+            }
+        }
     }
 
     pub(in crate::features) fn save_terminal_settings(&mut self, cx: &mut Context<Self>) {

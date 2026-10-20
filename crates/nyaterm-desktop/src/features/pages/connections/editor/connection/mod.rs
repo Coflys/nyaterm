@@ -265,14 +265,11 @@ impl NyaTermApp {
         let icon_auto_detect_hint = t!("dialog.iconAutoDetectTooltip");
         let icon_auto_detect = editor.icon_auto_detect;
         let icon_auto_detect_enabled = editor.kind == ConnectionKindTab::Ssh
-            && editor.ssh_profile == nyaterm_core::SshProfile::Standard
-            && self.settings.summary().ui_show_remote_stats;
+            && editor.ssh_profile == nyaterm_core::SshProfile::Standard;
         let icon_auto_detect_hint = if editor.kind != ConnectionKindTab::Ssh
             || editor.ssh_profile == nyaterm_core::SshProfile::NetworkDevice
         {
             t!("dialog.iconAutoDetectNetworkDeviceTooltip").to_string()
-        } else if !self.settings.summary().ui_show_remote_stats {
-            t!("dialog.iconAutoDetectRemoteStatsDisabledTooltip").to_string()
         } else {
             icon_auto_detect_hint.to_string()
         };
