@@ -25,19 +25,10 @@ impl NyaTermApp {
         if targets.is_empty() {
             return;
         }
+        let selected = self.selected_session_strip_tab(&self.current_terminal_group());
         let current = targets
             .iter()
-            .position(|target| {
-                target.request_id.as_deref().map_or_else(
-                    || {
-                        !self.session.start_has_active_pending()
-                            && !self.session.start_has_active_failed()
-                            && self.active_workspace_tab().as_deref()
-                                == Some(target.id.layout_key().as_str())
-                    },
-                    |id| self.session.start_request_is_active(id),
-                )
-            })
+            .position(|target| selected.as_ref() == Some(&target.id))
             .unwrap_or(0);
         let next = (current as isize + offset).rem_euclid(targets.len() as isize) as usize;
         self.select_terminal_group_tab(next, cx);
@@ -245,6 +236,7 @@ impl NyaTermApp {
 mod tests {
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::session::PendingSessionStart;
+    use crate::features::shell::session_tabs::SessionStripTabId;
     use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
     use crate::models::{
         SessionLaunchConfig, SessionRuntimeMetadata, SmartSplitMode, TabDockEdge, TabDockZone,
@@ -293,10 +285,32 @@ mod tests {
             let options = app.prepare_session_start_options(SavedConnectionStartOptions::default());
             app.session
                 .simulate_pending_start("pending", pending(options.tab_placement));
+            let selected_start = Some(SessionStripTabId::Start(
+                options.tab_placement.unwrap().request_sequence,
+            ));
+            assert_eq!(
+                app.selected_session_strip_tab(&Some(group.clone())),
+                selected_start
+            );
             assert_eq!(app.current_terminal_group(), Some(group.clone()));
             assert!(!app.visible_terminal_session_ids().contains(&"a"));
             assert!(app.visible_terminal_session_ids().contains(&"b"));
             app.session.simulate_start_failure("pending");
+            assert_eq!(
+                app.selected_session_strip_tab(&Some(group.clone())),
+                selected_start
+            );
+            for other in before.as_ref().unwrap().leaf_ids() {
+                if other != group {
+                    let (_, active) = app.shell.terminal_group_tabs(&other).unwrap();
+                    assert_eq!(
+                        app.selected_session_strip_tab(&Some(other)),
+                        active.map(|key| SessionStripTabId::Workspace(
+                            crate::models::WorkspaceTabId::from_layout_key(&key)
+                        ))
+                    );
+                }
+            }
             assert_eq!(app.current_terminal_group(), Some(group));
             assert_eq!(app.shell.terminal_window_tree(), before);
             app.select_relative_session(1, cx);

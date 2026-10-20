@@ -118,10 +118,13 @@ impl NyaTermApp {
 
     pub(in crate::features) fn quick_switch_items(&self) -> Vec<QuickSwitchItem> {
         let sessions = self.ordered_tab_sessions();
+        let active_tab = self
+            .selected_session_strip_tab(&self.current_terminal_group())
+            .map(|id| id.layout_key());
         let mut session_items = Vec::new();
         for session in &sessions {
             let title = self.session.display_name_by_info(session);
-            let active = self.active_workspace_tab().as_deref() == Some(session.id.as_str());
+            let active = active_tab.as_deref() == Some(session.id.as_str());
             let mut subtitle = format!(
                 "{} - {}",
                 session_kind_label(session.kind),
@@ -145,7 +148,7 @@ impl NyaTermApp {
                 && let Some(document) = self.transfer.editor_tab_snapshot(&id)
             {
                 session_items.push(QuickSwitchItem::Session {
-                    active: self.active_workspace_tab().as_deref() == Some(&key),
+                    active: active_tab.as_deref() == Some(&key),
                     id: key,
                     title: document.name,
                     subtitle: document.remote_path,

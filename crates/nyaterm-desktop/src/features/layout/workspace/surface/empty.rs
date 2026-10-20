@@ -114,6 +114,7 @@ impl NyaTermApp {
             .unwrap_or_else(|| t!("terminal.connecting").to_string());
 
         div()
+            .debug_selector(|| "pending-workspace-state".into())
             .flex_1()
             .min_h_0()
             .flex()
@@ -129,6 +130,7 @@ impl NyaTermApp {
             ))
             .child(
                 div()
+                    .debug_selector(|| "pending-workspace-name".into())
                     .max_w(px(320.))
                     .px_4()
                     .text_center()
@@ -152,6 +154,7 @@ impl NyaTermApp {
             .unwrap_or_default();
 
         div()
+            .debug_selector(|| "failed-workspace-state".into())
             .flex_1()
             .min_h_0()
             .flex()
@@ -168,6 +171,7 @@ impl NyaTermApp {
             )
             .child(
                 div()
+                    .debug_selector(|| "failed-workspace-message".into())
                     .flex()
                     .flex_col()
                     .items_center()

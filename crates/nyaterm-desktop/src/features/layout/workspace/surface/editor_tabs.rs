@@ -59,6 +59,7 @@ impl NyaTermApp {
         );
         let tab = div()
             .id(SharedString::from(format!("editor-tab-{}", document.id)))
+            .debug_selector(|| format!("editor-tab-{}", document.id))
             .group(tab_group.clone())
             .h(px(36.))
             .min_w(px(118.))
@@ -122,6 +123,7 @@ impl NyaTermApp {
             .when(selected, |this| {
                 this.child(
                     div()
+                        .debug_selector(|| format!("editor-tab-active-{}", document.id))
                         .absolute()
                         .top_0()
                         .left_0()

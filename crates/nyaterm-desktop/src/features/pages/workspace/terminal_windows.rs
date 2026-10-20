@@ -190,6 +190,8 @@ impl NyaTermApp {
             .flex_1()
             .min_h_0()
             .min_w_0()
+            .flex()
+            .flex_col()
             .relative()
             .overflow_hidden()
             .can_drop(|drag, _, _| drag.is::<WorkspaceTabDragPayload>())

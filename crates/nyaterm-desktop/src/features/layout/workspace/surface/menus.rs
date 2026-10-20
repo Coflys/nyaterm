@@ -195,7 +195,9 @@ impl NyaTermApp {
             .collect();
         let mut sessions = ordered;
         sessions.reverse();
-        let active_id = self.active_workspace_tab();
+        let active_id = self
+            .selected_session_strip_tab(&group.map(str::to_string))
+            .map(|id| id.layout_key());
         // The list scrolls inside a `NyaScrollArea`, whose `max_h` sits on the
         // scroll container itself. The previous `overflow_y_scrollbar()` wrapper
         // moves the cap onto an outer root and makes the inner scroll area

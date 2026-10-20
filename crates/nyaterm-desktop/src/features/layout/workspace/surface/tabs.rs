@@ -118,6 +118,7 @@ impl NyaTermApp {
             .when(active, |this| {
                 this.child(
                     div()
+                        .debug_selector(|| format!("pending-session-tab-active-{request_id}"))
                         .absolute()
                         .top_0()
                         .left_0()
@@ -212,6 +213,7 @@ impl NyaTermApp {
         &mut self,
         tab: SessionStripTab,
         tab_number: usize,
+        active: bool,
         group: Option<String>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -224,7 +226,6 @@ impl NyaTermApp {
         else {
             unreachable!("failed tab requires a failed connection attempt");
         };
-        let active = self.session.start_request_is_active(&request_id);
         let palette = self.theme_palette();
         let close_request_id = request_id.clone();
         let select_request_id = request_id.clone();
@@ -291,6 +292,7 @@ impl NyaTermApp {
             .when(active, |this| {
                 this.child(
                     div()
+                        .debug_selector(|| format!("failed-session-tab-active-{request_id}"))
                         .absolute()
                         .top_0()
                         .left_0()
@@ -684,6 +686,7 @@ impl NyaTermApp {
             .when(is_active, |this| {
                 this.child(
                     div()
+                        .debug_selector(|| format!("session-tab-active-{session_id}"))
                         .absolute()
                         .top_0()
                         .left_0()
@@ -872,10 +875,15 @@ impl NyaTermApp {
     ) -> gpui::AnyElement {
         let palette = self.theme_palette();
         let shell_hover_bg = self.shell_surface_color(palette.hover);
-        let (tab_keys, group_active) = group_id
+        let (tab_keys, _) = group_id
             .as_deref()
             .and_then(|group| self.shell.terminal_group_tabs(group))
             .unwrap_or_else(|| (self.workspace_tab_ids(), self.active_workspace_tab()));
+        let selected = self.selected_session_strip_tab(&group_id);
+        let group_active = selected.as_ref().and_then(|id| match id {
+            SessionStripTabId::Workspace(id) => Some(id.layout_key()),
+            SessionStripTabId::Start(_) => None,
+        });
         let session_count = tab_keys.len();
         let tab_scroll = group_id
             .as_ref()
@@ -885,16 +893,10 @@ impl NyaTermApp {
         if self.shell.session_tab_scroll_into_view_pending()
             && (group_id.is_none() || self.current_terminal_group() == group_id)
         {
-            if let Some(index) = strip_tabs.iter().position(|tab| {
-                tab.request_id.as_deref().map_or_else(
-                    || {
-                        !self.session.start_has_active_pending()
-                            && !self.session.start_has_active_failed()
-                            && group_active.as_deref() == Some(tab.id.layout_key().as_str())
-                    },
-                    |id| self.session.start_request_is_active(id),
-                )
-            }) {
+            if let Some(index) = strip_tabs
+                .iter()
+                .position(|tab| selected.as_ref() == Some(&tab.id))
+            {
                 tab_scroll.scroll_to_item(index);
             }
             self.shell.consume_session_tab_scroll_into_view();
@@ -966,14 +968,14 @@ impl NyaTermApp {
         let motion_sessions = strip_tabs.iter().map(|tab| tab.snapshot_key()).collect();
         for (index, tab) in strip_tabs.into_iter().enumerate() {
             let key = tab.id.layout_key();
+            let active = selected.as_ref() == Some(&tab.id);
             let child = match tab.id {
                 SessionStripTabId::Start(_) => {
                     if tab.error.is_some() {
-                        self.failed_session_tab(tab, index + 1, group_id.clone(), cx)
+                        self.failed_session_tab(tab, index + 1, active, group_id.clone(), cx)
                             .into_any_element()
                     } else {
                         let request_id = tab.request_id.expect("start tab must have a request");
-                        let active = self.session.start_request_is_active(&request_id);
                         self.pending_session_tab(request_id, tab.name, index + 1, active, cx)
                             .into_any_element()
                     }

@@ -352,6 +352,78 @@ struct FailureViewHost {
     strip: bool,
 }
 
+struct StartupWorkspaceHost {
+    app: gpui::Entity<crate::features::NyaTermApp>,
+}
+
+impl gpui::Render for StartupWorkspaceHost {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{IntoElement as _, ParentElement as _, Styled as _};
+        let workspace = self
+            .app
+            .update(cx, |app, cx| app.workspace_view(cx).into_any_element());
+        gpui::div().size_full().flex().flex_col().child(workspace)
+    }
+}
+
+#[test]
+fn grouped_connection_failure_and_retry_fill_and_center_in_the_content_area() {
+    use gpui::px;
+
+    let root = TestConfigDir::new("nyaterm-startup-workspace-layout");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+    app.update(&mut cx, |app, cx| {
+        app.sync_component_theme(cx);
+        app.reconcile_terminal_windows();
+        let group = app.current_terminal_group().unwrap();
+        let placement = failed_start(app, "failure", 1, None);
+        app.shell
+            .reserve_terminal_start_group(placement.request_sequence, group);
+    });
+    let fixture_app = app.clone();
+    let (_, cx) = cx.add_window_view(move |_, cx| {
+        cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+        StartupWorkspaceHost { app: fixture_app }
+    });
+    for (panel, message) in [
+        ("failed-workspace-state", "failed-workspace-message"),
+        ("pending-workspace-state", "pending-workspace-name"),
+    ] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        let content = app.read_with(cx, |app, _| {
+            let group = app.current_terminal_group().unwrap();
+            let mut bounds = app.shell.terminal_split_bounds(&group).unwrap();
+            bounds.origin.y += px(36.);
+            bounds.size.height -= px(36.);
+            bounds
+        });
+        let panel = cx.debug_bounds(panel).unwrap();
+        let message = cx.debug_bounds(message).unwrap();
+        assert_eq!(panel, content);
+        assert!(
+            (message.center().y - panel.center().y).abs() < panel.size.height / 6.,
+            "the connection status must stay near the content area's vertical center"
+        );
+        app.update(cx, |app, cx| {
+            if let Some(failed) = app.session.start.take_failed_for_retry("failure") {
+                app.session
+                    .start
+                    .register_pending("retry".into(), failed.pending);
+                cx.notify();
+            }
+        });
+    }
+}
+
 impl gpui::Render for FailureViewHost {
     fn render(
         &mut self,
@@ -377,6 +449,117 @@ impl gpui::Render for FailureViewHost {
                 .child(app.session_tab_drag_listener_layer(cx))
                 .child(content)
         })
+    }
+}
+
+#[test]
+fn selected_failed_and_retry_tabs_replace_the_previous_tab_highlight() {
+    use gpui::VisualTestContext;
+    use nyaterm_core::InternalEditorDisplay;
+
+    use crate::features::test_support::editor_document;
+    use crate::models::{QuickSwitchItem, WorkspaceTabId};
+
+    let draw_and_assert =
+        |cx: &mut VisualTestContext, selected: &'static str, unselected: &[&'static str]| {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert!(cx.debug_bounds(selected).is_some(), "selected: {selected}");
+            for selector in unselected {
+                assert!(
+                    cx.debug_bounds(selector).is_none(),
+                    "unselected: {selector}"
+                );
+            }
+        };
+    for (grouped, editor) in [(false, false), (true, false), (true, true)] {
+        let root = TestConfigDir::new("nyaterm-startup-tab-selection");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "source");
+        let (formal_tab, formal_highlight) = app.update(&mut cx, |app, cx| {
+            app.sync_component_theme(cx);
+            if grouped {
+                app.reconcile_terminal_windows();
+            }
+            let (tab, highlight) = if editor {
+                let mut document =
+                    editor_document("source", "/test.txt", InternalEditorDisplay::Workspace);
+                document.id = "editor".into();
+                let id = document.id.clone();
+                app.transfer.open_editor_tab(document);
+                app.open_workspace_editor_tab(&id, cx);
+                ("editor-tab-editor", "editor-tab-active-editor")
+            } else {
+                ("session-tab-source", "session-tab-active-source")
+            };
+            let group = app.current_terminal_group();
+            let placement = failed_start(app, "failure", 1, None);
+            if let Some(group) = group {
+                app.shell
+                    .reserve_terminal_start_group(placement.request_sequence, group);
+            }
+            (tab, highlight)
+        });
+        let fixture_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |_, cx| {
+            cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+            StartupWorkspaceHost { app: fixture_app }
+        });
+        draw_and_assert(cx, "failed-session-tab-active-failure", &[formal_highlight]);
+        app.read_with(cx, |app, _| {
+            let selected = app
+                .quick_switch_items()
+                .into_iter()
+                .filter_map(|item| match item {
+                    QuickSwitchItem::Session {
+                        id, active: true, ..
+                    } => Some(id),
+                    QuickSwitchItem::Pending {
+                        request_id,
+                        active: true,
+                        ..
+                    } => Some(request_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(selected, ["failure"]);
+        });
+        let bounds = cx.debug_bounds(formal_tab).unwrap();
+        cx.simulate_click(bounds.center(), Default::default());
+        draw_and_assert(cx, formal_highlight, &["failed-session-tab-active-failure"]);
+        let bounds = cx.debug_bounds("failed-session-tab-failure").unwrap();
+        cx.simulate_click(bounds.center(), Default::default());
+        draw_and_assert(cx, "failed-session-tab-active-failure", &[formal_highlight]);
+        app.update(cx, |app, cx| {
+            let failed = app.session.start.take_failed_for_retry("failure").unwrap();
+            app.session
+                .start
+                .begin_retry_preparation("retry".into(), failed.pending);
+            cx.notify();
+        });
+        draw_and_assert(cx, "pending-session-tab-active-retry", &[formal_highlight]);
+        app.update(cx, |app, cx| {
+            app.session.simulate_start_failure("retry");
+            cx.notify();
+        });
+        draw_and_assert(cx, "failed-session-tab-active-retry", &[formal_highlight]);
+        app.update(cx, |app, cx| {
+            app.close_failed_session_start("retry".into(), cx)
+        });
+        draw_and_assert(cx, formal_highlight, &["failed-session-tab-active-retry"]);
+        app.read_with(cx, |app, _| {
+            assert!(matches!(
+                app.selected_session_strip_tab(&app.current_terminal_group()),
+                Some(
+                    crate::features::shell::session_tabs::SessionStripTabId::Workspace(
+                        WorkspaceTabId::Session(_) | WorkspaceTabId::Editor(_)
+                    )
+                )
+            ));
+        });
     }
 }
 

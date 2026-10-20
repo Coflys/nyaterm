@@ -46,6 +46,32 @@ impl SessionStripTab {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn selected_session_strip_tab(
+        &self,
+        group: &Option<String>,
+    ) -> Option<SessionStripTabId> {
+        let tabs = self.session_strip_tabs(group);
+        if let Some(tab) = tabs.iter().find(|tab| {
+            tab.request_id
+                .as_deref()
+                .is_some_and(|id| self.session.start_request_is_active(id))
+        }) {
+            return Some(tab.id.clone());
+        }
+        // Layouts retain the previous formal tab while a connection attempt is
+        // visible. That fallback must not compete with the selected attempt.
+        let active = group
+            .as_deref()
+            .and_then(|id| self.shell.terminal_group_tabs(id))
+            .map(|(_, active)| active)
+            .unwrap_or_else(|| self.active_workspace_tab());
+        tabs.into_iter()
+            .find(|tab| {
+                !tab.id.is_start() && active.as_deref() == Some(tab.id.layout_key().as_str())
+            })
+            .map(|tab| tab.id)
+    }
+
     pub(in crate::features) fn drop_on_session_start_tab(
         &mut self,
         payload: &super::WorkspaceTabDragPayload,
