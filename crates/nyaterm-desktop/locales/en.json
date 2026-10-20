@@ -2496,8 +2496,6 @@
     "keepAliveModeStrictDescription": "Keep the strict intent in settings; current SSH runtime uses the compatible transport behavior.",
     "localBackup": "Local Backup",
     "localBackupDesc": "Export or restore a password-encrypted .nya snapshot.",
-    "lowLatencyMode": "Low Latency Mode",
-    "lowLatencyModeDesc": "Temporarily skip suggestions, keyword highlights, and action-link enrichment so terminal input and scrolling stay plain.",
     "keyFileLoaded": "Key file loaded",
     "keyFilePathPlaceholder": "e.g. ~/.ssh/id_ed25519",
     "keyManagement": "Keys",

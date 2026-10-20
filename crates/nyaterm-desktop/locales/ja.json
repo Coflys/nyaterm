@@ -2496,8 +2496,6 @@
     "keepAliveModeStrictDescription": "設定上は厳格な意図を保持しますが、現在の SSH ランタイムは互換トランスポート動作を使用します。",
     "localBackup": "ローカルバックアップ",
     "localBackupDesc": "パスワードで暗号化された .nya スナップショットをエクスポートまたは復元します。",
-    "lowLatencyMode": "低遅延モード",
-    "lowLatencyModeDesc": "候補・キーワードハイライト・アクションリンクの付加処理を一時的に省略し、ターミナルの入力とスクロールをシンプルに保ちます。",
     "keyFileLoaded": "鍵ファイルを読み込みました",
     "keyFilePathPlaceholder": "例: ~/.ssh/id_ed25519",
     "keyManagement": "鍵",

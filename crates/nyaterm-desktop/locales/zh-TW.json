@@ -2496,8 +2496,6 @@
     "keepAliveModeStrictDescription": "連續多次未收到遠端 SSH 資料時斷開連線，可更快發現失效連線，但可能與部分設備不相容。",
     "localBackup": "本地備份",
     "localBackupDesc": "匯出或恢復使用密碼加密的 .nya 快照。",
-    "lowLatencyMode": "低延遲模式",
-    "lowLatencyModeDesc": "臨時跳過聯想補全、關鍵字高亮和動作連結富化，讓終端輸入與滾動保持純粹。",
     "keyFileLoaded": "金鑰檔案已載入",
     "keyFilePathPlaceholder": "輸入私鑰檔案路徑...",
     "keyManagement": "金鑰",

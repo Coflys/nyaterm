@@ -2496,8 +2496,6 @@
     "keepAliveModeStrictDescription": "Conserver l'intention stricte dans les paramètres ; le runtime SSH actuel utilise le comportement de transport compatible.",
     "localBackup": "Sauvegarde locale",
     "localBackupDesc": "Exporter ou restaurer un instantané .nya chiffré par mot de passe.",
-    "lowLatencyMode": "Mode faible latence",
-    "lowLatencyModeDesc": "Ignorer temporairement les suggestions, la coloration de mots-clés et l'enrichissement des liens d'action pour que la saisie et le défilement du terminal restent simples.",
     "keyFileLoaded": "Fichier de clé chargé",
     "keyFilePathPlaceholder": "ex. ~/.ssh/id_ed25519",
     "keyManagement": "Clés",

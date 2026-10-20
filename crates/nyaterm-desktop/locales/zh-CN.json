@@ -2496,8 +2496,6 @@
     "keepAliveModeStrictDescription": "保留严格模式配置意图；当前 SSH 运行时使用兼容传输行为。",
     "localBackup": "本地备份",
     "localBackupDesc": "导出或恢复使用密码加密的 .nya 快照。",
-    "lowLatencyMode": "低延迟模式",
-    "lowLatencyModeDesc": "临时跳过联想补全、关键字高亮和动作链接富化，让终端输入与滚动保持纯粹。",
     "keyFileLoaded": "密钥文件已加载",
     "keyFilePathPlaceholder": "例如：~/.ssh/id_ed25519",
     "keyManagement": "密钥",
