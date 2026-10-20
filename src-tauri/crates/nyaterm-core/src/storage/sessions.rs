@@ -153,8 +153,11 @@ impl Storage {
             return Ok(());
         };
         connection.last_used_at_ms = Some(current_time_ms());
-        hydrate_connection_password_in_txn(&txn, &mut connection)?;
-        save_connection_in_txn(&txn, &connection)?;
+        // Usage is not a configuration edit. Keep updated_at_ms and the
+        // separately stored credential intact, updating only usage indexes.
+        remove_connection_index_entries(&txn, &connection.id)?;
+        write_json_in_txn(&txn, CONNECTIONS_TABLE, &key, &connection)?;
+        insert_connection_indexes(&txn, &connection)?;
         txn.commit().map_err(storage_error)?;
         Ok(())
     }

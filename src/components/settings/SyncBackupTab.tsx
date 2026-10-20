@@ -1,4 +1,5 @@
 import { listen } from "@/lib/backend/api";
+import { confirm } from "@/lib/backend/platform/dialog";
 import { openUrl } from "@/lib/backend/platform/opener";
 import { Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -205,7 +206,7 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
       actionKey: string,
       successMessage: string,
       task: () => Promise<void>,
-      options?: { allowWhenDisabled?: boolean },
+      options?: { allowWhenDisabled?: boolean; confirmMessage?: string },
     ) => {
       if (!hasCommittedMasterPassword) {
         toast.error(t("settings.masterPasswordRequiredDesc"));
@@ -230,6 +231,7 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
 
       setRunningAction(actionKey);
       try {
+        if (options?.confirmMessage && !(await confirm(options.confirmMessage))) return;
         await task();
         await refreshStatus();
         toast.success(successMessage);
@@ -1188,6 +1190,7 @@ export function SyncBackupTab({ onNavigateSecurity }: SyncBackupTabProps) {
                             invoke("resolve_cloud_sync_conflict", {
                               action: "merge_connections",
                             }),
+                          { confirmMessage: t("settings.syncMergeConnectionsConfirm") },
                         )
                       }
                       disabled={isBusy || !canRunEnabledActions}

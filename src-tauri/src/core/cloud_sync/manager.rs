@@ -448,6 +448,15 @@ impl CloudSyncManager {
         merged.created_at_ms = current_time_ms();
         merged.payload_hash = calculate_payload_hash(&merged)?;
 
+        // Leave the old conflict status before I/O so record_failure surfaces
+        // publication/local-apply failures instead of retaining a stale preview.
+        self.set_status(
+            "running",
+            "Merging cloud sync connections".into(),
+            Some(TRIGGER.into()),
+            None,
+        )
+        .await;
         let pointer = pointer_from_snapshot(&merged);
         publish_verified_merge_snapshot(
             TRIGGER,
@@ -467,25 +476,19 @@ impl CloudSyncManager {
         )
         .await?;
 
-        // The checked local state must still match before applying the remote
-        // union. Never turn a partial/local mismatch into a synced success.
-        let before_apply =
-            build_portable_snapshot(&app, PortableSnapshotKind::Sync, &state_snapshot.device_id)?;
-        if before_apply.payload_hash != local.payload_hash {
-            return Err(AppError::Config(
-                "Merged snapshot was published but local data changed; check sync again before applying"
-                    .into(),
-            ));
-        }
-        apply_merged_connection_entities(&app, &merged)?;
-        let persisted =
-            build_portable_snapshot(&app, PortableSnapshotKind::Sync, &state_snapshot.device_id)?;
-        if persisted.payload_hash != merged.payload_hash {
-            return Err(AppError::Config(
-                "Merged cloud data was published but the local snapshot differs; check sync again"
-                    .into(),
-            ));
-        }
+        apply_published_merge_snapshot(
+            &merged,
+            &local.payload_hash,
+            || {
+                Ok(build_portable_snapshot(
+                    &app,
+                    PortableSnapshotKind::Sync,
+                    &state_snapshot.device_id,
+                )?
+                .payload_hash)
+            },
+            || apply_merged_connection_entities(&app, &merged),
+        )?;
 
         if let Err(error) =
             trace_cloud_sync_step(TRIGGER, "write_current_sync_snapshot_compat", async {
@@ -499,13 +502,15 @@ impl CloudSyncManager {
             .await?;
         {
             let mut state = self.state.lock().await;
-            state.last_synced_payload_hash = Some(merged.payload_hash.clone());
-            state.last_applied_remote_revision = Some(merged.revision_id.clone());
-            state.last_synced_at_ms = Some(current_time_ms());
-            state.last_checked_at_ms = Some(current_time_ms());
-            state.last_validated_remote_revision = Some(merged.revision_id.clone());
-            state.last_full_validation_at_ms = Some(current_time_ms());
-            config::save_cloud_sync_state(&app, &state)?;
+            let mut next = state.clone();
+            next.last_synced_payload_hash = Some(merged.payload_hash.clone());
+            next.last_applied_remote_revision = Some(merged.revision_id.clone());
+            next.last_synced_at_ms = Some(current_time_ms());
+            next.last_checked_at_ms = Some(current_time_ms());
+            next.last_validated_remote_revision = Some(merged.revision_id.clone());
+            next.last_full_validation_at_ms = Some(current_time_ms());
+            config::save_cloud_sync_state(&app, &next)?;
+            *state = next;
         }
         self.append_history(CloudSyncHistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1942,6 +1947,31 @@ async fn prune_gist_snapshots_step(
     .await;
 }
 
+/// Remote publication alone is not a completed sync. A crash or redb failure
+/// here leaves the previous sync markers intact: the next check compares the
+/// unchanged local hash against the new remote revision and offers conflict
+/// resolution (or the existing safe pull path if local data is unchanged).
+fn apply_published_merge_snapshot(
+    merged: &PortableSnapshot,
+    expected_local_hash: &str,
+    mut current_local_hash: impl FnMut() -> AppResult<String>,
+    apply: impl FnOnce() -> AppResult<()>,
+) -> AppResult<()> {
+    if current_local_hash()? != expected_local_hash {
+        return Err(AppError::Config(
+            "Merged snapshot was published but local data changed; check sync again before applying".into(),
+        ));
+    }
+    apply()?;
+    if current_local_hash()? != merged.payload_hash {
+        return Err(AppError::Config(
+            "Merged cloud data was published but the local snapshot differs; check sync again"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Publish only after the encrypted snapshot is read back and both conflict
 /// inputs are rechecked. This is a read-before-write check, not a provider CAS.
 async fn publish_verified_merge_snapshot<F, Fut>(
@@ -2528,6 +2558,135 @@ mod tests {
         assert_eq!(decoded.revision_id, merged.revision_id);
         assert_eq!(decoded.payload_hash, merged.payload_hash);
         set_master_password(None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn published_merge_local_failure_or_interruption_reenters_conflict_after_restart() {
+        let _guard = MASTER_PASSWORD_TEST_LOCK
+            .lock()
+            .expect("master password lock");
+        set_master_password(Some("merge-fixture-password".into()));
+        for interrupt_before_apply in [false, true] {
+            let (_memory, remote, settings, base) = merge_test_remote().await;
+            let mut local = merge_test_snapshot("local");
+            local.sessions.connections = serde_json::from_value(serde_json::json!([
+                {"id":"local","name":"Local","type":"ssh","host":"local.test","port":22,"username":"user"}
+            ])).unwrap();
+            local.payload_hash = calculate_payload_hash(&local).unwrap();
+            let mut other = merge_test_snapshot("other");
+            other.sessions.connections = serde_json::from_value(serde_json::json!([
+                {"id":"remote","name":"Remote","type":"ssh","host":"remote.test","port":22,"username":"user"}
+            ])).unwrap();
+            other.payload_hash = calculate_payload_hash(&other).unwrap();
+            let mut merged = merge_additive_sync_connections(&local, &other).unwrap();
+            merged.revision_id = "merged".into();
+            let manager = CloudSyncManager::new();
+            *manager.state.lock().await = synced_state(&base.revision_id, &base.payload_hash);
+            let saved_state = serde_json::to_string(&*manager.state.lock().await).unwrap();
+            manager
+                .set_status(
+                    "running",
+                    "Merging cloud sync connections".into(),
+                    Some("resolve_merge_connections".into()),
+                    None,
+                )
+                .await;
+            publish_verified_merge_snapshot(
+                "test_merge",
+                &remote,
+                &settings,
+                &base,
+                &merged,
+                &local.payload_hash,
+                || async { Ok(local.payload_hash.clone()) },
+            )
+            .await
+            .expect("remote commit succeeds before local apply");
+            assert_merge_pointer_is(&remote, &settings, &pointer_from_snapshot(&merged)).await;
+            if !interrupt_before_apply {
+                let failure = apply_published_merge_snapshot(
+                    &merged,
+                    &local.payload_hash,
+                    || Ok(local.payload_hash.clone()),
+                    || {
+                        Err(AppError::Io(std::io::Error::other(
+                            "injected redb write failure",
+                        )))
+                    },
+                )
+                .expect_err("local write must fail after remote commit");
+                manager
+                    .record_failure("sync", "merge_connections", &failure)
+                    .await;
+                let status = manager.status.lock().await;
+                assert_eq!(status.state, "failed");
+                assert!(status.message.contains("injected redb write failure"));
+                assert!(status.current_operation.is_none());
+            }
+            assert_eq!(
+                serde_json::to_string(&*manager.state.lock().await).unwrap(),
+                saved_state
+            );
+            // Restart from the durable pre-merge markers, including the case
+            // where the process exited before the local write was attempted.
+            let restarted: CloudSyncState = serde_json::from_str(&saved_state).unwrap();
+            let head = load_sync_pointer(&remote, &settings.remote_root)
+                .await
+                .unwrap()
+                .unwrap();
+            for auto_pull in [false, true] {
+                assert_eq!(
+                    decide_remote_check(&restarted, &local.payload_hash, &head, auto_pull),
+                    RemoteCheckDecision::Conflict
+                );
+            }
+            assert_eq!(
+                restarted.last_synced_payload_hash.as_deref(),
+                Some(base.payload_hash.as_str())
+            );
+            assert_eq!(
+                restarted.last_applied_remote_revision.as_deref(),
+                Some(base.revision_id.as_str())
+            );
+            // The existing merge route can safely recompute the union from
+            // the now-current, decrypted/validated remote snapshot.
+            let published = read_snapshot_for_pointer(&remote, &settings.remote_root, &head)
+                .await
+                .unwrap();
+            let recovered = merge_additive_sync_connections(&local, &published).unwrap();
+            assert_eq!(recovered.payload_hash, merged.payload_hash);
+            assert_eq!(recovered.sessions.connections.len(), 2);
+            let persisted_hash = std::cell::RefCell::new(local.payload_hash.clone());
+            apply_published_merge_snapshot(
+                &recovered,
+                &local.payload_hash,
+                || Ok(persisted_hash.borrow().clone()),
+                || {
+                    *persisted_hash.borrow_mut() = recovered.payload_hash.clone();
+                    Ok(())
+                },
+            )
+            .expect("retry applies verified union");
+        }
+        set_master_password(None);
+    }
+
+    #[test]
+    fn published_merge_refuses_local_drift_and_failed_persistence_verification() {
+        let merged = merge_test_snapshot("merged");
+        assert!(
+            apply_published_merge_snapshot(
+                &merged,
+                "source",
+                || Ok("changed".into()),
+                || panic!("must not overwrite changed local data")
+            )
+            .is_err()
+        );
+        assert!(
+            apply_published_merge_snapshot(&merged, "source", || Ok("source".into()), || Ok(()))
+                .is_err()
+        );
     }
 
     #[test]

@@ -39,12 +39,7 @@ pub fn merge_additive_sync_connections(
     unchanged!(notes);
 
     let mut merged = local.clone();
-    merge_by_id(
-        &mut merged.sessions.connections,
-        &remote.sessions.connections,
-        |entry| &entry.id,
-        "connection",
-    )?;
+    merge_connections(&mut merged.sessions.connections, &remote.sessions.connections)?;
     merge_by_id(
         &mut merged.sessions.groups,
         &remote.sessions.groups,
@@ -101,6 +96,29 @@ pub fn merge_additive_sync_connections(
     validate_portable_snapshot(&merged)?;
     crate::storage::backup::validate_backup_data(&merged)?;
     Ok(merged)
+}
+
+// Only usage metadata is mergeable. In particular, updated_at_ms records
+// configuration edits and must still match, along with auth/network settings.
+fn merge_connections(
+    local: &mut Vec<config::SavedConnection>,
+    remote: &[config::SavedConnection],
+) -> AppResult<()> {
+    for entry in remote {
+        if let Some(existing) = local.iter_mut().find(|item| item.id == entry.id) {
+            let mut comparable = entry.clone();
+            comparable.last_used_at_ms = existing.last_used_at_ms;
+            if serde_json::to_value(&*existing)? != serde_json::to_value(&comparable)? {
+                return Err(AppError::Config(format!(
+                    "Cloud sync merge refused: conflicting connection ID '{}'", entry.id
+                )));
+            }
+            existing.last_used_at_ms = existing.last_used_at_ms.max(entry.last_used_at_ms);
+        } else {
+            local.push(entry.clone());
+        }
+    }
+    Ok(())
 }
 
 fn merge_by_id<T: Clone + Serialize>(
@@ -239,6 +257,66 @@ mod merge_tests {
         );
         assert_eq!(merged.device_id, local.device_id);
         validate_portable_snapshot(&merged).expect("valid merged hash");
+    }
+
+    #[test]
+    fn merge_usage_metadata_keeps_newest_and_valid_hash() {
+        for (left, right, expected) in [
+            (Some(10), Some(20), Some(20)),
+            (Some(20), Some(10), Some(20)),
+            (None, Some(20), Some(20)),
+            (Some(20), None, Some(20)),
+            (None, None, None),
+        ] {
+            let mut local = snapshot();
+            local.sessions.connections.push(connection("shared", "Shared"));
+            local.sessions.connections[0].updated_at_ms = Some(5);
+            let mut remote = local.clone();
+            local.sessions.connections[0].last_used_at_ms = left;
+            remote.sessions.connections[0].last_used_at_ms = right;
+            rehash(&mut local);
+            rehash(&mut remote);
+            let merged = merge_additive_sync_connections(&local, &remote).expect("usage merge");
+            assert_eq!(merged.sessions.connections[0].last_used_at_ms, expected);
+            assert_eq!(merged.sessions.connections[0].updated_at_ms, Some(5));
+            validate_portable_snapshot(&merged).expect("valid merged hash");
+        }
+    }
+
+    #[test]
+    fn merge_usage_metadata_still_rejects_configuration_edits() {
+        let mut local = snapshot();
+        local.sessions.connections.push(connection("shared", "Shared"));
+        local.sessions.connections[0].last_used_at_ms = Some(10);
+        rehash(&mut local);
+        for patch in [
+            serde_json::json!({"host":"changed.net"}),
+            serde_json::json!({"port":2222}),
+            serde_json::json!({"username":"other"}),
+            serde_json::json!({"auth":{"mode":"password","password":"encrypted-other"}}),
+            serde_json::json!({"network":{"proxy_jump_id":"shared"}}),
+            serde_json::json!({"updated_at_ms":99}),
+            serde_json::json!({"created_at_ms":99}),
+        ] {
+            let mut remote = local.clone();
+            let mut value = serde_json::to_value(&remote.sessions.connections[0]).unwrap();
+            value.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            remote.sessions.connections[0] = serde_json::from_value(value).unwrap();
+            remote.sessions.connections[0].last_used_at_ms = Some(20);
+            rehash(&mut remote);
+            assert!(merge_additive_sync_connections(&local, &remote)
+                .unwrap_err().to_string().contains("conflicting connection ID"));
+        }
+        let mut remote = local.clone();
+        local.sessions.groups = serde_json::from_value(serde_json::json!([
+            {"id":"group","name":"Group","updated_at_ms":1}
+        ])).unwrap();
+        remote.sessions.groups = local.sessions.groups.clone();
+        remote.sessions.groups[0].updated_at_ms = Some(2);
+        rehash(&mut local);
+        rehash(&mut remote);
+        assert!(merge_additive_sync_connections(&local, &remote)
+            .unwrap_err().to_string().contains("conflicting connection group ID"));
     }
 
     #[test]

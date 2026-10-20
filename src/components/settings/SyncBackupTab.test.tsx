@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   isSaving: false,
   hasMasterPassword: true,
   invoke: vi.fn(),
+  confirm: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
 }));
@@ -39,6 +40,7 @@ vi.mock("@/context/SettingsDraftContext", () => ({
     isSaving: state.isSaving,
   }),
 }));
+vi.mock("@/lib/backend/platform/dialog", () => ({ confirm: state.confirm }));
 vi.mock("@/lib/invoke", () => ({ invoke: state.invoke }));
 vi.mock("@/lib/backend/api", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("react-i18next", () => ({
@@ -72,6 +74,7 @@ function conflictStatus(kind: "content_conflict" | "remote_inconsistent"): Cloud
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.confirm.mockResolvedValue(true);
   cloudSettings.enabled = true;
   state.status = conflictStatus("content_conflict");
   state.isDirty = false;
@@ -100,9 +103,54 @@ describe("SyncBackupTab additive cloud conflict resolution", () => {
         action: "merge_connections",
       }),
     );
+    expect(state.confirm).toHaveBeenCalledWith("settings.syncMergeConnectionsConfirm");
     await waitFor(() =>
       expect(state.success).toHaveBeenCalledWith("settings.syncResolveMergeSuccess"),
     );
+  });
+
+  it("cancelling the warning does not merge or report success", async () => {
+    state.confirm.mockResolvedValue(false);
+    render(<SyncBackupTab onNavigateSecurity={vi.fn()} />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "settings.syncMergeConnections",
+      }),
+    );
+    await waitFor(() => expect(state.confirm).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "settings.syncMergeConnections",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    expect(state.invoke).not.toHaveBeenCalledWith(
+      "resolve_cloud_sync_conflict",
+      expect.anything(),
+    );
+    expect(state.success).not.toHaveBeenCalled();
+  });
+
+  it("does not report success when publication succeeded but local apply failed", async () => {
+    state.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_cloud_sync_status") return state.status;
+      throw new Error("injected redb write failure after remote publish");
+    });
+    render(<SyncBackupTab onNavigateSecurity={vi.fn()} />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "settings.syncMergeConnections",
+      }),
+    );
+    await waitFor(() =>
+      expect(state.error).toHaveBeenCalledWith(
+        "injected redb write failure after remote publish",
+      ),
+    );
+    expect(state.success).not.toHaveBeenCalled();
   });
 
   it("does not offer merge for inconsistent remote metadata", async () => {
@@ -148,8 +196,8 @@ describe("SyncBackupTab additive cloud conflict resolution", () => {
     fireEvent.click(merge);
     await waitFor(() => expect((merge as HTMLButtonElement).disabled).toBe(true));
     fireEvent.click(merge);
-    expect(
+    await waitFor(() => expect(
       state.invoke.mock.calls.filter(([command]) => command === "resolve_cloud_sync_conflict"),
-    ).toHaveLength(1);
+    ).toHaveLength(1));
   });
 });
