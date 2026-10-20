@@ -530,6 +530,7 @@ impl NyaTermApp {
 
     pub(super) fn send_current_transfer_browser_path_to_terminal(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.session.active_id().is_none() {
@@ -544,7 +545,7 @@ impl NyaTermApp {
                 .set_status("sent current remote directory to terminal".to_string());
             self.transfer
                 .set_browser_status(truncate_preview(&path, 92));
-            cx.notify();
+            self.focus_terminal_input(window, cx);
         }
     }
 

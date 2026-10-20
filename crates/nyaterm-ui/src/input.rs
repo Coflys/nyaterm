@@ -279,6 +279,21 @@ impl ComponentState {
             }
         }
     }
+
+    fn move_cursor_to_end(&self, cx: &mut App) {
+        let end = self.value(cx).len();
+        match self {
+            Self::Input(state) => {
+                state.update(cx, |state, cx| state.set_selected_range(end..end, cx))
+            }
+            Self::Textarea(state) => {
+                state.update(cx, |state, cx| state.set_selected_range(end..end, cx))
+            }
+            Self::Editor(state) => {
+                state.update(cx, |state, cx| state.set_selected_range(end..end, cx))
+            }
+        }
+    }
 }
 
 pub struct NyaInputState {
@@ -483,6 +498,12 @@ impl NyaInputState {
         let state = self.ensure_component(window, cx);
         state.focus(window, cx);
         state.select_all_with_cursor_at_end(cx);
+    }
+
+    pub fn focus_with_cursor_at_end(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = self.ensure_component(window, cx);
+        state.focus(window, cx);
+        state.move_cursor_to_end(cx);
     }
 
     pub fn focus_handle(&self) -> FocusHandle {

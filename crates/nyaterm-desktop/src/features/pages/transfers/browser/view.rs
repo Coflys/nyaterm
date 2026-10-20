@@ -790,8 +790,8 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                                 "icons/fe/send-path.svg",
                                 t!("fileExplorer.sendToTerminal"),
                                 true,
-                                cx.listener(|panel, _, _, cx| panel.with_app(cx, |this, cx| {
-                                    this.send_current_transfer_browser_path_to_terminal(cx);
+                                cx.listener(|panel, _, window, cx| panel.with_app(cx, |this, cx| {
+                                    this.send_current_transfer_browser_path_to_terminal(window, cx);
                                 })),
                             )),
                     ),

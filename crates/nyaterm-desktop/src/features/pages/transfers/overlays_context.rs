@@ -216,8 +216,8 @@ impl NyaTermApp {
                             NyaMenuItem::separator(),
                             NyaMenuItem::action(t!("fileExplorer.cmTerminalDirPath"))
                                 .icon("icons/fe/send-path.svg")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.send_current_transfer_browser_path_to_terminal(cx);
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.send_current_transfer_browser_path_to_terminal(window, cx);
                                 })),
                         ],
                     )
@@ -498,25 +498,28 @@ impl NyaTermApp {
                     terminal_items.extend([
                         NyaMenuItem::action(t!("fileExplorer.cmTerminalPath"))
                             .icon("icons/fe/send-path.svg")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.send_selected_transfer_path_to_terminal(
                                     TransferPathPart::Full,
+                                    window,
                                     cx,
                                 );
                             })),
                         NyaMenuItem::action(t!("fileExplorer.cmTerminalName"))
                             .icon("icons/fe/send-path.svg")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.send_selected_transfer_path_to_terminal(
                                     TransferPathPart::Name,
+                                    window,
                                     cx,
                                 );
                             })),
                         NyaMenuItem::action(t!("fileExplorer.cmTerminalDirPath"))
                             .icon("icons/fe/send-path.svg")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.send_selected_transfer_path_to_terminal(
                                     TransferPathPart::Directory,
+                                    window,
                                     cx,
                                 );
                             })),
