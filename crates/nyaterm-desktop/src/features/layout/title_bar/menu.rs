@@ -653,11 +653,19 @@ mod tests {
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
         let before = cx.read_entity(&app, |app, _| app.settings.summary().terminal_font_size);
-        cx.update(|cx| {
-            crate::shortcuts::rebuild_keymap(
-                &std::collections::HashMap::from([("view.zoomIn".into(), "Ctrl+Alt+U".into())]),
-                cx,
-            )
+        cx.update_entity(&app, |app, cx| {
+            // Zoom saves appearance settings and reapplies the stored keymap on
+            // completion, so the override must also exist in persistent settings.
+            let saved = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.save_keybindings(&std::collections::HashMap::from([(
+                        "view.zoomIn".into(),
+                        "Ctrl+Alt+U".into(),
+                    )]))
+                })
+                .expect("save custom zoom shortcut");
+            app.apply_gpui_settings(saved, cx);
         });
         let window = cx.add_window(|window, cx| {
             let focus = cx.focus_handle();

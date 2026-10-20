@@ -422,7 +422,6 @@ impl NyaTermApp {
                 Node::Action(Action::SendTo) => {
                     let send_items = send_targets
                         .iter()
-                        .cloned()
                         .map(|target| {
                             let session_id = target.session_id.clone();
                             NyaMenuItem::action(target.label.clone())
