@@ -97,12 +97,6 @@ impl SettingsPanel {
                     )
                     .child(settings_form_row(
                         palette,
-                        t!("settings.hardwareAcceleration"),
-                        Some(SharedString::from(t!("settings.hardwareAccelerationDesc"))),
-                        div().text_xs().child(t!("settings.nativeGpuRenderer")),
-                    ))
-                    .child(settings_form_row(
-                        palette,
                         t!("settings.zebraStripes"),
                         Some(SharedString::from(t!("settings.zebraStripesDesc"))),
                         settings_switch(

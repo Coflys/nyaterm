@@ -234,6 +234,7 @@ pub struct AppSettingsSummary {
     pub terminal_keep_alive_interval: u32,
     #[serde(default = "default_terminal_timestamp_format")]
     pub terminal_timestamp_format: String,
+    /// Retained only to round-trip legacy settings; GPUI owns renderer selection.
     pub terminal_hardware_acceleration: bool,
     pub terminal_show_workspace_padding: bool,
     pub terminal_show_line_numbers: bool,
