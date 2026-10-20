@@ -1240,6 +1240,7 @@ export interface GeneralSettings {
   minimize_to_tray: boolean;
   boss_key: string | null;
   confirm_on_close: boolean;
+  /** Legacy fallback for saved connections without an explicit client preference. */
   rdp_client_mode: RdpClientMode;
 }
 

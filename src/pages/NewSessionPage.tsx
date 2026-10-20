@@ -265,7 +265,7 @@ export default function NewSessionPage() {
   const [newGroupParentId, setNewGroupParentId] = useState("");
   const [currentTab, setCurrentTab] = useState<EditorProtocol>("ssh");
   const [rdpUseNla, setRdpUseNla] = useState(true);
-  const [rdpClientMode, setRdpClientMode] = useState<RdpClientMode | "default">("default");
+  const [rdpClientMode, setRdpClientMode] = useState<RdpClientMode>("builtin");
   const [rdpCertificatePolicy, setRdpCertificatePolicy] = useState<RdpCertificatePolicy>("prompt");
   const [rdpDisplayMode, setRdpDisplayMode] = useState<RdpDisplayMode>("fit-window");
   const [rdpDisplayWidth, setRdpDisplayWidth] = useState(1920);
@@ -474,7 +474,8 @@ export default function NewSessionPage() {
           setSerialModemUploadProtocol(found.modem_upload_protocol || "zmodem");
           setSerialFlowControl(found.flow_control ?? "none");
         } else if (found.type === "rdp") {
-          setRdpClientMode(found.rdp_client_mode ?? "default");
+          // Preserve the effective client for connections saved before per-session selection.
+          setRdpClientMode(found.rdp_client_mode ?? appSettings.general.rdp_client_mode ?? "builtin");
           setHost(found.host || "");
           setRdpPort(found.port || 3389);
           setUsername(found.username || DEFAULT_RDP_USERNAME);
@@ -516,6 +517,7 @@ export default function NewSessionPage() {
       .then(setCustomIcons)
       .catch((e) => setError(getErrorMessage(e)));
   }, [
+    appSettings.general.rdp_client_mode,
     appSettings.recording.auto_start,
     appSettings.recording.default_mode,
     editId,
@@ -614,7 +616,7 @@ export default function NewSessionPage() {
     setTelnetSendNaws(true);
     setTelnetSendSga(true);
     setRdpUseNla(true);
-    setRdpClientMode("default");
+    setRdpClientMode("builtin");
     setRdpCertificatePolicy("prompt");
     setRdpDisplayMode("fit-window");
     setRdpDisplayWidth(1920);
@@ -1192,7 +1194,7 @@ export default function NewSessionPage() {
           : {}),
         ...(currentTab === "rdp"
           ? {
-              ...(rdpClientMode !== "default" ? { rdp_client_mode: rdpClientMode } : {}),
+              rdp_client_mode: rdpClientMode,
               host: normalizedHost,
               port: rdpPort,
               username: normalizedUsername,
@@ -1855,7 +1857,6 @@ export default function NewSessionPage() {
             <RdpForm
               clientMode={rdpClientMode}
               setClientMode={setRdpClientMode}
-              defaultClientMode={appSettings.general.rdp_client_mode ?? "builtin"}
               host={host}
               setHost={setHost}
               port={rdpPort}

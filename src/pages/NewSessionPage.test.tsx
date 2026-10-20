@@ -15,6 +15,7 @@ const {
   telnetFormMock,
   translateMock,
   supportsMock,
+  legacySettings,
 } = vi.hoisted(() => ({
   closeMock: vi.fn(),
   emitMock: vi.fn(),
@@ -26,6 +27,7 @@ const {
   sshFormMock: vi.fn(),
   telnetFormMock: vi.fn(),
   supportsMock: vi.fn(() => true),
+  legacySettings: { rdp_client_mode: "builtin" },
   translateMock: (key: string, fallback?: unknown) =>
     typeof fallback === "string" ? fallback : key,
 }));
@@ -33,7 +35,7 @@ const {
 vi.mock("@/context/AppContext", () => ({
   useApp: () => ({
     appSettings: {
-      general: { rdp_client_mode: "builtin" },
+      general: legacySettings,
       recording: {
         auto_start: false,
         default_mode: "transcript",
@@ -277,6 +279,7 @@ const vncConnection: SavedConnection = {
 
 describe("NewSessionPage", () => {
   beforeEach(() => {
+    legacySettings.rdp_client_mode = "builtin";
     supportsMock.mockReset();
     supportsMock.mockReturnValue(true);
     window.history.replaceState({}, "", `/?edit=${rdpConnection.id}`);
@@ -410,7 +413,8 @@ describe("NewSessionPage", () => {
     });
   });
 
-  it("defaults a new RDP connection to following the global client", async () => {
+  it("defaults a new RDP connection to built-in even with a legacy Windows default", async () => {
+    legacySettings.rdp_client_mode = "windows";
     window.history.replaceState({}, "", "/");
     render(<NewSessionPage />);
     fireEvent.mouseDown(screen.getByRole("tab", { name: "RDP" }), {
@@ -419,14 +423,13 @@ describe("NewSessionPage", () => {
     await waitFor(() =>
       expect(rdpFormMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          clientMode: "default",
-          defaultClientMode: "builtin",
+          clientMode: "builtin",
         }),
       ),
     );
   });
 
-  it.each(["builtin", "windows", "default"] as const)(
+  it.each(["builtin", "windows"] as const)(
     "saves RDP client choice %s while preserving connection parameters",
     async (mode) => {
       render(<NewSessionPage />);
@@ -447,12 +450,40 @@ describe("NewSessionPage", () => {
       const saved = invokeMock.mock.calls.find(
         ([command]) => command === "save_connection",
       )?.[1].connection;
-      if (mode === "default")
-        expect(saved).not.toHaveProperty("rdp_client_mode");
-      else expect(saved.rdp_client_mode).toBe(mode);
+      expect(saved.rdp_client_mode).toBe(mode);
       expect(saved.network).toEqual(rdpConnection.network);
       expect(saved.security).toEqual(rdpConnection.security);
       expect(saved.display).toEqual(rdpConnection.display);
+    },
+  );
+
+  it.each(["builtin", "windows"] as const)(
+    "materializes the legacy %s client when editing and saving an inherited connection",
+    async (mode) => {
+      legacySettings.rdp_client_mode = mode;
+      const baseInvoke = invokeMock.getMockImplementation();
+      invokeMock.mockImplementation((command: string, ...args: unknown[]) => {
+        if (command === "get_saved_connections") {
+          const { rdp_client_mode: _mode, ...legacyConnection } = rdpConnection;
+          return Promise.resolve([legacyConnection, jumpHost]);
+        }
+        return baseInvoke?.(command, ...args);
+      });
+      render(<NewSessionPage />);
+      await waitFor(() =>
+        expect(rdpFormMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({ clientMode: mode }),
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_connection",
+          expect.objectContaining({
+            connection: expect.objectContaining({ rdp_client_mode: mode }),
+          }),
+        ),
+      );
     },
   );
 
