@@ -34,7 +34,9 @@ impl NyaTermApp {
             source_workspace_id: self.workspace_id,
             root_tab_id: key.clone(),
             source_revision: self.workspace_revision(),
-            tab_id: WorkspaceTabId::from_layout_key(&key),
+            tab_id: crate::features::shell::session_tabs::SessionStripTabId::Workspace(
+                WorkspaceTabId::from_layout_key(&key),
+            ),
             order_index: index,
             source_group_id: self.shell.terminal_group_for_tab(&key),
             display_name: document.name.clone(),
@@ -95,8 +97,15 @@ impl NyaTermApp {
             })
             .on_drop(
                 cx.listener(move |app, payload: &WorkspaceTabDragPayload, _, cx| {
-                    app.accept_session_tab_drop(payload, cx);
                     let group = app.shell.terminal_group_for_tab(&drop_key);
+                    if payload.tab_id.is_start()
+                        && (payload.source_workspace_id != app.workspace_id
+                            || payload.source_group_id != group)
+                    {
+                        app.clear_session_tab_drag(cx);
+                        return;
+                    }
+                    app.accept_session_tab_drop(payload, cx);
                     if app.commit_session_tab_preview(payload, &group, cx) {
                         return;
                     }

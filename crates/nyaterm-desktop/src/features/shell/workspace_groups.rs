@@ -2,86 +2,17 @@ use crate::features::NyaTermApp;
 use crate::models::TerminalWindowNode;
 use gpui::{Context, Window};
 
-enum GroupTabTarget {
-    Session(String),
-    Pending(String),
-    Failed(String),
-}
-
 impl NyaTermApp {
-    fn terminal_group_tab_targets(&self) -> Vec<GroupTabTarget> {
-        let group = self.current_terminal_group();
-        let belongs = |placement: Option<crate::features::session::SessionStartTabPlacement>| {
-            group.is_none()
-                || placement
-                    .and_then(|p| self.shell.terminal_start_display_group(p.request_sequence))
-                    .or_else(|| self.shell.first_terminal_group())
-                    == group
-        };
-        let mut transient = self
-            .session
-            .start_pending_entries()
-            .filter(|(_, pending)| {
-                pending.reconnect_session_id.is_none() && belongs(pending.tab_placement)
-            })
-            .map(|(id, pending)| {
-                let key = pending
-                    .tab_placement
-                    .map(|p| (p.insert_index, p.request_sequence))
-                    .unwrap_or((usize::MAX, u64::MAX));
-                (key, GroupTabTarget::Pending(id.clone()))
-            })
-            .chain(
-                self.session
-                    .start_failed_entries()
-                    .filter(|(_, failed)| belongs(failed.pending.tab_placement))
-                    .map(|(id, failed)| {
-                        let key = failed
-                            .pending
-                            .tab_placement
-                            .map(|p| (p.insert_index, p.request_sequence))
-                            .unwrap_or((usize::MAX, u64::MAX));
-                        (key, GroupTabTarget::Failed(id.clone()))
-                    }),
-            )
-            .collect::<Vec<_>>();
-        transient.sort_by_key(|(key, _)| *key);
-        let mut transient = transient.into_iter().peekable();
-        let mut targets = Vec::new();
-        let tabs = group
-            .as_deref()
-            .and_then(|group| self.shell.terminal_group_tabs(group))
-            .map(|(tabs, _)| tabs)
-            .unwrap_or_else(|| self.workspace_tab_ids());
-        for (index, id) in tabs.into_iter().enumerate() {
-            let key = self
-                .session
-                .session_start_tab_placement(&id)
-                .map(|p| (p.insert_index, p.request_sequence))
-                .unwrap_or((index, u64::MAX));
-            while transient.peek().is_some_and(|(next, _)| *next < key) {
-                targets.push(transient.next().unwrap().1);
-            }
-            targets.push(GroupTabTarget::Session(id));
-        }
-        targets.extend(transient.map(|(_, target)| target));
-        targets
-    }
-
     pub(in crate::features) fn select_terminal_group_tab(
         &mut self,
         index: usize,
         cx: &mut Context<Self>,
     ) {
-        let targets = self.terminal_group_tab_targets();
+        let targets = self.session_strip_tabs(&self.current_terminal_group());
         let Some(target) = targets.get(index.min(targets.len().saturating_sub(1))) else {
             return;
         };
-        match target {
-            GroupTabTarget::Session(id) => self.select_session(id.clone(), cx),
-            GroupTabTarget::Pending(id) => self.select_pending_session_start(id.clone(), cx),
-            GroupTabTarget::Failed(id) => self.select_failed_session_start(id.clone(), cx),
-        }
+        self.activate_session_strip_tab(target, cx);
         self.sync_terminal_frame_snapshot_priority();
     }
 
@@ -90,28 +21,30 @@ impl NyaTermApp {
         offset: isize,
         cx: &mut Context<Self>,
     ) {
-        let targets = self.terminal_group_tab_targets();
+        let targets = self.session_strip_tabs(&self.current_terminal_group());
         if targets.is_empty() {
             return;
         }
         let current = targets
             .iter()
-            .position(|target| match target {
-                GroupTabTarget::Session(id) => {
-                    !self.session.start_has_active_pending()
-                        && !self.session.start_has_active_failed()
-                        && self.active_workspace_tab().as_deref() == Some(id.as_str())
-                }
-                GroupTabTarget::Pending(id) | GroupTabTarget::Failed(id) => {
-                    self.session.start_request_is_active(id)
-                }
+            .position(|target| {
+                target.request_id.as_deref().map_or_else(
+                    || {
+                        !self.session.start_has_active_pending()
+                            && !self.session.start_has_active_failed()
+                            && self.active_workspace_tab().as_deref()
+                                == Some(target.id.layout_key().as_str())
+                    },
+                    |id| self.session.start_request_is_active(id),
+                )
             })
             .unwrap_or(0);
         let next = (current as isize + offset).rem_euclid(targets.len() as isize) as usize;
         self.select_terminal_group_tab(next, cx);
     }
     pub(in crate::features) fn terminal_group_tab_count(&self) -> usize {
-        self.terminal_group_tab_targets().len()
+        self.session_strip_tabs(&self.current_terminal_group())
+            .len()
     }
     pub(in crate::features) fn terminal_group_can_split(
         &self,

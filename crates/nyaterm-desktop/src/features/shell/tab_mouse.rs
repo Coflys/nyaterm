@@ -18,7 +18,7 @@ pub(in crate::features) struct WorkspaceTabDragPayload {
     pub source_workspace_id: nyaterm_core::WorkspaceId,
     pub root_tab_id: String,
     pub source_revision: u64,
-    pub tab_id: crate::models::WorkspaceTabId,
+    pub tab_id: super::session_tabs::SessionStripTabId,
     pub order_index: usize,
     pub source_group_id: Option<String>,
     pub display_name: String,

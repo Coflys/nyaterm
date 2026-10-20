@@ -16,6 +16,7 @@ mod persistence_debounce;
 mod post_start_work;
 mod quick_switch_runtime;
 mod runtime_state;
+pub(in crate::features) mod session_tabs;
 mod shortcut_action_runtime;
 mod state;
 mod status_clocks;

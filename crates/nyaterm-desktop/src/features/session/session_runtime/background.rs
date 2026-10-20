@@ -29,6 +29,9 @@ impl NyaTermApp {
         &mut self,
         mut options: SavedConnectionStartOptions,
     ) -> SavedConnectionStartOptions {
+        options.tab_placement = options
+            .tab_placement
+            .map(|p| self.session.start.resolve_placement(p));
         if options.reconnect_session_id.is_some() {
             return options;
         }
@@ -139,7 +142,12 @@ impl NyaTermApp {
         registration: PendingSessionStartRegistration,
         cx: &mut Context<Self>,
     ) -> String {
-        let request_id = uuid();
+        let request_id = self
+            .session
+            .start
+            .preparing_retry_request(registration.tab_placement)
+            .map(str::to_string)
+            .unwrap_or_else(uuid);
         let PendingSessionStartRegistration {
             connection_name,
             launch_config,
@@ -160,8 +168,14 @@ impl NyaTermApp {
             status_message,
             append_start_log,
         } = registration;
-        let requested_at = tab_placement
-            .map(|placement| placement.requested_at)
+        self.session.start.finish_retry_preparation(&request_id);
+        let requested_at = self
+            .session
+            .start
+            .pending_entries()
+            .find(|(id, _)| *id == &request_id)
+            .map(|(_, pending)| pending.requested_at)
+            .or_else(|| tab_placement.map(|placement| placement.requested_at))
             .unwrap_or_else(Instant::now);
 
         let reconnecting = self.session.start.register_pending(
@@ -214,12 +228,16 @@ impl NyaTermApp {
         if let Some(label) = launch_config.encoding()
             && let Err(error) = nyaterm_core::character_encoding::CharacterEncoding::parse(label)
         {
-            self.shell
-                .set_status(crate::features::terminal::encoding_error_text(error));
+            let error = crate::features::terminal::encoding_error_text(error);
+            self.fail_retry_preparation(&options, error.clone(), cx);
+            self.shell.set_status(error);
             cx.notify();
             return;
         }
 
+        if !self.session.start.retry_is_pending(&options) {
+            return;
+        }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
             custom_name,
@@ -232,6 +250,7 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            retry_request_id: _,
         } = options;
         let kind = session_kind_for_launch_config(&launch_config);
         let multiplex_key = matches!(launch_config, SessionLaunchConfig::Ssh(_))
@@ -314,6 +333,9 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
+        if !self.session.start.retry_is_pending(&options) {
+            return;
+        }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
             custom_name,
@@ -326,6 +348,7 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            retry_request_id: _,
         } = options;
         config.deferred_pty = true;
         let geometry_session_hint = after_session_id
@@ -407,6 +430,9 @@ impl NyaTermApp {
             existing_multiplex,
             existing_multiplex_key,
         } = request;
+        if !self.session.start.retry_is_pending(&options) {
+            return;
+        }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
             custom_name,
@@ -419,6 +445,7 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            retry_request_id: _,
         } = options;
         config.deferred_pty = true;
         let geometry_session_hint = after_session_id
@@ -559,7 +586,11 @@ impl NyaTermApp {
         .detach();
     }
 
-    fn apply_session_start_event(&mut self, event: SessionStartResult, cx: &mut Context<Self>) {
+    pub(in crate::features::session) fn apply_session_start_event(
+        &mut self,
+        event: SessionStartResult,
+        cx: &mut Context<Self>,
+    ) {
         let request_id = event.request_id.clone();
         let (pending, was_active_pending) =
             match self.session.start.take_event_request(&event.request_id) {
@@ -646,7 +677,10 @@ impl NyaTermApp {
                 let source_connection_id = pending
                     .as_ref()
                     .and_then(|pending| pending.source_connection_id.clone());
-                let tab_placement = pending.as_ref().and_then(|pending| pending.tab_placement);
+                let tab_placement = pending
+                    .as_ref()
+                    .and_then(|pending| pending.tab_placement)
+                    .map(|p| self.session.start.resolve_placement(p));
                 let fallback_insert_index = pending
                     .as_ref()
                     .and_then(|pending| pending.insert_index)

@@ -124,7 +124,7 @@ impl NyaTermApp {
             return self.pending_workspace_state().into_any_element();
         }
         if self.session.start_has_active_failed() {
-            return self.failed_workspace_state().into_any_element();
+            return self.failed_workspace_state(cx).into_any_element();
         }
         if self
             .session
@@ -138,7 +138,7 @@ impl NyaTermApp {
                 || (self.shell.last_connect_failure_name().is_some()
                     && self.shell.last_connect_failure_error().is_some())
             {
-                return self.failed_workspace_state().into_any_element();
+                return self.failed_workspace_state(cx).into_any_element();
             }
             return self.empty_workspace_state(cx).into_any_element();
         }

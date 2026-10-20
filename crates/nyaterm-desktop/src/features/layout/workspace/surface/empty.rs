@@ -138,8 +138,12 @@ impl NyaTermApp {
             )
     }
 
-    pub(in crate::features) fn failed_workspace_state(&self) -> impl IntoElement {
+    pub(in crate::features) fn failed_workspace_state(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let palette = self.theme_palette();
+        let request_id = self.session.active_failed_request_id().map(str::to_string);
         let error = self
             .session
             .start_active_failed()
@@ -185,5 +189,20 @@ impl NyaTermApp {
                             .child(truncate_preview(&error, 160)),
                     ),
             )
+            .when_some(request_id, |this, request_id| {
+                this.child(
+                    div()
+                        .debug_selector(|| "failed-session-reconnect-target".into())
+                        .child(nyaterm_ui::small_button(
+                            palette,
+                            "failed-session-reconnect",
+                            t!("tabCtx.reconnect"),
+                            cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.retry_failed_session_start(request_id.clone(), window, cx);
+                            }),
+                        )),
+                )
+            })
     }
 }

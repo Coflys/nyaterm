@@ -2,6 +2,7 @@ use rust_i18n::t;
 use std::time::Instant;
 
 use super::tab_motion::{TabMotionElement, TabStripViewportElement};
+use crate::features::shell::session_tabs::{SessionStripTab, SessionStripTabId};
 
 use gpui::{
     Anchor, ClickEvent, Context, FontWeight, IntoElement, MouseButton, ScrollDelta,
@@ -24,17 +25,6 @@ const SESSION_TAB_MAX_WIDTH: f32 = 236.;
 const SESSION_TAB_ACTION_SIZE: f32 = 36.;
 const SESSION_TAB_END_DROP_TARGET_MIN_WIDTH: f32 = 28.;
 const TAB_STRIP_OVERFLOW_TOLERANCE: f32 = 2.;
-
-fn pending_tab_insert_index(
-    session_count: usize,
-    after_position: Option<usize>,
-    insert_index: Option<usize>,
-) -> usize {
-    insert_index
-        .or_else(|| after_position.map(|index| index + 1))
-        .unwrap_or(session_count)
-        .min(session_count)
-}
 
 fn tab_drop_insert_after(source_index: usize, target_index: usize) -> Option<bool> {
     match target_index.cmp(&source_index) {
@@ -69,16 +59,6 @@ fn tab_strip_overflows(
         0.
     };
     max_offset > occupied_control_width + end_drop_target_width + TAB_STRIP_OVERFLOW_TOLERANCE
-}
-
-type TransientSessionTab = (usize, u64, String, String, String, Option<String>);
-type SessionTabOrderKey = (usize, u64);
-
-fn transient_tab_precedes_session(
-    transient: &TransientSessionTab,
-    session_key: SessionTabOrderKey,
-) -> bool {
-    (transient.0, transient.1) < session_key
 }
 
 /// A view boundary keeps animation frames inside the strip. The application
@@ -230,20 +210,51 @@ impl NyaTermApp {
 
     fn failed_session_tab(
         &mut self,
-        request_id: String,
-        failed_name: String,
-        failed_error: String,
+        tab: SessionStripTab,
         tab_number: usize,
-        active: bool,
+        group: Option<String>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let SessionStripTab {
+            id: SessionStripTabId::Start(sequence),
+            request_id: Some(request_id),
+            name: failed_name,
+            error: Some(failed_error),
+        } = tab
+        else {
+            unreachable!("failed tab requires a failed connection attempt");
+        };
+        let active = self.session.start_request_is_active(&request_id);
         let palette = self.theme_palette();
         let close_request_id = request_id.clone();
         let select_request_id = request_id.clone();
+        let key = SessionStripTabId::Start(sequence).layout_key();
+        let motion = self.shell.tab_strip_motion(group.clone());
+        let width = motion.borrow().width(&key).unwrap_or(188.);
+        let source = self.session.tab_drag_source_is(&key);
+        let local_preview = motion.borrow().preview(&key).is_some();
+        let payload = WorkspaceTabDragPayload {
+            source_workspace_id: self.workspace_id,
+            root_tab_id: key,
+            source_revision: self.workspace_revision(),
+            tab_id: SessionStripTabId::Start(sequence),
+            order_index: tab_number - 1,
+            source_group_id: group.clone(),
+            display_name: failed_name.clone(),
+            kind_icon: "icons/session/disconnect.svg",
+            preview_background: palette.surface,
+            preview_border: palette.border,
+            preview_text: palette.danger,
+            preview_text_muted: palette.text_muted,
+            preview_accent: palette.danger,
+        };
+        let app = cx.weak_entity();
+        let drop_request_id = request_id.clone();
         div()
             .id(SharedString::from(format!(
                 "failed-session-tab-{request_id}"
             )))
+            .debug_selector(|| format!("failed-session-tab-{request_id}"))
             .h_full()
             .min_w(px(SESSION_TAB_MIN_WIDTH))
             .max_w(px(SESSION_TAB_MAX_WIDTH))
@@ -261,7 +272,21 @@ impl NyaTermApp {
             } else {
                 rgba((palette.danger << 8) | 0x12)
             })
-            .cursor_pointer()
+            .cursor_move()
+            .when(source, |this| {
+                this.opacity(if local_preview { 0. } else { 0.55 })
+            })
+            .on_drag(payload, move |payload, position, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    app.begin_session_tab_drag(payload, position, window, cx)
+                });
+                cx.new(|_| SessionTabDragPreview::new(payload.clone(), position).with_width(width))
+            })
+            .on_drop(
+                cx.listener(move |app, payload: &WorkspaceTabDragPayload, _, cx| {
+                    app.drop_on_session_start_tab(payload, &group, &drop_request_id, cx);
+                }),
+            )
             .hover(|this| this.bg(rgba((palette.danger << 8) | 0x24)))
             .when(active, |this| {
                 this.child(
@@ -513,7 +538,9 @@ impl NyaTermApp {
             source_workspace_id: self.workspace_id,
             root_tab_id: session.id.clone(),
             source_revision: self.workspace_revision(),
-            tab_id: crate::models::WorkspaceTabId::Session(session.id.clone()),
+            tab_id: SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Session(
+                session.id.clone(),
+            )),
             order_index: tab_index,
             source_group_id: target_group.clone(),
             display_name: display_name.clone(),
@@ -605,6 +632,13 @@ impl NyaTermApp {
             ))
             .on_drop(
                 cx.listener(move |this, payload: &WorkspaceTabDragPayload, _, cx| {
+                    if payload.tab_id.is_start()
+                        && (payload.source_workspace_id != this.workspace_id
+                            || payload.source_group_id != target_group)
+                    {
+                        this.clear_session_tab_drag(cx);
+                        return;
+                    }
                     this.accept_session_tab_drop(payload, cx);
                     if this.commit_session_tab_preview(payload, &target_group, cx) {
                         return;
@@ -847,120 +881,21 @@ impl NyaTermApp {
             .as_ref()
             .map(|id| self.shell.terminal_group_scroll(id))
             .unwrap_or_else(|| self.shell.session_tab_strip_scroll().clone());
-        let matches_group =
-            |placement: Option<crate::features::session::SessionStartTabPlacement>| {
-                let target = placement
-                    .and_then(|p| self.shell.terminal_start_display_group(p.request_sequence))
-                    .or_else(|| self.shell.first_terminal_group());
-                group_id
-                    .as_deref()
-                    .is_none_or(|group| target.as_deref() == Some(group))
-            };
-        let mut transient_tabs: Vec<TransientSessionTab> = self
-            .session
-            .start_pending_entries()
-            .filter_map(|(request_id, pending)| {
-                if pending.reconnect_session_id.is_some() || !matches_group(pending.tab_placement) {
-                    return None;
-                }
-                let name = pending
-                    .custom_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(&pending.connection_name)
-                    .to_string();
-                let after_position = pending
-                    .after_session_id
-                    .as_ref()
-                    .and_then(|after_id| tab_keys.iter().position(|key| key == after_id));
-                let index = pending.tab_placement.map_or_else(
-                    || {
-                        pending_tab_insert_index(
-                            session_count,
-                            after_position,
-                            pending.insert_index,
-                        )
-                    },
-                    |placement| placement.insert_index,
-                );
-                Some((
-                    index,
-                    pending
-                        .tab_placement
-                        .map(|placement| placement.request_sequence)
-                        .unwrap_or(u64::MAX),
-                    pending.connection_name.clone(),
-                    request_id.clone(),
-                    name,
-                    None,
-                ))
-            })
-            .collect::<Vec<_>>();
-        transient_tabs.extend(
-            self.session
-                .start_failed_entries()
-                .filter(|(_, failed)| matches_group(failed.pending.tab_placement))
-                .map(|(request_id, failed)| {
-                    let pending = &failed.pending;
-                    let name = pending
-                        .custom_name
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or(&pending.connection_name)
-                        .to_string();
-                    let after_position = pending
-                        .after_session_id
-                        .as_ref()
-                        .and_then(|after_id| tab_keys.iter().position(|key| key == after_id));
-                    let index = pending.tab_placement.map_or_else(
-                        || {
-                            pending_tab_insert_index(
-                                session_count,
-                                after_position,
-                                pending.insert_index,
-                            )
-                        },
-                        |placement| placement.insert_index,
-                    );
-                    (
-                        index,
-                        pending
-                            .tab_placement
-                            .map(|placement| placement.request_sequence)
-                            .unwrap_or(u64::MAX),
-                        pending.connection_name.clone(),
-                        request_id.clone(),
-                        name,
-                        Some(failed.error.clone()),
-                    )
-                }),
-        );
-        transient_tabs.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-                .then_with(|| left.2.cmp(&right.2))
-                .then_with(|| left.3.cmp(&right.3))
-        });
+        let strip_tabs = self.session_strip_tabs(&group_id);
         if self.shell.session_tab_scroll_into_view_pending()
             && (group_id.is_none() || self.current_terminal_group() == group_id)
         {
-            if let Some(active_id) = group_active.as_deref()
-                && let Some(index) = tab_keys.iter().position(|key| key == active_id)
-            {
-                let active_key = self
-                    .session
-                    .session_start_tab_placement(active_id)
-                    .map(|placement| (placement.insert_index, placement.request_sequence))
-                    .unwrap_or((index, u64::MAX));
-                let pending_count = transient_tabs
-                    .iter()
-                    .filter(|transient| transient_tab_precedes_session(transient, active_key))
-                    .count();
-                let child_index = index + pending_count;
-                tab_scroll.scroll_to_item(child_index);
+            if let Some(index) = strip_tabs.iter().position(|tab| {
+                tab.request_id.as_deref().map_or_else(
+                    || {
+                        !self.session.start_has_active_pending()
+                            && !self.session.start_has_active_failed()
+                            && group_active.as_deref() == Some(tab.id.layout_key().as_str())
+                    },
+                    |id| self.session.start_request_is_active(id),
+                )
+            }) {
+                tab_scroll.scroll_to_item(index);
             }
             self.shell.consume_session_tab_scroll_into_view();
         }
@@ -1028,92 +963,38 @@ impl NyaTermApp {
                 }
             }));
 
-        let mut transient_cursor = 0usize;
-        let motion_sessions = tab_keys.clone();
-        for (tab_index, key) in tab_keys.into_iter().enumerate() {
-            let session_key = self
-                .session
-                .session_start_tab_placement(&key)
-                .map(|placement| (placement.insert_index, placement.request_sequence))
-                .unwrap_or((tab_index, u64::MAX));
-            while transient_cursor < transient_tabs.len()
-                && transient_tab_precedes_session(&transient_tabs[transient_cursor], session_key)
-            {
-                let (_, _, _, request_id, name, error) = transient_tabs[transient_cursor].clone();
-                let tab_number = tab_index + transient_cursor + 1;
-                let active = self.session.start_request_is_active(&request_id);
-                let motion_id = format!("pending:{request_id}");
-                motion_order.push(motion_id.clone());
-                tabs = tabs.child(TabMotionElement {
-                    id: motion_id,
-                    motion: motion.clone(),
-                    scroll: tab_scroll.clone(),
-                    child: match error {
-                        Some(error) => self
-                            .failed_session_tab(request_id, name, error, tab_number, active, cx)
-                            .into_any_element(),
-                        None => self
-                            .pending_session_tab(request_id, name, tab_number, active, cx)
-                            .into_any_element(),
-                    },
-                });
-                transient_cursor += 1;
-            }
-            if let crate::models::WorkspaceTabId::Editor(id) =
-                crate::models::WorkspaceTabId::from_layout_key(&key)
-            {
-                motion_order.push(key.clone());
-                tabs = tabs.child(TabMotionElement {
-                    id: key,
-                    motion: motion.clone(),
-                    scroll: tab_scroll.clone(),
-                    child: self.editor_strip_tab(
-                        id,
-                        tab_index,
-                        tab_index + transient_cursor + 1,
-                        group_active.as_deref(),
-                        cx,
-                    ),
-                });
-                continue;
-            }
-            let Some(session) = self.session.session_info(&key) else {
-                continue;
+        let motion_sessions = strip_tabs.iter().map(|tab| tab.snapshot_key()).collect();
+        for (index, tab) in strip_tabs.into_iter().enumerate() {
+            let key = tab.id.layout_key();
+            let child = match tab.id {
+                SessionStripTabId::Start(_) => {
+                    if tab.error.is_some() {
+                        self.failed_session_tab(tab, index + 1, group_id.clone(), cx)
+                            .into_any_element()
+                    } else {
+                        let request_id = tab.request_id.expect("start tab must have a request");
+                        let active = self.session.start_request_is_active(&request_id);
+                        self.pending_session_tab(request_id, tab.name, index + 1, active, cx)
+                            .into_any_element()
+                    }
+                }
+                SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Editor(id)) => {
+                    self.editor_strip_tab(id, index, index + 1, group_active.as_deref(), cx)
+                }
+                SessionStripTabId::Workspace(crate::models::WorkspaceTabId::Session(id)) => {
+                    let Some(session) = self.session.session_info(&id) else {
+                        continue;
+                    };
+                    self.session_strip_tab(session, index, index + 1, group_active.as_deref(), cx)
+                }
             };
-            motion_order.push(session.id.clone());
+            motion_order.push(key.clone());
             tabs = tabs.child(TabMotionElement {
-                id: session.id.clone(),
+                id: key,
                 motion: motion.clone(),
                 scroll: tab_scroll.clone(),
-                child: self.session_strip_tab(
-                    session,
-                    tab_index,
-                    tab_index + transient_cursor + 1,
-                    group_active.as_deref(),
-                    cx,
-                ),
+                child,
             });
-        }
-        while transient_cursor < transient_tabs.len() {
-            let (_, _, _, request_id, name, error) = transient_tabs[transient_cursor].clone();
-            let tab_number = session_count + transient_cursor + 1;
-            let active = self.session.start_request_is_active(&request_id);
-            let motion_id = format!("pending:{request_id}");
-            motion_order.push(motion_id.clone());
-            tabs = tabs.child(TabMotionElement {
-                id: motion_id,
-                motion: motion.clone(),
-                scroll: tab_scroll.clone(),
-                child: match error {
-                    Some(error) => self
-                        .failed_session_tab(request_id, name, error, tab_number, active, cx)
-                        .into_any_element(),
-                    None => self
-                        .pending_session_tab(request_id, name, tab_number, active, cx)
-                        .into_any_element(),
-                },
-            });
-            transient_cursor += 1;
         }
         motion.borrow_mut().configure(motion_order, motion_sessions);
 
@@ -1414,56 +1295,7 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        SessionTabOrderKey, TransientSessionTab, pending_tab_insert_index, tab_drop_insert_after,
-        tab_scroll_x, tab_strip_overflows, transient_tab_precedes_session,
-    };
-
-    fn merged_tab_order(
-        sessions: &[(&str, SessionTabOrderKey)],
-        transient: &[(&str, SessionTabOrderKey)],
-    ) -> Vec<String> {
-        let mut transient_tabs = transient
-            .iter()
-            .map(|(name, (index, sequence))| {
-                (
-                    *index,
-                    *sequence,
-                    String::new(),
-                    String::new(),
-                    (*name).to_string(),
-                    None,
-                )
-            })
-            .collect::<Vec<TransientSessionTab>>();
-        transient_tabs.sort_by_key(|tab| (tab.0, tab.1));
-
-        let mut merged = Vec::new();
-        let mut transient_cursor = 0;
-        for (name, session_key) in sessions {
-            while transient_cursor < transient_tabs.len()
-                && transient_tab_precedes_session(&transient_tabs[transient_cursor], *session_key)
-            {
-                merged.push(transient_tabs[transient_cursor].4.clone());
-                transient_cursor += 1;
-            }
-            merged.push((*name).to_string());
-        }
-        merged.extend(
-            transient_tabs[transient_cursor..]
-                .iter()
-                .map(|tab| tab.4.clone()),
-        );
-        merged
-    }
-
-    #[test]
-    fn pending_tab_position_matches_tauri_insertion_rules() {
-        assert_eq!(pending_tab_insert_index(3, None, None), 3);
-        assert_eq!(pending_tab_insert_index(3, Some(0), None), 1);
-        assert_eq!(pending_tab_insert_index(3, Some(0), Some(2)), 2);
-        assert_eq!(pending_tab_insert_index(3, None, Some(99)), 3);
-    }
+    use super::{tab_drop_insert_after, tab_scroll_x, tab_strip_overflows};
 
     #[test]
     fn tab_drop_uses_source_and_target_order_for_insertion_side() {
@@ -1491,21 +1323,5 @@ mod tests {
 
         assert!(!tab_strip_overflows(66., true, true));
         assert!(tab_strip_overflows(66.1, true, true));
-    }
-
-    #[test]
-    fn concurrent_session_tabs_merge_by_reserved_submission_order() {
-        assert_eq!(
-            merged_tab_order(&[("C", (2, 2))], &[("A", (0, 0)), ("B", (1, 1))]),
-            ["A", "B", "C"]
-        );
-        assert_eq!(
-            merged_tab_order(&[("B", (1, 1)), ("C", (2, 2))], &[("A", (0, 0))]),
-            ["A", "B", "C"]
-        );
-        assert_eq!(
-            merged_tab_order(&[("X", (0, u64::MAX)), ("B", (2, 1))], &[("A", (1, 0))],),
-            ["X", "A", "B"]
-        );
     }
 }

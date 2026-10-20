@@ -155,7 +155,7 @@ impl NyaTermApp {
         let content = if pending_here && self.session.start_has_active_pending() {
             self.pending_workspace_state().into_any_element()
         } else if pending_here && self.session.start_has_active_failed() {
-            self.failed_workspace_state().into_any_element()
+            self.failed_workspace_state(cx).into_any_element()
         } else if let Some(active) = &active {
             match crate::models::WorkspaceTabId::from_layout_key(active) {
                 crate::models::WorkspaceTabId::Session(id) => {
@@ -195,6 +195,9 @@ impl NyaTermApp {
             .can_drop(|drag, _, _| drag.is::<WorkspaceTabDragPayload>())
             .on_drag_move(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<WorkspaceTabDragPayload>, _, cx| {
+                    if event.drag(cx).tab_id.is_start() {
+                        return;
+                    }
                     let b = event.bounds;
                     let p = event.event.position;
                     // GPUI dispatches drag moves to every group, including those
@@ -222,6 +225,10 @@ impl NyaTermApp {
             ))
             .on_drop(
                 cx.listener(move |this, payload: &WorkspaceTabDragPayload, _, cx| {
+                    if payload.tab_id.is_start() {
+                        this.clear_session_tab_drag(cx);
+                        return;
+                    }
                     this.accept_session_tab_drop(payload, cx);
                     let zone = this
                         .shell

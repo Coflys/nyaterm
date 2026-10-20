@@ -32,7 +32,9 @@ impl Render for DragFixture {
                 source_workspace_id: app.workspace_id,
                 root_tab_id: "tab".into(),
                 source_revision: app.workspace_revision(),
-                tab_id: crate::models::WorkspaceTabId::Session("tab".into()),
+                tab_id: crate::features::shell::session_tabs::SessionStripTabId::Workspace(
+                    crate::models::WorkspaceTabId::Session("tab".into()),
+                ),
                 order_index: 0,
                 source_group_id: None,
                 display_name: "Test".into(),

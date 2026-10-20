@@ -50,6 +50,10 @@ impl NyaTermApp {
         placement: MoveTabPlacement,
         cx: &mut Context<Self>,
     ) {
+        if payload.tab_id.is_start() {
+            self.clear_session_tab_drag(cx);
+            return;
+        }
         self.move_tab_tree_to_workspace(
             payload.source_workspace_id,
             payload.root_tab_id.clone(),

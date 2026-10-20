@@ -23,6 +23,7 @@ impl NyaTermApp {
         tab_placement: Option<SessionStartTabPlacement>,
         insert_index: Option<usize>,
     ) {
+        let tab_placement = tab_placement.map(|p| self.session.resolve_start_tab_placement(p));
         let active_tab = self.active_workspace_tab();
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         let is_terminal = encoding.is_some();

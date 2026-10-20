@@ -17,6 +17,13 @@ impl NyaTermApp {
         group: &Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if payload.tab_id.is_start()
+            && (payload.source_workspace_id != self.workspace_id
+                || &payload.source_group_id != group)
+        {
+            self.clear_session_tab_drag(cx);
+            return;
+        }
         self.accept_session_tab_drop(payload, cx);
         if self.commit_session_tab_preview(payload, group, cx) {
             return;
@@ -67,23 +74,20 @@ impl NyaTermApp {
             self.clear_session_tab_drag(cx);
             return true;
         };
-        let live = if let Some(group) = group {
-            self.shell
-                .terminal_group_tabs(group)
-                .map(|(ids, _)| ids)
-                .unwrap_or_default()
-        } else {
-            self.workspace_tab_ids()
-        };
-        let preview = preview
-            .into_iter()
-            .filter(|id| live.contains(id))
+        let tabs = self.session_strip_tabs(group);
+        let live = tabs
+            .iter()
+            .map(|tab| tab.id.layout_key())
             .collect::<Vec<_>>();
-        if !motion.borrow().matches_sessions(&live) {
+        let snapshot = tabs
+            .iter()
+            .map(|tab| tab.snapshot_key())
+            .collect::<Vec<_>>();
+        if !motion.borrow().matches_sessions(&snapshot) {
             self.clear_session_tab_drag(cx);
             return true;
         }
-        let Some(index) = preview
+        let Some(_index) = preview
             .iter()
             .position(|id| id == &payload.tab_id.layout_key())
         else {
@@ -99,18 +103,7 @@ impl NyaTermApp {
             return true;
         }
         motion.borrow_mut().finish(std::time::Instant::now());
-        if let Some(next) = preview.get(index + 1) {
-            self.reorder_session_relative(payload.tab_id.layout_key(), next.clone(), false, cx);
-        } else if index > 0 {
-            self.reorder_session_relative(
-                payload.tab_id.layout_key(),
-                preview[index - 1].clone(),
-                true,
-                cx,
-            );
-        } else {
-            self.clear_session_tab_drag(cx);
-        }
+        self.commit_session_strip_order(group, &preview, &payload.tab_id.layout_key(), cx);
         true
     }
 
@@ -146,7 +139,12 @@ impl NyaTermApp {
             .tab_strip_motion(payload.source_group_id.clone())
             .borrow_mut()
             .begin(&payload.tab_id.layout_key(), f32::from(grab_offset.x));
-        if matches!(payload.tab_id, crate::models::WorkspaceTabId::Editor(_)) {
+        if !matches!(
+            payload.tab_id,
+            super::session_tabs::SessionStripTabId::Workspace(
+                crate::models::WorkspaceTabId::Session(_)
+            )
+        ) {
             self.update_session_tab_drag(payload.tab_id.layout_key(), cx);
             return;
         }
@@ -176,6 +174,9 @@ impl NyaTermApp {
         payload: &WorkspaceTabDragPayload,
         cx: &mut Context<Self>,
     ) {
+        if payload.tab_id.is_start() {
+            return;
+        }
         if let Some(controller) = &self.desktop_controller {
             let _ = controller.update(cx, |controller, _| {
                 controller.update_tab_drag(|drag| {
