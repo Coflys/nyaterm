@@ -1,8 +1,8 @@
 use gpui::{
     AnyElement, App, ClickEvent, Context, CursorStyle, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, prelude::*, px,
-    relative, rgb, svg, uniform_list,
+    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::*, px, relative, rgb, svg,
+    uniform_list,
 };
 use nyaterm_transport::{RemoteFilePath, SftpFileEntry};
 use nyaterm_ui::{
@@ -13,10 +13,10 @@ use rust_i18n::t;
 
 use super::pane::{PaneEndpoint, PaneId};
 use super::workspace::{FileManagerQueueFilter, FileManagerWorkspace};
+use crate::features::NyaTermApp;
 use crate::features::formatting::format_permissions_octal;
 use crate::features::pages::transfers::{format_browser_file_size, format_sftp_modified};
 use crate::features::view_widgets::transfer_entry_icon;
-use crate::features::NyaTermApp;
 use crate::models::TransferJobStatus;
 use crate::theme::ThemePalette;
 
@@ -32,52 +32,69 @@ pub(in crate::features) struct FileManagerDragPayload {
 }
 
 impl FileManagerWorkspace {
-    pub(in crate::features) fn with_app<R: Default>(
-        &self,
-        cx: &mut Context<Self>,
-        f: impl FnOnce(&mut NyaTermApp, &mut Context<NyaTermApp>) -> R,
-    ) -> R {
+    fn read_app<R: Default>(&self, cx: &App, f: impl FnOnce(&NyaTermApp) -> R) -> R {
         let Some(app) = self.app.upgrade() else {
             return R::default();
         };
-        app.update(cx, f)
+        f(app.read(cx))
     }
 
-    fn handle_key(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
+    fn dispatch_app(
+        &self,
+        window: &Window,
         cx: &mut Context<Self>,
+        f: impl FnOnce(&mut NyaTermApp, &mut Window, &mut Context<NyaTermApp>) + 'static,
     ) {
+        let app = self.app.clone();
+        // Listeners lease this workspace. App commands may read or update it again,
+        // so release the listener's lease before entering the application.
+        window.defer(cx, move |window, cx| {
+            let _ = app.update(cx, |app, cx| f(app, window, cx));
+        });
+    }
+
+    fn handle_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let unmodified = !event.keystroke.modifiers.modified();
         match key {
             "f5" if unmodified => {
                 cx.stop_propagation();
                 let id = self.id.clone();
-                self.with_app(cx, |app, cx| app.start_file_manager_copy(id, false, cx));
+                self.dispatch_app(window, cx, move |app, _, cx| {
+                    app.start_file_manager_copy(id, false, cx)
+                });
             }
             "f6" if unmodified => {
                 cx.stop_propagation();
                 let id = self.id.clone();
-                self.with_app(cx, |app, cx| app.start_file_manager_move(id, window, cx));
+                self.dispatch_app(window, cx, move |app, window, cx| {
+                    app.start_file_manager_move(id, window, cx)
+                });
             }
             "f7" if unmodified => {
                 cx.stop_propagation();
                 let id = self.id.clone();
                 let pane = self.active;
-                self.with_app(cx, |app, cx| {
-                    app.open_file_manager_name_dialog(id, pane, FileManagerNameKind::Folder, window, cx)
+                self.dispatch_app(window, cx, move |app, window, cx| {
+                    app.open_file_manager_name_dialog(
+                        id,
+                        pane,
+                        FileManagerNameKind::Folder,
+                        window,
+                        cx,
+                    )
                 });
             }
             "delete" | "backspace" if unmodified => {
                 if key == "backspace" {
                     let id = self.id.clone();
                     let pane = self.active;
-                    self.with_app(cx, |app, cx| app.navigate_file_manager_parent(id, pane, cx));
+                    self.dispatch_app(window, cx, move |app, _, cx| {
+                        app.navigate_file_manager_parent(id, pane, cx)
+                    });
                 } else {
                     let id = self.id.clone();
-                    self.with_app(cx, |app, cx| {
+                    self.dispatch_app(window, cx, move |app, window, cx| {
                         app.confirm_file_manager_delete(id, window, cx)
                     });
                 }
@@ -98,7 +115,11 @@ impl Render for FileManagerWorkspace {
             return div().into_any_element();
         };
         let palette = app.read(cx).theme_palette();
-        let show_hidden = app.read(cx).settings.summary().ui_file_explorer_show_hidden_files;
+        let show_hidden = app
+            .read(cx)
+            .settings
+            .summary()
+            .ui_file_explorer_show_hidden_files;
         let available = window.viewport_size().width;
         self.single_pane = f32::from(available) < MIN_PANE_PX * 2. + 8.;
         let manager_id = self.id.clone();
@@ -151,9 +172,11 @@ impl FileManagerWorkspace {
                 "fm-copy",
                 "icons/copy.svg",
                 t!("fileManager.copyToOther"),
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     let id = copy_id.clone();
-                    this.with_app(cx, |app, cx| app.start_file_manager_copy(id, false, cx));
+                    this.dispatch_app(window, cx, move |app, _, cx| {
+                        app.start_file_manager_copy(id, false, cx)
+                    });
                 }),
             ))
             .child(toolbar_button(
@@ -163,7 +186,9 @@ impl FileManagerWorkspace {
                 t!("fileManager.moveToOther"),
                 cx.listener(move |this, _, window, cx| {
                     let id = move_id.clone();
-                    this.with_app(cx, |app, cx| app.start_file_manager_move(id, window, cx));
+                    this.dispatch_app(window, cx, move |app, window, cx| {
+                        app.start_file_manager_move(id, window, cx)
+                    });
                 }),
             ))
             .child(toolbar_button(
@@ -171,10 +196,10 @@ impl FileManagerWorkspace {
                 "fm-swap",
                 "icons/swap-horiz.svg",
                 t!("fileManager.swapPanes"),
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     this.swap_panes();
                     let id = swap_id.clone();
-                    this.with_app(cx, |app, cx| {
+                    this.dispatch_app(window, cx, move |app, _, cx| {
                         app.persist_file_manager_settings(cx);
                         let _ = id;
                     });
@@ -188,7 +213,7 @@ impl FileManagerWorkspace {
                 t!("fileExplorer.newFolder"),
                 cx.listener(move |this, _, window, cx| {
                     let id = folder_id.clone();
-                    this.with_app(cx, |app, cx| {
+                    this.dispatch_app(window, cx, move |app, window, cx| {
                         app.open_file_manager_name_dialog(
                             id,
                             active,
@@ -206,7 +231,9 @@ impl FileManagerWorkspace {
                 t!("fileExplorer.delete"),
                 cx.listener(move |this, _, window, cx| {
                     let id = delete_id.clone();
-                    this.with_app(cx, |app, cx| app.confirm_file_manager_delete(id, window, cx));
+                    this.dispatch_app(window, cx, move |app, window, cx| {
+                        app.confirm_file_manager_delete(id, window, cx)
+                    });
                 }),
             ))
     }
@@ -227,14 +254,16 @@ impl FileManagerWorkspace {
             } else {
                 right_entries
             };
-            body = body.child(self.pane_view(palette, pane, entries, true, window, cx)).child(
-                NyaButton::new("fm-toggle-pane", t!("fileManager.otherPane").to_string())
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active = this.active.other();
-                        cx.notify();
-                    })),
-            );
+            body = body
+                .child(self.pane_view(palette, pane, entries, true, window, cx))
+                .child(
+                    NyaButton::new("fm-toggle-pane", t!("fileManager.otherPane").to_string())
+                        .small()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.active = this.active.other();
+                            cx.notify();
+                        })),
+                );
         } else {
             let left_flex = f32::from(self.split_percent.clamp(20, 80));
             let right_flex = 100. - left_flex;
@@ -246,7 +275,14 @@ impl FileManagerWorkspace {
                         .flex_grow(1.)
                         .flex_shrink(1.)
                         .flex_basis(relative(left_flex / 100.))
-                        .child(self.pane_view(palette, PaneId::Left, left_entries, true, window, cx)),
+                        .child(self.pane_view(
+                            palette,
+                            PaneId::Left,
+                            left_entries,
+                            true,
+                            window,
+                            cx,
+                        )),
                 )
                 .child(self.splitter(palette, cx))
                 .child(
@@ -295,21 +331,25 @@ impl FileManagerWorkspace {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
                     this.dragging_split = false;
-                    this.with_app(cx, |app, cx| app.persist_file_manager_settings(cx));
+                    this.dispatch_app(window, cx, move |app, _, cx| {
+                        app.persist_file_manager_settings(cx)
+                    });
                     cx.notify();
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                if !this.dragging_split {
-                    return;
-                }
-                let width = f32::from(window.viewport_size().width).max(1.);
-                let ratio = (f32::from(event.position.x) / width * 100.).clamp(20., 80.);
-                this.split_percent = ratio.round() as u8;
-                cx.notify();
-            }))
+            .on_mouse_move(
+                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                    if !this.dragging_split {
+                        return;
+                    }
+                    let width = f32::from(window.viewport_size().width).max(1.);
+                    let ratio = (f32::from(event.position.x) / width * 100.).clamp(20., 80.);
+                    this.split_percent = ratio.round() as u8;
+                    cx.notify();
+                }),
+            )
     }
 
     fn pane_view(
@@ -345,27 +385,32 @@ impl FileManagerWorkspace {
         };
         let hide_permissions = pane_width < 520.;
         let hide_owner_group = pane_width < 640.;
-        let source_label = self.with_app(cx, |app, _| app.endpoint_label(&endpoint));
-        let choices = self.with_app(cx, |app, _| app.file_manager_source_choices());
+        let source_label = self.read_app(cx, |app| app.endpoint_label(&endpoint));
+        let choices = self.read_app(cx, |app| app.file_manager_source_choices());
         let mut source_items = Vec::new();
         for (choice, label) in choices {
             let id = manager_id.clone();
             let selected_endpoint = choice.clone();
-            source_items.push(
-                NyaMenuItem::action(label).on_click(cx.listener(move |this, _, _, cx| {
-                    this.pane_mut(pane_id).set_endpoint(selected_endpoint.clone());
+            source_items.push(NyaMenuItem::action(label).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    this.pane_mut(pane_id)
+                        .set_endpoint(selected_endpoint.clone());
                     let id = id.clone();
-                    this.with_app(cx, |app, cx| {
+                    this.dispatch_app(window, cx, move |app, _, cx| {
                         app.refresh_file_manager_pane(id, pane_id, cx);
                         app.persist_file_manager_settings(cx);
                     });
                     cx.notify();
-                })),
-            );
+                },
+            )));
         }
         let header = NyaContextMenu::new(
             div()
-                .id(SharedString::from(format!("fm-source-{}-{}", self.id, pane_id.as_str())))
+                .id(SharedString::from(format!(
+                    "fm-source-{}-{}",
+                    self.id,
+                    pane_id.as_str()
+                )))
                 .px_2()
                 .h(px(28.))
                 .flex()
@@ -415,16 +460,20 @@ impl FileManagerWorkspace {
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .child(if path.is_empty() { "/".to_string() } else { path.clone() }),
+                            .child(if path.is_empty() {
+                                "/".to_string()
+                            } else {
+                                path.clone()
+                            }),
                     )
                     .child(toolbar_button(
                         palette,
                         format!("fm-up-{}", pane_id.as_str()),
                         "icons/fe/up.svg",
                         t!("fileExplorer.goUp"),
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             let id = up_id.clone();
-                            this.with_app(cx, |app, cx| {
+                            this.dispatch_app(window, cx, move |app, _, cx| {
                                 app.navigate_file_manager_parent(id, pane_id, cx)
                             });
                         }),
@@ -434,9 +483,9 @@ impl FileManagerWorkspace {
                         format!("fm-home-{}", pane_id.as_str()),
                         "icons/fe/locate.svg",
                         t!("fileManager.goHome"),
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             let id = home_id.clone();
-                            this.with_app(cx, |app, cx| {
+                            this.dispatch_app(window, cx, move |app, _, cx| {
                                 app.navigate_file_manager_home(id, pane_id, cx)
                             });
                         }),
@@ -446,9 +495,9 @@ impl FileManagerWorkspace {
                         format!("fm-refresh-{}", pane_id.as_str()),
                         "icons/fe/refresh.svg",
                         t!("fileExplorer.refresh"),
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             let id = refresh_id.clone();
-                            this.with_app(cx, |app, cx| {
+                            this.dispatch_app(window, cx, move |app, _, cx| {
                                 app.refresh_file_manager_pane(id, pane_id, cx)
                             });
                         }),
@@ -472,14 +521,16 @@ impl FileManagerWorkspace {
                             t!("fileManager.reconnect").to_string(),
                         )
                         .small()
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            let session_id = session_id.clone();
-                            let id = reconnect_id.clone();
-                            this.with_app(cx, |app, cx| {
-                                app.reconnect_session(session_id, window, cx);
-                                app.refresh_file_manager_pane(id, pane_id, cx);
-                            });
-                        })),
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                let session_id = session_id.clone();
+                                let id = reconnect_id.clone();
+                                this.dispatch_app(window, cx, move |app, window, cx| {
+                                    app.reconnect_session(session_id, window, cx);
+                                    app.refresh_file_manager_pane(id, pane_id, cx);
+                                });
+                            },
+                        )),
                     ),
             );
         }
@@ -550,7 +601,7 @@ impl FileManagerWorkspace {
                         .track_scroll(&list_scroll)
                         .can_drop(|drag, _, _| drag.is::<FileManagerDragPayload>())
                         .on_drop(cx.listener(
-                            move |this, payload: &FileManagerDragPayload, _, cx| {
+                            move |this, payload: &FileManagerDragPayload, window, cx| {
                                 if payload.manager_id != this.id
                                     || payload.pane_id == pane_id
                                     || payload.paths.is_empty()
@@ -560,7 +611,7 @@ impl FileManagerWorkspace {
                                 }
                                 this.set_active(payload.pane_id);
                                 let id = drop_manager.clone();
-                                this.with_app(cx, |app, cx| {
+                                this.dispatch_app(window, cx, move |app, _, cx| {
                                     app.start_file_manager_copy(id, false, cx)
                                 });
                             },
@@ -614,7 +665,8 @@ impl FileManagerWorkspace {
                 ),
                 FileManagerQueueFilter::Completed => job.status == TransferJobStatus::Completed,
                 FileManagerQueueFilter::Failed => {
-                    job.status == TransferJobStatus::Failed || job.status == TransferJobStatus::Cancelled
+                    job.status == TransferJobStatus::Failed
+                        || job.status == TransferJobStatus::Cancelled
                 }
             })
             .cloned()
@@ -664,12 +716,18 @@ impl FileManagerWorkspace {
             ));
         for (filter, label) in [
             (FileManagerQueueFilter::All, t!("fileManager.filterAll")),
-            (FileManagerQueueFilter::Active, t!("fileManager.filterActive")),
+            (
+                FileManagerQueueFilter::Active,
+                t!("fileManager.filterActive"),
+            ),
             (
                 FileManagerQueueFilter::Completed,
                 t!("fileManager.filterCompleted"),
             ),
-            (FileManagerQueueFilter::Failed, t!("fileManager.filterFailed")),
+            (
+                FileManagerQueueFilter::Failed,
+                t!("fileManager.filterFailed"),
+            ),
         ] {
             header = header.child(queue_filter_button(
                 palette,
@@ -733,7 +791,12 @@ fn toolbar_button(
         .cursor_pointer()
         .hover(|this| this.bg(rgb(palette.hover)))
         .tooltip(move |window, cx| NyaTooltip::new(tooltip.clone()).build(window, cx))
-        .child(svg().size(px(16.)).path(icon).text_color(rgb(palette.text_muted)))
+        .child(
+            svg()
+                .size(px(16.))
+                .path(icon)
+                .text_color(rgb(palette.text_muted)),
+        )
         .on_click(on_click)
 }
 
@@ -760,17 +823,22 @@ fn parent_row(
     cx: &mut Context<FileManagerWorkspace>,
 ) -> impl IntoElement {
     div()
-        .id(SharedString::from(format!("fm-parent-{}", pane_id.as_str())))
+        .id(SharedString::from(format!(
+            "fm-parent-{}",
+            pane_id.as_str()
+        )))
         .h(px(ROW_HEIGHT))
         .flex()
         .items_center()
         .px_2()
         .cursor_pointer()
         .hover(|this| this.bg(rgb(palette.hover)))
-        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if event.click_count() >= 2 {
                 let id = this.id.clone();
-                this.with_app(cx, |app, cx| app.navigate_file_manager_parent(id, pane_id, cx));
+                this.dispatch_app(window, cx, move |app, _, cx| {
+                    app.navigate_file_manager_parent(id, pane_id, cx)
+                });
             }
         }))
         .child(transfer_entry_icon(palette, "..", true, false, false))
@@ -807,8 +875,8 @@ fn entry_row(
         hide_owner_group,
     } = row;
     let identity = entry.identity_key();
-    let marked = selected.as_deref() == Some(identity.as_str())
-        || selected_paths.contains(&identity);
+    let marked =
+        selected.as_deref() == Some(identity.as_str()) || selected_paths.contains(&identity);
     let is_dir = entry.is_directory();
     let name = entry.name.clone();
     let drag_entry = entry.clone();
@@ -843,8 +911,9 @@ fn entry_row(
             }
             if event.click_count() >= 2 && click_entry.is_directory() {
                 let id = this.id.clone();
-                this.with_app(cx, |app, cx| {
-                    app.navigate_file_manager_pane(id, pane_id, click_entry.remote_path(), cx)
+                let path = click_entry.remote_path();
+                this.dispatch_app(window, cx, move |app, _, cx| {
+                    app.navigate_file_manager_pane(id, pane_id, path, cx)
                 });
             }
             let _ = window;
@@ -865,13 +934,7 @@ fn entry_row(
                 .gap_2()
                 .px_2()
                 .text_size(px(12.))
-                .child(transfer_entry_icon(
-                    palette,
-                    &name,
-                    is_dir,
-                    false,
-                    false,
-                ))
+                .child(transfer_entry_icon(palette, &name, is_dir, false, false))
                 .child(name.clone()),
         )
         .child(
@@ -909,30 +972,20 @@ fn entry_row(
     }
     if !hide_owner_group {
         row = row
-            .child(
-                div()
-                    .w(widths.owner)
-                    .flex_none()
-                    .px_2()
-                    .text_xs()
-                    .child(if entry.owner.is_empty() {
-                        "-".to_string()
-                    } else {
-                        entry.owner.clone()
-                    }),
-            )
-            .child(
-                div()
-                    .w(widths.group)
-                    .flex_none()
-                    .px_2()
-                    .text_xs()
-                    .child(if entry.group.is_empty() {
-                        "-".to_string()
-                    } else {
-                        entry.group.clone()
-                    }),
-            );
+            .child(div().w(widths.owner).flex_none().px_2().text_xs().child(
+                if entry.owner.is_empty() {
+                    "-".to_string()
+                } else {
+                    entry.owner.clone()
+                },
+            ))
+            .child(div().w(widths.group).flex_none().px_2().text_xs().child(
+                if entry.group.is_empty() {
+                    "-".to_string()
+                } else {
+                    entry.group.clone()
+                },
+            ));
     }
     let items = pane_entry_menu(manager_id, pane_id, menu_entry, cx);
     NyaContextMenu::new(row, items)
@@ -953,16 +1006,20 @@ fn pane_entry_menu(
     vec![
         NyaMenuItem::action(t!("fileManager.copyToOther")).on_click({
             let identity = entry.identity_key();
-            cx.listener(move |this, _, _, cx| {
+            cx.listener(move |this, _, window, cx| {
                 this.pane_mut(pane_id).select_entry(identity.clone());
                 let id = copy_id.clone();
-                this.with_app(cx, |app, cx| app.start_file_manager_copy(id, false, cx));
+                this.dispatch_app(window, cx, move |app, _, cx| {
+                    app.start_file_manager_copy(id, false, cx)
+                });
             })
         }),
         NyaMenuItem::action(t!("fileManager.moveToOther")).on_click(cx.listener(
             move |this, _, window, cx| {
                 let id = move_id.clone();
-                this.with_app(cx, |app, cx| app.start_file_manager_move(id, window, cx));
+                this.dispatch_app(window, cx, move |app, window, cx| {
+                    app.start_file_manager_move(id, window, cx)
+                });
             },
         )),
         NyaMenuItem::action(t!("fileExplorer.cmRename")).on_click({
@@ -970,7 +1027,7 @@ fn pane_entry_menu(
             cx.listener(move |this, _, window, cx| {
                 this.pane_mut(pane_id).select_entry(identity.clone());
                 let id = rename_id.clone();
-                this.with_app(cx, |app, cx| {
+                this.dispatch_app(window, cx, move |app, window, cx| {
                     app.open_file_manager_name_dialog(
                         id,
                         pane_id,
@@ -984,7 +1041,7 @@ fn pane_entry_menu(
         NyaMenuItem::action(t!("fileExplorer.newFile")).on_click(cx.listener(
             move |this, _, window, cx| {
                 let id = file_id.clone();
-                this.with_app(cx, |app, cx| {
+                this.dispatch_app(window, cx, move |app, window, cx| {
                     app.open_file_manager_name_dialog(
                         id,
                         pane_id,
@@ -998,16 +1055,19 @@ fn pane_entry_menu(
         NyaMenuItem::action(t!("fileExplorer.delete")).on_click(cx.listener(
             move |this, _, window, cx| {
                 let id = delete_id.clone();
-                this.with_app(cx, |app, cx| app.confirm_file_manager_delete(id, window, cx));
+                this.dispatch_app(window, cx, move |app, window, cx| {
+                    app.confirm_file_manager_delete(id, window, cx)
+                });
             },
         )),
         NyaMenuItem::action(t!("fileExplorer.cmOpen")).on_click({
             let entry = entry.clone();
-            cx.listener(move |this, _, _, cx| {
+            cx.listener(move |this, _, window, cx| {
                 if entry.is_directory() {
                     let id = open_id.clone();
-                    this.with_app(cx, |app, cx| {
-                        app.navigate_file_manager_pane(id, pane_id, entry.remote_path(), cx)
+                    let path = entry.remote_path();
+                    this.dispatch_app(window, cx, move |app, _, cx| {
+                        app.navigate_file_manager_pane(id, pane_id, path, cx)
                     });
                 }
             })
@@ -1032,3 +1092,6 @@ pub(in crate::features) enum FileManagerNameKind {
     File,
     Rename,
 }
+
+#[cfg(test)]
+mod tests;
