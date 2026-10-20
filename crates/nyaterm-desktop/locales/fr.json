@@ -3241,6 +3241,7 @@
     "unsupportedOption": "Les liens temporaires ne prennent en charge que les connexions directes."
   },
   "terminal": {
+    "retryUnavailable": "La connexion a été supprimée ou sa configuration de démarrage est indisponible.",
     "encodingUnsupported": "Encodage de caractères non pris en charge. Sélectionnez un encodage compatible.",
     "encodingInvalidInput": "La saisie doit être du UTF-8 valide.",
     "encodingUnrepresentable": "La saisie ne peut pas être représentée en %{encoding}. Rien n’a été envoyé.",

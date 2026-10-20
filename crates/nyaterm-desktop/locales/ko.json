@@ -3241,6 +3241,7 @@
     "unsupportedOption": "이 SSH 입력에는 임시 링크에서 지원하지 않는 옵션이 있습니다."
   },
   "terminal": {
+    "retryUnavailable": "연결이 삭제되었거나 시작 설정이 없어 다시 연결할 수 없습니다.",
     "encodingUnsupported": "지원하지 않는 문자 인코딩입니다. 지원되는 인코딩을 선택하세요.",
     "encodingInvalidInput": "입력은 유효한 UTF-8 텍스트여야 합니다.",
     "encodingUnrepresentable": "입력을 %{encoding}(으)로 인코딩할 수 없습니다. 아무것도 전송하지 않았습니다.",

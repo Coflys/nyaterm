@@ -3241,6 +3241,7 @@
     "unsupportedOption": "临时链接仅支持直连。"
   },
   "terminal": {
+    "retryUnavailable": "连接已删除或缺少启动配置，无法重新连接。",
     "encodingUnsupported": "不支持此字符编码，请选择受支持的编码。",
     "encodingInvalidInput": "输入必须是有效的 UTF-8 文字。",
     "encodingUnrepresentable": "输入无法使用 %{encoding} 编码，未发送任何内容。",
