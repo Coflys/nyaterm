@@ -555,7 +555,9 @@ fn selected_failed_and_retry_tabs_replace_the_previous_tab_highlight() {
                 app.selected_session_strip_tab(&app.current_terminal_group()),
                 Some(
                     crate::features::shell::session_tabs::SessionStripTabId::Workspace(
-                        WorkspaceTabId::Session(_) | WorkspaceTabId::Editor(_)
+                        WorkspaceTabId::Session(_)
+                            | WorkspaceTabId::Editor(_)
+                            | WorkspaceTabId::FileManager(_)
                     )
                 )
             ));

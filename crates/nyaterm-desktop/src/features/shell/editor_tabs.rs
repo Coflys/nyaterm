@@ -98,6 +98,7 @@ impl NyaTermApp {
         match WorkspaceTabId::from_layout_key(key) {
             WorkspaceTabId::Session(id) => Some(id),
             WorkspaceTabId::Editor(id) => self.transfer.editor_tab_snapshot(&id)?.session_id,
+            WorkspaceTabId::FileManager(_) => None,
         }
     }
 
@@ -144,6 +145,7 @@ impl NyaTermApp {
                 }
                 cx.notify();
             }
+            WorkspaceTabId::FileManager(id) => self.activate_file_manager_tab(&id, cx),
         }
     }
 
@@ -334,6 +336,9 @@ impl NyaTermApp {
                         self.remove_workspace_editor_tab(&id, cx);
                         self.transfer.remove_editor_document(&id);
                     }
+                    WorkspaceTabId::FileManager(id) => {
+                        self.remove_workspace_file_manager_tab(&id, cx);
+                    }
                     WorkspaceTabId::Session(id) => self.close_session(id, cx),
                 }
             }
@@ -522,7 +527,7 @@ impl NyaTermApp {
         let sessions = self.tab_tree_session_ids(id);
         if !sessions
             .iter()
-            .any(|id| self.transfer.editor_references_session(id))
+            .any(|id| self.workspace_references_session(id, cx))
         {
             return false;
         }
@@ -550,10 +555,17 @@ impl NyaTermApp {
         {
             self.activate_workspace_tab(&next, cx);
         }
-        self.release_unreferenced_editor_sessions(cx);
+        self.release_unreferenced_hidden_sessions(cx);
         self.persist_open_tabs();
         cx.notify();
         true
+    }
+
+    pub(in crate::features) fn release_unreferenced_hidden_sessions(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.release_unreferenced_editor_sessions(cx);
     }
 
     pub(in crate::features) fn release_unreferenced_editor_sessions(
@@ -566,7 +578,7 @@ impl NyaTermApp {
             .hidden_sessions
             .iter()
             .filter(|id| {
-                !self.transfer.editor_references_session(id)
+                !self.workspace_references_session(id, cx)
                     && !self.transfer.transfer_jobs().iter().any(|job| {
                         job.session_id.as_ref() == Some(*id)
                             && matches!(
@@ -1086,6 +1098,72 @@ mod tests {
             app.close_session("other".into(), cx);
             assert_eq!(app.active_workspace_tab(), Some(key));
             assert!(app.visible_terminal_session_ids().is_empty());
+        });
+    }
+
+    #[test]
+    fn file_manager_tabs_stay_out_of_terminal_apis_and_open_tab_snapshots() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-file-manager-tabs");
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| {
+            app.reconcile_terminal_windows();
+            let serialized_before = app.serialize_open_tabs().len();
+            app.open_file_manager_tab(None, cx);
+            let id = app.file_manager.active_id().unwrap().to_string();
+            let key = WorkspaceTabId::FileManager(id.clone()).layout_key();
+            assert!(app.workspace_tab_ids().contains(&key));
+            assert!(app.workspace_tab_session(&key).is_none());
+            assert!(!WorkspaceTabId::from_layout_key(&key).is_terminal_session());
+            assert_eq!(app.serialize_open_tabs().len(), serialized_before);
+            app.file_manager.track_job(
+                "fm-job".into(),
+                crate::features::file_manager::FileManagerJobTarget {
+                    source: crate::features::file_manager::PaneEndpoint::Local,
+                    source_parent: "/tmp".into(),
+                    target: crate::features::file_manager::PaneEndpoint::Local,
+                    target_parent: "/tmp/out".into(),
+                },
+            );
+            app.remove_workspace_file_manager_tab(&id, cx);
+            assert!(!app.workspace_tab_ids().contains(&key));
+            assert!(app.file_manager.owns_job("fm-job"));
+        });
+    }
+
+    #[test]
+    fn file_manager_session_references_hide_then_release_and_follow_id_changes() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-file-manager-refs");
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| {
+            app.reconcile_terminal_windows();
+            app.open_file_manager_tab(None, cx);
+            let manager_id = app.file_manager.active_id().unwrap().to_string();
+            if let Some(workspace) = app.file_manager.workspace(&manager_id) {
+                workspace.update(cx, |workspace, _| {
+                    workspace
+                        .pane_mut(crate::features::file_manager::PaneId::Right)
+                        .set_endpoint(crate::features::file_manager::PaneEndpoint::Session(
+                            "local".into(),
+                        ));
+                });
+            }
+            assert!(app.workspace_references_session("local", cx));
+            app.close_session("local".into(), cx);
+            assert!(app.session.has_session("local"));
+            app.file_manager.replace_session_id("local", "local-2", cx);
+            if let Some(workspace) = app.file_manager.workspace(&manager_id) {
+                let workspace = workspace.read(cx);
+                assert_eq!(
+                    workspace.pane(crate::features::file_manager::PaneId::Right).endpoint,
+                    crate::features::file_manager::PaneEndpoint::Session("local-2".into())
+                );
+            }
+            app.remove_workspace_file_manager_tab(&manager_id, cx);
+            assert!(!app.workspace_references_session("local-2", cx));
         });
     }
 }

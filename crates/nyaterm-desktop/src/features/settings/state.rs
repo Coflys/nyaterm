@@ -931,6 +931,18 @@ impl SettingsFeatureState {
         self.summary.transfer_download_path = path;
     }
 
+    pub(in crate::features) fn set_file_manager_ui(
+        &mut self,
+        settings: nyaterm_core::FileManagerUiSettings,
+    ) {
+        self.summary.ui_file_manager = settings;
+    }
+
+    pub(in crate::features) fn toggle_file_manager_auto_collapse(&mut self) {
+        self.summary.ui_file_manager.auto_collapse_sidebar =
+            !self.summary.ui_file_manager.auto_collapse_sidebar;
+    }
+
     pub(in crate::features) fn set_recording_path(&mut self, path: String) {
         self.summary.recording_path = path;
     }

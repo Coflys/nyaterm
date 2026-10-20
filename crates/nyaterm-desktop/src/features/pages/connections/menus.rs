@@ -115,6 +115,12 @@ impl NyaTermApp {
         let connect_ids = target_ids.clone();
         let copy_ids = target_ids.clone();
         let edit_id = connection_id.clone();
+        let rename_id = connection_id.clone();
+        let session_id = self.session_id_for_connection(&connection_id);
+        let manager_available = session_id.is_some();
+        let open_session = session_id.clone();
+        let left_session = session_id.clone();
+        let right_session = session_id.clone();
         let move_items = self.connection_move_to_group_menu_items(target_ids.clone(), cx);
 
         vec![
@@ -129,10 +135,45 @@ impl NyaTermApp {
                     this.edit_saved_connection_by_id(&edit_id, window, cx);
                 })),
             NyaMenuItem::separator(),
+            NyaMenuItem::action(t!("fileManager.openInManager"))
+                .icon("icons/file-manager.svg")
+                .disabled(!manager_available)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(session_id) = &open_session {
+                        this.open_file_manager_for_session(session_id, None, cx);
+                    } else {
+                        this.shell
+                            .set_status(t!("fileManager.sessionUnavailable").to_string());
+                        cx.notify();
+                    }
+                })),
+            NyaMenuItem::action(t!("fileManager.openLeft"))
+                .disabled(!manager_available)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(session_id) = &left_session {
+                        this.open_file_manager_for_session(
+                            session_id,
+                            Some(crate::features::file_manager::PaneId::Left),
+                            cx,
+                        );
+                    }
+                })),
+            NyaMenuItem::action(t!("fileManager.openRight"))
+                .disabled(!manager_available)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(session_id) = &right_session {
+                        this.open_file_manager_for_session(
+                            session_id,
+                            Some(crate::features::file_manager::PaneId::Right),
+                            cx,
+                        );
+                    }
+                })),
+            NyaMenuItem::separator(),
             NyaMenuItem::action(t!("savedConnections.rename"))
                 .icon("icons/session/rename.svg")
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.edit_saved_connection_by_id(&connection_id, window, cx);
+                    this.edit_saved_connection_by_id(&rename_id, window, cx);
                 })),
             NyaMenuItem::action(copy_label)
                 .icon("icons/copy.svg")
@@ -432,7 +473,11 @@ mod tests {
             let selected = app.connection_context_menu_items(connections[0].clone(), cx);
             assert!(selected[0].test_label().ends_with("(2)"));
             assert_eq!(
-                selected[4].test_label(),
+                selected[3].test_label(),
+                rust_i18n::t!("fileManager.openInManager")
+            );
+            assert_eq!(
+                selected[8].test_label(),
                 rust_i18n::t!("savedConnections.copySelected")
             );
             let unselected = app.connection_context_menu_items(connections[2].clone(), cx);
@@ -446,7 +491,7 @@ mod tests {
                 rust_i18n::t!("savedConnections.connect")
             );
             assert_eq!(
-                asset[4].test_label(),
+                asset[8].test_label(),
                 rust_i18n::t!("savedConnections.copy")
             );
             assert_eq!(app.connection_state.selected_connections().len(), 2);

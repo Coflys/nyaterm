@@ -47,6 +47,7 @@ use crate::features::sync::CloudSyncFeatureState;
 use crate::features::sync_input::SyncInputFeatureState;
 use crate::features::terminal::{TerminalFeatureFocus, TerminalFeatureState};
 use crate::features::text_inputs::TextInputRegistry;
+use crate::features::file_manager::FileManagerFeatureState;
 use crate::features::transfers::{TransferFeatureFocus, TransferFeatureState};
 use crate::features::translation::TranslationFeatureState;
 use crate::features::tunnels::{TunnelCatalogState, TunnelFeatureState};
@@ -351,6 +352,7 @@ impl NyaTermApp {
                 },
                 cx.background_executor().clone(),
             ),
+            file_manager: FileManagerFeatureState::default(),
             security: SecurityFeatureState::new(
                 SecurityCatalogState::new(
                     connection_ssh_keys,

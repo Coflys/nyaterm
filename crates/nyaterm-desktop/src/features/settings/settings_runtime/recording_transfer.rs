@@ -220,6 +220,14 @@ impl NyaTermApp {
         self.save_transfer_settings("transfer save-location preference saved", cx);
     }
 
+    pub(in crate::features) fn toggle_file_manager_auto_collapse(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_file_manager_auto_collapse();
+        self.queue_settings_save(SettingsSaveKind::FileExplorer, cx);
+    }
+
     pub(in crate::features) fn toggle_transfer_preserve_timestamps(
         &mut self,
         cx: &mut Context<Self>,

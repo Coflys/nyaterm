@@ -57,11 +57,24 @@ impl NyaTermApp {
         if !self.title_menu_command_enabled(command, cx) {
             return;
         }
-        if let Some(crate::models::WorkspaceTabId::Editor(id)) = self
+        if let Some(tab) = self
             .active_workspace_tab()
             .as_deref()
             .map(crate::models::WorkspaceTabId::from_layout_key)
+            && !tab.is_session()
         {
+            if let crate::models::WorkspaceTabId::FileManager(_) = tab {
+                match command {
+                    TitleMenuCommand::TerminalCopy
+                    | TitleMenuCommand::TerminalPaste
+                    | TitleMenuCommand::TerminalFind
+                    | TitleMenuCommand::TerminalSelectAll
+                    | TitleMenuCommand::TerminalClear
+                    | TitleMenuCommand::ToggleBroadcast => return,
+                    _ => {}
+                }
+            }
+        if let crate::models::WorkspaceTabId::Editor(id) = tab {
             match command {
                 TitleMenuCommand::TerminalCopy
                 | TitleMenuCommand::TerminalPaste
@@ -90,7 +103,11 @@ impl NyaTermApp {
                 _ => {}
             }
         }
+        }
         match command {
+            TitleMenuCommand::OpenFileManager => {
+                self.open_file_manager_tab(None, cx);
+            }
             TitleMenuCommand::NewWindow => {
                 cx.emit(crate::features::AppLifecycleEvent::NewWindowRequested)
             }
@@ -266,6 +283,9 @@ impl NyaTermApp {
                 .icon("icons/conn/add.svg")
                 .shortcut(self.display_shortcut_for("tab.newSession", "Ctrl+Shift+T"))
                 .command(TitleMenuCommand::NewSession),
+            TitleMenuDefinition::action(t!("fileManager.tabTitle"))
+                .icon("icons/file-manager.svg")
+                .command(TitleMenuCommand::OpenFileManager),
             TitleMenuDefinition::separator(),
             TitleMenuDefinition::action(t!("settings.importConfig"))
                 .icon("icons/import.svg")

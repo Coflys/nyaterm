@@ -13,6 +13,7 @@ mod remote_text_editor;
 mod state;
 pub(in crate::features) use state::TransferSessionTransferBundle;
 pub(in crate::features) use state::TransferTreePresentation;
+pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey, record_browser_history};
 mod transfer_events;
 pub(in crate::features) mod transfer_jobs;
 mod transfer_options;

@@ -217,14 +217,45 @@ impl NyaTermApp {
             );
         } else {
             for (index, key) in sessions.into_iter().enumerate() {
-                if let crate::models::WorkspaceTabId::Editor(id) =
-                    crate::models::WorkspaceTabId::from_layout_key(&key)
-                {
-                    if let Some(document) = self.transfer.editor_tab_snapshot(&id) {
+                match crate::models::WorkspaceTabId::from_layout_key(&key) {
+                    crate::models::WorkspaceTabId::Editor(id) => {
+                        if let Some(document) = self.transfer.editor_tab_snapshot(&id) {
+                            let selected = active_id.as_deref() == Some(&key);
+                            list = list.child(
+                                div()
+                                    .id(gpui::SharedString::from(format!("open-editor-{id}")))
+                                    .px_3()
+                                    .py_2()
+                                    .flex()
+                                    .gap_2()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .bg(rgb(if selected {
+                                        palette.hover
+                                    } else {
+                                        palette.surface
+                                    }))
+                                    .child(ordinals.get(&key).copied().unwrap_or(index + 1).to_string())
+                                    .child(if document.dirty {
+                                        format!("● {}", document.name)
+                                    } else {
+                                        document.name
+                                    })
+                                    .on_click(cx.listener(move |app, _, window, cx| {
+                                        app.activate_workspace_tab(&key, cx);
+                                        app.shell.close_root_menus();
+                                        app.focus_active_workspace_surface(window, cx);
+                                    })),
+                            );
+                        }
+                        continue;
+                    }
+                    crate::models::WorkspaceTabId::FileManager(id) => {
                         let selected = active_id.as_deref() == Some(&key);
+                        let title = self.file_manager_tab_title(&id, cx);
                         list = list.child(
                             div()
-                                .id(gpui::SharedString::from(format!("open-editor-{id}")))
+                                .id(gpui::SharedString::from(format!("open-file-manager-{id}")))
                                 .px_3()
                                 .py_2()
                                 .flex()
@@ -237,19 +268,16 @@ impl NyaTermApp {
                                     palette.surface
                                 }))
                                 .child(ordinals.get(&key).copied().unwrap_or(index + 1).to_string())
-                                .child(if document.dirty {
-                                    format!("● {}", document.name)
-                                } else {
-                                    document.name
-                                })
+                                .child(title)
                                 .on_click(cx.listener(move |app, _, window, cx| {
                                     app.activate_workspace_tab(&key, cx);
                                     app.shell.close_root_menus();
                                     app.focus_active_workspace_surface(window, cx);
                                 })),
                         );
+                        continue;
                     }
-                    continue;
+                    crate::models::WorkspaceTabId::Session(_) => {}
                 }
                 let Some(session) = self.session.session_info(&key) else {
                     continue;

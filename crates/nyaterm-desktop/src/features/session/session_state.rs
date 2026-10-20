@@ -284,10 +284,7 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) {
-        if matches!(
-            crate::models::WorkspaceTabId::from_layout_key(&session_id),
-            crate::models::WorkspaceTabId::Editor(_)
-        ) {
+        if !crate::models::WorkspaceTabId::from_layout_key(&session_id).is_session() {
             self.activate_workspace_tab(&session_id, cx);
             return;
         }

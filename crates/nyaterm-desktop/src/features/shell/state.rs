@@ -40,10 +40,10 @@ pub(in crate::features) struct ShellFeatureState {
     pub(super) runtime: ShellRuntimeState,
     pub(super) bottom_panel: ShellBottomPanelState,
     pub(super) viewport: ShellViewportState,
-    pub(super) navigation: ShellNavigationState,
-    pub(super) panels: ShellPanelState,
+    pub(in crate::features) navigation: ShellNavigationState,
+    pub(in crate::features) panels: ShellPanelState,
     pub(super) chrome: ShellChromeState,
-    pub(super) workspace: ShellWorkspaceState,
+    pub(in crate::features) workspace: ShellWorkspaceState,
     pub(super) diagnostics: ShellDiagnosticState,
     resize_handle_hover: ResizeHandleHoverState,
     /// The window `NyaTermApp` itself renders in.
@@ -128,9 +128,9 @@ pub(super) struct WallpaperCache {
 }
 
 /// Top-level page navigation and the settings-page/window lifecycle.
-pub(super) struct ShellNavigationState {
-    pub(super) selected_nav: NavItem,
-    pub(super) main_mode: MainMode,
+pub(in crate::features) struct ShellNavigationState {
+    pub(in crate::features) selected_nav: NavItem,
+    pub(in crate::features) main_mode: MainMode,
     pub(super) settings: ShellSettingsNavigationState,
 }
 
@@ -144,9 +144,9 @@ pub(super) struct ShellSettingsNavigationState {
 }
 
 /// Side-panel selection, stack layout and resize interaction state.
-pub(super) struct ShellPanelState {
-    pub(super) active_left: Option<NavItem>,
-    pub(super) active_right: Option<NavItem>,
+pub(in crate::features) struct ShellPanelState {
+    pub(in crate::features) active_left: Option<NavItem>,
+    pub(in crate::features) active_right: Option<NavItem>,
     pub(super) left_open: Vec<String>,
     pub(super) right_open: Vec<String>,
     pub(super) stack_sizes: HashMap<String, f32>,
@@ -158,8 +158,8 @@ pub(super) struct ShellPanelState {
     pub(super) floating_right: Option<NavItem>,
     pub(super) last_floating_side: Option<PanelSide>,
     pub(super) right_focus: RightFocus,
-    pub(super) left_collapsed: bool,
-    pub(super) right_collapsed: bool,
+    pub(in crate::features) left_collapsed: bool,
+    pub(in crate::features) right_collapsed: bool,
     pub(super) mobile_left_open: bool,
     pub(super) mobile_right_open: bool,
     pub(super) left_width: f32,
@@ -187,7 +187,7 @@ pub(super) struct ShellChromeState {
 }
 
 /// Global and per-tab pane trees for the workspace surface.
-pub(super) struct ShellWorkspaceState {
+pub(in crate::features) struct ShellWorkspaceState {
     pub(super) windows: super::window_state::TerminalWindowState,
     pub(in crate::features) focused_group: Option<String>,
     pub(in crate::features) hidden_sessions: HashSet<String>,

@@ -15,10 +15,11 @@ use super::{
 };
 use nyaterm_core::{
     AppSettingsSummary, CredentialCrypto, DEFAULT_RECORDING_PATH_TEMPLATE,
-    DEFAULT_TERMINAL_TIMESTAMP_FORMAT, ExistingFileBehavior, InternalEditorDisplay, RecordingMode,
-    RecordingRotationPolicy, SearchEngineConfig, TerminalRightClickAction, TransferBrowserViewMode,
-    WorkspaceId, WorkspaceRestoreManifest, WorkspaceRestoreState, WorkspaceSessionState,
-    WorkspaceUiState, default_panel_open_mode, default_search_engines, normalize_panel_open_mode,
+    DEFAULT_TERMINAL_TIMESTAMP_FORMAT, ExistingFileBehavior, FileManagerUiSettings,
+    InternalEditorDisplay, RecordingMode, RecordingRotationPolicy, SearchEngineConfig,
+    TerminalRightClickAction, TransferBrowserViewMode, WorkspaceId, WorkspaceRestoreManifest,
+    WorkspaceRestoreState, WorkspaceSessionState, WorkspaceUiState, default_panel_open_mode,
+    default_search_engines, normalize_panel_open_mode,
 };
 
 // Reject malformed known fields before an unrelated save can replace their data.
@@ -307,6 +308,10 @@ impl ConnectionStore {
                 &["ui", "file_explorer_favorite_dirs_by_connection_id"],
                 12,
             ),
+            ui_file_manager: json_path(&value, &["ui", "file_manager"])
+                .cloned()
+                .and_then(|value| serde_json::from_value::<FileManagerUiSettings>(value).ok())
+                .unwrap_or_default(),
             ui_left_panel_width: json_u32(&value, &["ui", "left_width"], 256).clamp(160, 720),
             ui_right_panel_width: json_u32(&value, &["ui", "right_width"], 288).clamp(200, 720),
             ui_transfer_height: json_u32(&value, &["ui", "transfer_height"], 180).clamp(60, 600),
@@ -871,6 +876,11 @@ impl ConnectionStore {
                 &settings.ui_file_explorer_favorite_dirs_by_connection_id,
                 12,
             ),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["ui", "file_manager"],
+            serde_json::to_value(&settings.ui_file_manager).unwrap_or(serde_json::Value::Null),
         );
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()

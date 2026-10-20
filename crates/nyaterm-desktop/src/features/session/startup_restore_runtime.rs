@@ -535,6 +535,7 @@ impl NyaTermApp {
         if !self.session.ordered_sessions().is_empty() {
             self.persist_open_tabs();
         }
+        self.restore_file_manager_after_sessions(cx);
         cx.notify();
     }
 

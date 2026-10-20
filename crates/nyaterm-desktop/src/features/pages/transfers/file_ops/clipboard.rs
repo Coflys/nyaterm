@@ -6,8 +6,8 @@ use gpui::{Context, Window};
 use nyaterm_transport::{
     FileBrowserBackendKind, FileBrowserService, FileCopyRequest, RemoteFilePath,
     SftpDuplicatePolicy, SftpDuplicateResolver, SftpFileEntry, SftpFileType,
-    SftpPathTransferOptions, SftpTransferControl, file_browser_join, file_browser_name,
-    file_browser_parent, file_browser_path_is_root,
+    SftpPathTransferOptions, SftpTransferControl, file_browser_copy_destination_invalid,
+    file_browser_join, file_browser_name, file_browser_parent, file_browser_path_is_root,
 };
 
 use crate::features::NyaTermApp;
@@ -20,28 +20,13 @@ use crate::models::{
 
 type FileInventory = BTreeMap<String, (SftpFileType, Option<u64>, Option<u32>)>;
 
-fn remote_parts(path: &str) -> Option<Vec<&str>> {
-    if !path.starts_with('/') || path.contains('\0') {
-        return None;
-    }
-    let mut parts = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            _ => parts.push(part),
-        }
-    }
-    Some(parts)
-}
-
-fn invalid_copy_destination(source: &str, target: &str, directory: bool) -> bool {
-    let (Some(source), Some(target)) = (remote_parts(source), remote_parts(target)) else {
-        return true;
-    };
-    source.is_empty() || source == target || (directory && target.starts_with(&source))
+fn invalid_copy_destination(
+    kind: FileBrowserBackendKind,
+    source: &str,
+    target: &str,
+    directory: bool,
+) -> bool {
+    file_browser_copy_destination_invalid(kind, source, target, directory)
 }
 
 fn inventory(
@@ -88,17 +73,22 @@ fn inventory(
 }
 
 fn check_no_symlink_ancestors(service: &FileBrowserService, path: &str) -> Result<(), String> {
-    let parts = remote_parts(path).ok_or("cut requires absolute remote paths")?;
-    let mut prefix = String::new();
-    for part in parts {
-        prefix.push('/');
-        prefix.push_str(part);
+    let mut current = path.to_string();
+    loop {
         let props = service
-            .remote_file_properties(&RemoteFilePath::new(&prefix))
+            .remote_file_properties(&RemoteFilePath::new(&current))
             .map_err(|error| error.to_string())?;
         if props.file_type == SftpFileType::Symlink {
             return Err("cut through a symbolic link is not supported".into());
         }
+        if file_browser_path_is_root(service.kind(), &current) {
+            break;
+        }
+        let parent = file_browser_parent(service.kind(), &current);
+        if parent == current {
+            break;
+        }
+        current = parent;
     }
     Ok(())
 }
@@ -194,10 +184,12 @@ impl NyaTermApp {
                     && !selected.iter().any(|parent| {
                         parent.path != entry.path
                             && parent.is_directory()
-                            && backend == FileBrowserBackendKind::Remote
-                            && remote_parts(&parent.path)
-                                .zip(remote_parts(&entry.path))
-                                .is_some_and(|(parent, child)| child.starts_with(&parent))
+                            && file_browser_copy_destination_invalid(
+                                backend,
+                                &parent.path,
+                                &entry.path,
+                                true,
+                            )
                     })
             })
             .cloned()
@@ -359,14 +351,12 @@ impl NyaTermApp {
             let name = file_browser_name(source_service.kind(), &entry.path);
             let target_path = file_browser_join(target_service.kind(), &target_dir, &name);
             if same_endpoint
-                && source_service.kind() == FileBrowserBackendKind::Remote
-                && invalid_copy_destination(&entry.path, &target_path, entry.is_directory())
-            {
-                continue;
-            }
-            if same_endpoint
-                && source_service.kind() == FileBrowserBackendKind::Local
-                && std::path::Path::new(&target_path).starts_with(&entry.path)
+                && invalid_copy_destination(
+                    source_service.kind(),
+                    &entry.path,
+                    &target_path,
+                    entry.is_directory(),
+                )
             {
                 continue;
             }
@@ -426,18 +416,18 @@ impl NyaTermApp {
     }
 }
 
-struct ClipboardCopyRequest {
-    source_service: FileBrowserService,
-    target_service: FileBrowserService,
-    source: RemoteFilePath,
-    target_path: String,
-    target_session_id: String,
-    cut: bool,
-    control: SftpTransferControl,
-    options: SftpPathTransferOptions,
+pub(in crate::features) struct ClipboardCopyRequest {
+    pub source_service: FileBrowserService,
+    pub target_service: FileBrowserService,
+    pub source: RemoteFilePath,
+    pub target_path: String,
+    pub target_session_id: String,
+    pub cut: bool,
+    pub control: SftpTransferControl,
+    pub options: SftpPathTransferOptions,
 }
 
-fn run_clipboard_copy(
+pub(in crate::features) fn run_clipboard_copy(
     request: ClipboardCopyRequest,
     progress: impl FnMut(nyaterm_transport::SftpTransferProgress) + Send + 'static,
 ) -> Result<TransferJobOutput, String> {
@@ -528,7 +518,7 @@ mod tests {
         TransferFileClipboard, copied_tree_matches, invalid_copy_destination,
         local_clipboard_entry, prefer_external_paths,
     };
-    use nyaterm_transport::SftpFileType;
+    use nyaterm_transport::{FileBrowserBackendKind, SftpFileType};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -580,11 +570,93 @@ mod tests {
     }
 
     #[test]
+    fn local_cut_deletes_source_only_after_a_successful_copy() {
+        use super::{ClipboardCopyRequest, run_clipboard_copy};
+        use nyaterm_transport::{
+            FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
+        };
+
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let source = root.join("source.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&source, b"payload").unwrap();
+        run_clipboard_copy(
+            ClipboardCopyRequest {
+                source_service: FileBrowserService::local(),
+                target_service: FileBrowserService::local(),
+                source: RemoteFilePath::new(source.to_string_lossy()),
+                target_path: target.to_string_lossy().into_owned(),
+                target_session_id: "local".into(),
+                cut: true,
+                control: SftpTransferControl::new(),
+                options: SftpPathTransferOptions::default(),
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(target).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn cancelled_cut_keeps_the_source() {
+        use super::{ClipboardCopyRequest, run_clipboard_copy};
+        use nyaterm_transport::{
+            FileBrowserService, RemoteFilePath, SftpPathTransferOptions, SftpTransferControl,
+        };
+
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut-cancel");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let source = root.join("source.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&source, b"keep-me").unwrap();
+        let control = SftpTransferControl::new();
+        control.cancel();
+        let result = run_clipboard_copy(
+            ClipboardCopyRequest {
+                source_service: FileBrowserService::local(),
+                target_service: FileBrowserService::local(),
+                source: RemoteFilePath::new(source.to_string_lossy()),
+                target_path: target.to_string_lossy().into_owned(),
+                target_session_id: "local".into(),
+                cut: true,
+                control,
+                options: SftpPathTransferOptions::default(),
+            },
+            |_| {},
+        );
+        assert!(result.is_err());
+        assert!(source.exists());
+        assert_eq!(std::fs::read(source).unwrap(), b"keep-me");
+    }
+
+    #[test]
     fn remote_copy_rejects_self_descendant_and_root_after_normalization() {
-        assert!(invalid_copy_destination("/src", "/src/./", false));
-        assert!(invalid_copy_destination("/src", "/src/child/file", true));
-        assert!(invalid_copy_destination("/", "/other", true));
-        assert!(!invalid_copy_destination("/src", "/other/file", true));
+        assert!(invalid_copy_destination(
+            FileBrowserBackendKind::Remote,
+            "/src",
+            "/src/./",
+            false
+        ));
+        assert!(invalid_copy_destination(
+            FileBrowserBackendKind::Remote,
+            "/src",
+            "/src/child/file",
+            true
+        ));
+        assert!(invalid_copy_destination(
+            FileBrowserBackendKind::Remote,
+            "/",
+            "/other",
+            true
+        ));
+        assert!(!invalid_copy_destination(
+            FileBrowserBackendKind::Remote,
+            "/src",
+            "/other/file",
+            true
+        ));
     }
 
     #[test]

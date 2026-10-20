@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use std::collections::HashMap;
 
-use gpui::{AppContext as _, Context, Window};
+use gpui::{AppContext as _, Context, Focusable as _, Window};
 use nyaterm_core::fuzzy_search_items;
 use nyaterm_ui::NyaCommandState;
 
@@ -98,13 +98,22 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(key) = self.active_workspace_tab()
-            && let crate::models::WorkspaceTabId::Editor(id) =
-                crate::models::WorkspaceTabId::from_layout_key(&key)
-            && let Some(view) = self.transfer.workspace_editor_view(&id)
-        {
-            view.update(cx, |view, cx| view.focus(window, cx));
-            return;
+        if let Some(key) = self.active_workspace_tab() {
+            match crate::models::WorkspaceTabId::from_layout_key(&key) {
+                crate::models::WorkspaceTabId::Editor(id) => {
+                    if let Some(view) = self.transfer.workspace_editor_view(&id) {
+                        view.update(cx, |view, cx| view.focus(window, cx));
+                        return;
+                    }
+                }
+                crate::models::WorkspaceTabId::FileManager(id) => {
+                    if let Some(view) = self.file_manager.workspace(&id) {
+                        window.focus(&view.read(cx).focus_handle(cx), cx);
+                        return;
+                    }
+                }
+                crate::models::WorkspaceTabId::Session(_) => {}
+            }
         }
         match workspace_surface_focus_target(self.session.active_id(), |session_id| {
             self.remote_desktop.is_session(session_id)
@@ -143,16 +152,26 @@ impl NyaTermApp {
         }
 
         for key in self.workspace_tab_ids() {
-            if let crate::models::WorkspaceTabId::Editor(id) =
-                crate::models::WorkspaceTabId::from_layout_key(&key)
-                && let Some(document) = self.transfer.editor_tab_snapshot(&id)
-            {
-                session_items.push(QuickSwitchItem::Session {
-                    active: active_tab.as_deref() == Some(&key),
-                    id: key,
-                    title: document.name,
-                    subtitle: document.remote_path,
-                });
+            match crate::models::WorkspaceTabId::from_layout_key(&key) {
+                crate::models::WorkspaceTabId::Editor(id) => {
+                    if let Some(document) = self.transfer.editor_tab_snapshot(&id) {
+                        session_items.push(QuickSwitchItem::Session {
+                            active: active_tab.as_deref() == Some(&key),
+                            id: key,
+                            title: document.name,
+                            subtitle: document.remote_path,
+                        });
+                    }
+                }
+                crate::models::WorkspaceTabId::FileManager(id) => {
+                    session_items.push(QuickSwitchItem::Session {
+                        active: active_tab.as_deref() == Some(&key),
+                        id: key,
+                        title: t!("fileManager.tabTitle").to_string(),
+                        subtitle: id,
+                    });
+                }
+                crate::models::WorkspaceTabId::Session(_) => {}
             }
         }
         let order = self.workspace_tab_ids();

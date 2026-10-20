@@ -1,6 +1,6 @@
 use crate::features::NyaTermApp;
 use crate::models::TerminalWindowNode;
-use gpui::{Context, Window};
+use gpui::{Context, Focusable as _, Window};
 
 impl NyaTermApp {
     pub(in crate::features) fn select_terminal_group_tab(
@@ -96,13 +96,20 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let crate::models::WorkspaceTabId::Editor(id) =
-            crate::models::WorkspaceTabId::from_layout_key(session)
-        {
-            if let Some(view) = self.transfer.workspace_editor_view(&id) {
-                view.update(cx, |view, cx| view.focus(window, cx));
+        match crate::models::WorkspaceTabId::from_layout_key(session) {
+            crate::models::WorkspaceTabId::Editor(id) => {
+                if let Some(view) = self.transfer.workspace_editor_view(&id) {
+                    view.update(cx, |view, cx| view.focus(window, cx));
+                }
+                return;
             }
-            return;
+            crate::models::WorkspaceTabId::FileManager(id) => {
+                if let Some(view) = self.file_manager.workspace(&id) {
+                    window.focus(&view.read(cx).focus_handle(cx), cx);
+                }
+                return;
+            }
+            crate::models::WorkspaceTabId::Session(_) => {}
         }
         if self.remote_desktop.is_session(session) {
             window.focus(self.remote_desktop.focus(), cx);

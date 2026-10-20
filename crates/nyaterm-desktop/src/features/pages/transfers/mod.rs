@@ -16,7 +16,7 @@ mod drag_preview;
 mod duplicate_banner;
 mod editor;
 mod entry_row;
-mod file_ops;
+pub(in crate::features) mod file_ops;
 mod flush;
 mod forms;
 mod helpers;
@@ -43,6 +43,8 @@ use entry_row::{
     TransferBrowserEntryRowPresentation, transfer_browser_entry_row,
     transfer_browser_parent_entry_row,
 };
+pub(in crate::features) use entry_row::format_browser_file_size;
+pub(in crate::features) use helpers::format_sftp_modified;
 use helpers::*;
 
 const NATIVE_EDITOR_MAX_BYTES: u64 = 2 * 1024 * 1024;

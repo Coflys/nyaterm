@@ -32,6 +32,79 @@ impl TransferBrowserViewMode {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileManagerUiSettings {
+    #[serde(default)]
+    pub open: bool,
+    #[serde(default)]
+    pub left: FileManagerPaneRestore,
+    #[serde(default)]
+    pub right: FileManagerPaneRestore,
+    #[serde(default = "default_file_manager_split_percent")]
+    pub split_percent: u8,
+    #[serde(default)]
+    pub active_pane: FileManagerPaneSide,
+    #[serde(default)]
+    pub queue_expanded: bool,
+    #[serde(default = "default_file_manager_queue_height")]
+    pub queue_height: u32,
+    #[serde(default = "default_true")]
+    pub auto_collapse_sidebar: bool,
+    #[serde(default = "default_true")]
+    pub remember_layout: bool,
+}
+
+impl Default for FileManagerUiSettings {
+    fn default() -> Self {
+        Self {
+            open: false,
+            left: FileManagerPaneRestore::default(),
+            right: FileManagerPaneRestore::default(),
+            split_percent: default_file_manager_split_percent(),
+            active_pane: FileManagerPaneSide::Left,
+            queue_expanded: false,
+            queue_height: default_file_manager_queue_height(),
+            auto_collapse_sidebar: true,
+            remember_layout: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct FileManagerPaneRestore {
+    #[serde(default)]
+    pub source: FileManagerSourceRestore,
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileManagerSourceRestore {
+    #[default]
+    Local,
+    Connection {
+        #[serde(default)]
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FileManagerPaneSide {
+    #[default]
+    Left,
+    Right,
+}
+
+fn default_file_manager_split_percent() -> u8 {
+    50
+}
+
+fn default_file_manager_queue_height() -> u32 {
+    160
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalRightClickAction {
@@ -301,6 +374,9 @@ pub struct AppSettingsSummary {
     pub ui_file_explorer_auto_sync_cwd_connection_ids: Vec<String>,
     #[serde(default)]
     pub ui_file_explorer_favorite_dirs_by_connection_id: HashMap<String, Vec<String>>,
+    /// Dual-pane file manager layout. Independent of the sidebar explorer.
+    #[serde(default)]
+    pub ui_file_manager: FileManagerUiSettings,
     #[serde(default = "default_left_panel_width")]
     pub ui_left_panel_width: u32,
     #[serde(default = "default_right_panel_width")]
@@ -546,6 +622,7 @@ impl Default for AppSettingsSummary {
             ui_file_explorer_view_mode: TransferBrowserViewMode::List,
             ui_file_explorer_auto_sync_cwd_connection_ids: Vec::new(),
             ui_file_explorer_favorite_dirs_by_connection_id: HashMap::new(),
+            ui_file_manager: FileManagerUiSettings::default(),
             ui_left_panel_width: 256,
             ui_right_panel_width: 288,
             ui_transfer_height: 180,

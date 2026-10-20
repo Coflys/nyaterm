@@ -3494,6 +3494,10 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(summary.terminal_low_latency_mode);
     // Legacy settings omit the new field and must keep zebra stripes enabled.
     assert!(summary.terminal_zebra_stripes_enabled);
+    assert_eq!(
+        summary.ui_file_manager,
+        nyaterm_core::FileManagerUiSettings::default()
+    );
     assert_eq!(summary.ui_remote_stats_interval, 9);
     assert_eq!(summary.ui_gpu_monitor_interval, 7);
     assert_eq!(summary.ui_ascend_npu_monitor_interval, 8);
@@ -3811,6 +3815,37 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
             .filter_map(serde_json::Value::as_str)
             .collect::<Vec<_>>()),
         Some(vec!["/data", "/logs"])
+    );
+
+    let mut file_manager_update = summary.clone();
+    file_manager_update.ui_file_manager.open = true;
+    file_manager_update.ui_file_manager.split_percent = 40;
+    file_manager_update.ui_file_manager.left.path = "/tmp/left".to_string();
+    file_manager_update.ui_file_manager.right = nyaterm_core::FileManagerPaneRestore {
+        source: nyaterm_core::FileManagerSourceRestore::Connection {
+            id: "conn-1".to_string(),
+        },
+        path: "/var".to_string(),
+    };
+    let updated = store
+        .save_file_explorer_favorite_dirs(&file_manager_update)
+        .expect("save file manager");
+    assert!(updated.ui_file_manager.open);
+    assert_eq!(updated.ui_file_manager.split_percent, 40);
+    assert_eq!(updated.ui_file_manager.left.path, "/tmp/left");
+    assert_eq!(
+        updated.ui_file_manager.right,
+        nyaterm_core::FileManagerPaneRestore {
+            source: nyaterm_core::FileManagerSourceRestore::Connection {
+                id: "conn-1".to_string(),
+            },
+            path: "/var".to_string(),
+        }
+    );
+    let stored = store.load_settings_value().expect("stored file manager");
+    assert_eq!(
+        json_path(&stored, &["ui", "file_manager", "open"]).and_then(|value| value.as_bool()),
+        Some(true)
     );
 
     let mut next_keybindings = summary.keybindings.clone();

@@ -23,6 +23,7 @@ use super::sync::CloudSyncFeatureState;
 use super::sync_input::SyncInputFeatureState;
 use super::terminal::TerminalFeatureState;
 use super::text_inputs::TextInputRegistry;
+use super::file_manager::FileManagerFeatureState;
 use super::transfers::TransferFeatureState;
 use super::translation::TranslationFeatureState;
 use super::tunnels::TunnelFeatureState;
@@ -104,6 +105,7 @@ pub struct NyaTermApp {
     pub(in crate::features) terminal: TerminalFeatureState,
     pub(in crate::features) send_command: SendCommandFeatureState,
     pub(in crate::features) transfer: TransferFeatureState,
+    pub(in crate::features) file_manager: FileManagerFeatureState,
     pub(in crate::features) translation: TranslationFeatureState,
     pub(in crate::features) update: gpui::Entity<super::update::UpdateStore>,
     pub(in crate::features) cloud_sync: CloudSyncFeatureState,

@@ -14,10 +14,7 @@ impl NyaTermApp {
     ) {
         if self.security.screen_locked()
             || self.active_workspace_tab().is_some_and(|key| {
-                matches!(
-                    crate::models::WorkspaceTabId::from_layout_key(&key),
-                    crate::models::WorkspaceTabId::Editor(_)
-                )
+                !crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
             })
         {
             return;
@@ -70,10 +67,7 @@ impl NyaTermApp {
     ) {
         if self.security.screen_locked()
             || self.active_workspace_tab().is_some_and(|key| {
-                matches!(
-                    crate::models::WorkspaceTabId::from_layout_key(&key),
-                    crate::models::WorkspaceTabId::Editor(_)
-                )
+                !crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
             })
         {
             return;
@@ -169,10 +163,7 @@ impl NyaTermApp {
     ) {
         if self.security.screen_locked()
             || self.active_workspace_tab().is_some_and(|key| {
-                matches!(
-                    crate::models::WorkspaceTabId::from_layout_key(&key),
-                    crate::models::WorkspaceTabId::Editor(_)
-                )
+                !crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
             })
         {
             return;

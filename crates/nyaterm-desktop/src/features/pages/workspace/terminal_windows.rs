@@ -162,6 +162,9 @@ impl NyaTermApp {
                     self.workspace_session_content(id, cx)
                 }
                 crate::models::WorkspaceTabId::Editor(id) => self.workspace_editor_content(&id, cx),
+                crate::models::WorkspaceTabId::FileManager(id) => {
+                    self.workspace_file_manager_content(&id, cx)
+                }
             }
         } else {
             self.empty_workspace_state(cx).into_any_element()
@@ -172,10 +175,7 @@ impl NyaTermApp {
         let zone = self.shell.terminal_window_drop_for_leaf(group);
         let palette = self.theme_palette();
         let clicked_editor = active.clone().filter(|key| {
-            matches!(
-                crate::models::WorkspaceTabId::from_layout_key(key),
-                crate::models::WorkspaceTabId::Editor(_)
-            )
+            !crate::models::WorkspaceTabId::from_layout_key(key).is_terminal_session()
         });
         div()
             .id(SharedString::from(format!("tw-content-{group}")))

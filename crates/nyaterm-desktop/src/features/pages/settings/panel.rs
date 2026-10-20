@@ -2008,6 +2008,7 @@ forward_app_action!(
     toggle_terminal_workspace_padding,
     toggle_terminal_zebra_stripes,
     toggle_terminal_zoom_enabled,
+    toggle_file_manager_auto_collapse,
     toggle_transfer_ask_save_location,
     toggle_transfer_preserve_timestamps,
     toggle_transfer_resume_broken,
