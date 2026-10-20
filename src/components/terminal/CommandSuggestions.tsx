@@ -44,7 +44,7 @@ function HighlightedCommand({ text, indices }: { text: string; indices: number[]
   }
 
   return (
-    <span className="font-mono text-[0.75rem]">
+    <span className="font-mono text-[0.75rem] whitespace-pre">
       {parts.map((part) =>
         part.highlighted ? (
           <span
