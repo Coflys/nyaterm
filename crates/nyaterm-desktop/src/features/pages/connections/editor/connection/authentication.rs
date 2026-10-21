@@ -1,6 +1,6 @@
 use gpui::{Context, Div, div, prelude::*, rgb};
 use nyaterm_core::ConnectionUsernameSource;
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaTabItem, NyaTabs};
+use nyaterm_ui::{NyaButton, NyaTabItem, NyaTabs};
 use rust_i18n::t;
 
 use super::super::super::list::{
@@ -92,39 +92,65 @@ pub(super) fn login_identity(
                 .child(t!("passwordManager.missingAccount")),
         );
     }
-    body = body.child(editor_field(
-        palette,
-        if editor.kind == ConnectionKindTab::Ssh {
-            required(t!("dialog.username"))
-        } else {
-            t!("credentialManager.usernameOptionalLabel").into()
-        },
-        ConnectionEditorField::Username,
-        fields,
-        cx,
-    ));
+    let mut username_row = div().flex().flex_wrap().items_end().gap_2().child(
+        div()
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .child(editor_field(
+                palette,
+                if editor.kind == ConnectionKindTab::Ssh {
+                    required(t!("dialog.username"))
+                } else {
+                    t!("credentialManager.usernameOptionalLabel").into()
+                },
+                ConnectionEditorField::Username,
+                fields,
+                cx,
+            )),
+    );
+    if follows_account {
+        username_row = username_row
+            .debug_selector(|| "connection-account-username".to_string())
+            .child(
+                NyaButton::new("connection-username-override", t!("common.edit"))
+                    .form_control()
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.use_connection_editor_username(cx)),
+                    ),
+            );
+    } else if account_username.is_some()
+        && editor.username_source == ConnectionUsernameSource::Connection
+    {
+        username_row = username_row.child(
+            NyaButton::new(
+                "connection-username-restore",
+                t!("authForm.restoreAccountUsername"),
+            )
+            .form_control()
+            .on_click(
+                cx.listener(|this, _, _, cx| this.follow_connection_editor_account_username(cx)),
+            ),
+        );
+    }
+    body = body.child(username_row);
     if follows_account {
         body = body.child(
             div()
-                .debug_selector(|| "connection-account-username".to_string())
-                .child(username_source_row(
-                    palette,
-                    t!("authForm.usernameProvidedByAccount"),
-                    "connection-username-override",
-                    t!("authForm.useConnectionUsername"),
-                    cx.listener(|this, _, _, cx| this.use_connection_editor_username(cx)),
-                )),
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("authForm.usernameProvidedByAccount")),
         );
     } else if account_username.is_some()
         && editor.username_source == ConnectionUsernameSource::Connection
     {
-        body = body.child(username_source_row(
-            palette,
-            t!("authForm.usernameForConnection"),
-            "connection-username-restore",
-            t!("authForm.restoreAccountUsername"),
-            cx.listener(|this, _, _, cx| this.follow_connection_editor_account_username(cx)),
-        ));
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("authForm.usernameForConnection")),
+        );
     } else if fields.account.is_some() && account_username.is_none() {
         body = body.child(
             div()
@@ -149,32 +175,6 @@ fn account_password_prompt(fields: &ConnectionEditorFields, has_password: bool) 
     } else {
         t!("authForm.accountPasswordMissingDescription", name = name).to_string()
     }
-}
-
-fn username_source_row(
-    palette: crate::theme::ThemePalette,
-    hint: impl Into<gpui::SharedString>,
-    id: &'static str,
-    label: impl Into<gpui::SharedString>,
-    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> Div {
-    div()
-        .flex()
-        .flex_wrap()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(palette.text_muted))
-                .child(hint.into()),
-        )
-        .child(
-            NyaButton::new(id, label)
-                .variant(NyaButtonVariant::Ghost)
-                .small()
-                .on_click(on_click),
-        )
 }
 
 pub(super) fn password_source(
