@@ -1021,6 +1021,120 @@ fn snapshots_mark_wrapped_continuation_rows() {
 }
 
 #[test]
+fn line_numbers_count_hard_lines_instead_of_soft_wrapped_rows() {
+    for chunk_size in [1, 7, 128] {
+        let mut screen = TerminalScreen::new(4, 16);
+        let output = b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\nabcdefghijkl\r\nnext";
+        for chunk in output.chunks(chunk_size) {
+            screen.advance(chunk);
+        }
+        let snapshot = screen.snapshot();
+        for (row, number) in [(10, 11), (11, 11), (12, 11), (13, 12)] {
+            assert_eq!(snapshot.rows()[row].display_line_number, Some(number));
+        }
+        assert!(!snapshot.rows()[10].wrapped);
+        assert!(snapshot.rows()[11].wrapped);
+        assert!(snapshot.rows()[12].wrapped);
+        assert!(!snapshot.rows()[13].wrapped);
+    }
+}
+
+#[test]
+fn logical_line_numbers_agree_across_scrolled_and_prefetched_snapshots() {
+    let mut screen = TerminalScreen::new(4, 3);
+    screen.advance(b"abcdefghijkl\r\nnext\r\nlast");
+    assert_eq!(screen.snapshot().rows()[1].display_line_number, Some(2));
+    let older = screen.viewport_snapshot(2);
+    assert_eq!(older.rows()[0].display_line_number, Some(1));
+    assert_eq!(older.rows()[1].display_line_number, Some(1));
+    let window = screen.viewport_snapshot_with_window(0, 2, 0);
+    assert_eq!(window.rows()[3].display_line_number, Some(2));
+}
+
+#[test]
+fn logical_line_numbers_reflow_with_width_and_rebase_after_local_clear() {
+    let mut screen = TerminalScreen::new(4, 6);
+    screen.advance(b"abcdefghijkl\r\nnext");
+    for cols in [6, 3, 12, 4] {
+        screen.resize(cols, 6);
+        let snapshot = screen.snapshot();
+        let row = snapshot
+            .rows()
+            .iter()
+            .find(|row| row.text.starts_with("nex"))
+            .unwrap();
+        assert_eq!(row.display_line_number, Some(2));
+    }
+    screen.clear_except_input();
+    screen.advance(b"\r\nabcdefghijkl\r\nlast");
+    assert_eq!(
+        screen.snapshot().rows().last().unwrap().display_line_number,
+        Some(3)
+    );
+    for cols in [6, 3, 12, 4] {
+        screen.resize(cols, 6);
+        let snapshot = screen.snapshot();
+        let row = snapshot
+            .rows()
+            .iter()
+            .find(|row| row.text.starts_with("las"))
+            .unwrap();
+        assert_eq!(
+            row.display_line_number,
+            Some(3),
+            "cols {cols}: {:?}",
+            snapshot
+                .rows()
+                .iter()
+                .map(|row| (&row.text, row.display_line_number, row.cleared, row.wrapped))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn logical_line_numbers_keep_local_clear_origin_when_wrapped_history_is_pruned() {
+    let mut screen = TerminalScreen::new(4, 2);
+    screen.set_scrollback_limit(2);
+    screen.clear_except_input();
+    for _ in 0..10 {
+        screen.advance(b"abcdefghijkl\r\n");
+    }
+    assert_eq!(screen.snapshot().rows()[1].display_line_number, Some(11));
+}
+
+#[test]
+fn logical_line_numbers_rebuild_primary_history_after_resizing_an_alternate_screen() {
+    let mut screen = TerminalScreen::new(4, 3);
+    screen.advance(b"abcdefghijkl\r\nnext\r\nlast");
+    screen.advance(b"\x1b[?1049halternate");
+    screen.resize(3, 3);
+    screen.advance(b"\x1b[?1049l");
+    let snapshot = screen.viewport_snapshot_with_window(0, 8, 0);
+    let next = snapshot
+        .rows()
+        .iter()
+        .find(|row| row.text == "nex")
+        .unwrap();
+    assert_eq!(next.display_line_number, Some(2));
+    screen.advance(b"\x1bcabc\r\ndef");
+    assert_eq!(screen.snapshot().rows()[1].display_line_number, Some(2));
+}
+
+#[test]
+fn erasing_a_wrap_updates_following_line_numbers_and_invalidates_cached_rows() {
+    let mut screen = TerminalScreen::new(4, 4);
+    screen.advance(b"abcdefgh\r\nnext");
+    let before = screen.snapshot();
+    assert_eq!(before.rows()[2].display_line_number, Some(2));
+    screen.advance(b"\x1b[H\x1b[2K");
+    let after = screen.snapshot();
+    assert!(!after.rows()[1].wrapped);
+    assert_eq!(after.rows()[2].display_line_number, Some(3));
+    assert!(!Arc::ptr_eq(&before.rows()[2], &after.rows()[2]));
+}
+
+#[test]
 fn all_text_rows_preserve_wraps_across_scrollback_boundary() {
     let mut screen = TerminalScreen::new(5, 2);
     screen.advance(b"abcdef\r\nghij");
