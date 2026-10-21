@@ -1,14 +1,42 @@
 import type { IBufferCell, IBufferLine, Terminal } from "@xterm/xterm";
 import type { TerminalInputState } from "@/lib/terminalInputTracker";
 
-/** Read the current cursor line from the terminal buffer up to the cursor. */
+/** Read the wrapped logical input line up to the cursor, within a bounded budget. */
 export function readCurrentInputLine(terminal: Terminal): string {
   const buffer = terminal.buffer.active;
-  const y = buffer.baseY + buffer.cursorY;
-  const line = buffer.getLine(y);
+  const cursorY = buffer.baseY + buffer.cursorY;
+  let startY = cursorY;
+  let line = buffer.getLine(startY);
   if (!line) return "";
-  const fullLine = line.translateToString(true, 0, buffer.cursorX);
-  return fullLine;
+  while (line.isWrapped) {
+    // A truncated logical line has no trustworthy prompt boundary.
+    if (startY === 0 || cursorY - startY + 2 > MAX_INPUT_LOGICAL_LINE_ROWS) return "";
+    line = buffer.getLine(--startY);
+    if (!line) return "";
+  }
+
+  const parts: string[] = [];
+  let totalChars = 0;
+  for (let y = startY; y <= cursorY; y += 1) {
+    const row = buffer.getLine(y);
+    if (!row) return "";
+    // Preserve spaces at wrap boundaries and the empty prompt's separator.
+    let end = y === cursorY ? buffer.cursorX : terminal.cols;
+    if (y < cursorY) {
+      const lastCell = row.getCell(end - 1);
+      const nextCell = buffer.getLine(y + 1)?.getCell(0);
+      // xterm leaves a null padding cell when a wide glyph cannot fit in
+      // the final column. It is not a space entered as part of the command.
+      if (lastCell?.getCode() === 0 && lastCell.getWidth() === 1 && nextCell?.getWidth() === 2) {
+        end -= 1;
+      }
+    }
+    const text = row.translateToString(false, 0, end);
+    totalChars += text.length;
+    if (totalChars > MAX_INPUT_LOGICAL_LINE_CHARS) return "";
+    parts.push(text);
+  }
+  return parts.join("");
 }
 
 export function readRecentOutput(terminal: Terminal, lineLimit: number) {

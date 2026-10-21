@@ -5,7 +5,7 @@ export interface TerminalInputState {
   value: string;
   cursor: number;
   desynced: boolean;
-  desyncReason: "tab" | "terminal" | null;
+  desyncReason: "tab" | "history" | "terminal" | null;
   lineRewriteRequired: boolean;
   multiline: boolean;
   pasteMode: boolean;
@@ -122,7 +122,7 @@ export function deleteTerminalInputRange(
 
 function markDesynced(
   state: TerminalInputState,
-  reason: "tab" | "terminal",
+  reason: "tab" | "history" | "terminal",
   multiline = false,
 ): TerminalInputState {
   return {
@@ -216,9 +216,25 @@ function addSuffixCandidate(candidates: Set<string>, source: string, prefix: str
   }
 }
 
-function chooseTerminalLineCommand(previousValue: string, lineContent: string): string | null {
+function chooseTerminalLineCommand(
+  previousValue: string,
+  lineContent: string,
+  historyNavigation = false,
+): string | null {
+  const normalizedLine = normalizeLineContent(lineContent);
+  const visibleCommand = stripTerminalCommandPrompt(normalizedLine);
+  const hasKnownPrompt = visibleCommand !== normalizedLine.trimStart();
+  if (hasKnownPrompt && !visibleCommand.trim()) {
+    return "";
+  }
+  // History navigation can replace the whole command, unlike Tab completion.
+  // Only trust a replacement when the visible prompt boundary is recognizable.
+  if (historyNavigation) {
+    return hasKnownPrompt ? visibleCommand : null;
+  }
+
   const previousCommand = sanitizeTerminalCommand(previousValue);
-  const sanitizedLine = sanitizeTerminalCommand(lineContent);
+  const sanitizedLine = sanitizeTerminalCommand(normalizedLine);
   const candidates = new Set<string>();
 
   addCandidate(candidates, sanitizedLine);
@@ -254,6 +270,23 @@ export function applyTerminalInputData(
 ): TerminalInputState {
   if (!data) {
     return state;
+  }
+
+  if (
+    state.desynced &&
+    state.desyncReason === "history" &&
+    !state.pasteMode &&
+    !data.includes("\x1b[200~") &&
+    !data.includes("\x1b[201~") &&
+    !data.includes("\n") &&
+    !["\r", "\u0003", "\t", "\x1b[Z", "\x1b[A", "\x1bOA", "\x1b[B", "\x1bOB"].includes(
+      data,
+    ) &&
+    (data.startsWith("\x1b") || /[\x00-\x1f\x7f]/u.test(data))
+  ) {
+    // A cursor edit or an unknown control sequence makes the buffer's
+    // cursor-prefix insufficient to reconstruct the entire history line.
+    return markDesynced(state, "terminal");
   }
 
   switch (data) {
@@ -294,8 +327,16 @@ export function applyTerminalInputData(
       return { ...state, cursor: state.value.length };
     case "\x1b[3~":
       return deleteRight(state);
+    case "\x1b[A":
+    case "\x1bOA":
+    case "\x1b[B":
+    case "\x1bOB":
+      return markDesynced(state, "history");
     case "\t":
-      return markDesynced(state, "tab");
+    case "\x1b[Z":
+      return state.desynced && state.desyncReason === "history"
+        ? { ...markDesynced(state, "history"), lineRewriteRequired: true }
+        : markDesynced(state, "tab");
   }
 
   if (state.pasteMode || data.includes("\x1b[200~") || data.includes("\x1b[201~")) {
@@ -314,7 +355,18 @@ export function applyTerminalInputData(
     return markDesynced(state, "terminal");
   }
 
+  if (state.desynced && state.desyncReason === "history") {
+    // Text sent before history echo is confirmed cannot be replayed against
+    // a later screen snapshot: it may already be present in that snapshot.
+    return insertText(markDesynced(state, "terminal"), data);
+  }
+
   if (state.desynced && state.desyncReason === "tab") {
+    if (state.value.length > 0) {
+      // An unverified completion must not append to stale keystrokes and
+      // re-enable fuzzy matching for a command the shell may have replaced.
+      return insertText(state, data);
+    }
     return insertText(
       {
         ...state,
@@ -366,15 +418,30 @@ export function getTrackedSubmissionCommand(state: TerminalInputState): string {
 
 /**
  * Replace the tracker value with command text read from the terminal buffer.
- * Used after a tab-desync recovery: the terminal line contains the real input
- * including shell-completed text, while the tracker only has stale keystrokes.
+ * Used after Tab completion or shell history navigation: the terminal buffer
+ * may contain a replaced command rather than the tracker's stale keystrokes.
+ * History requires confirmation from parsed output for the same navigation;
+ * keyboard/Enter callers must leave historyOutputConfirmed at its default.
  */
 export function resyncFromTerminalLine(
   current: TerminalInputState,
   lineContent: string,
+  historyOutputConfirmed = false,
 ): TerminalInputState | null {
-  const value = chooseTerminalLineCommand(current.value, lineContent);
-  if (!value) {
+  if (
+    current.desyncReason === "terminal" ||
+    (current.desyncReason === "history" && !historyOutputConfirmed)
+  ) {
+    return null;
+  }
+  const value = chooseTerminalLineCommand(
+    current.value,
+    lineContent,
+    current.desyncReason === "history",
+  );
+  // A stale, prompt-only buffer must not erase a valid keystroke-tracked
+  // command during an ordinary Enter; only history/Tab may have cleared it.
+  if (value === null || (value === "" && !current.desynced)) {
     return null;
   }
 

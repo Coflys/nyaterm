@@ -1,6 +1,7 @@
 const LEADING_ENV_PREFIX = /^\(([^()\r\n]+)\)\s*/u;
 const BRACKET_PROMPT_PREFIX = /^\[[^\]\r\n]+\]\s*[#$]\s*/u;
 const POSIX_PROMPT_PREFIX = /^[^\s@]+@[^:\s]+:[^#$\r\n]*[#$]\s*/u;
+const SIMPLE_POSIX_PROMPT_PREFIX = /^\$[ \t]+/u;
 const POWERSHELL_PROMPT_PREFIX = /^PS\s+[^>\r\n]+>\s*/u;
 const WINDOWS_PROMPT_PREFIX = /^[A-Za-z]:(?:[\\/][^>\r\n]*)?>\s*/u;
 
@@ -20,6 +21,7 @@ function stripKnownPromptPrefix(input: string): string {
   for (const matcher of [
     BRACKET_PROMPT_PREFIX,
     POSIX_PROMPT_PREFIX,
+    SIMPLE_POSIX_PROMPT_PREFIX,
     POWERSHELL_PROMPT_PREFIX,
     WINDOWS_PROMPT_PREFIX,
   ]) {

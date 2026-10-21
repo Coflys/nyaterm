@@ -115,6 +115,7 @@ import {
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
+import { createTerminalHistoryRecovery } from "./terminalHistoryRecovery";
 import type { TerminalOutputDrain } from "./terminalOutputDrain";
 import { AlternateScreenStateTracker } from "./alternateScreenStateTracker";
 import type { Dec2026FrameGate } from "./dec2026FrameGate";
@@ -1858,7 +1859,15 @@ export default function XTerminal({
       },
     );
 
+    const historyRecovery = createTerminalHistoryRecovery(
+      terminal,
+      () =>
+        (outputDrainRef.current?.getPendingBytes() ?? 0) > 0 ||
+        (frameGateRef.current?.getHeldBytes() ?? 0) > 0,
+    );
     const writeParsedDisposable = terminal.onWriteParsed(() => {
+      const recovered = historyRecovery.onWriteParsed(inputStateRef.current);
+      if (recovered) inputStateRef.current = recovered;
       alternateScreenTrackerRef.current.setXtermBufferType(
         terminal.buffer.active.type,
       );
@@ -2498,13 +2507,19 @@ export default function XTerminal({
         }
       }
 
+      const inputState = inputStateRef.current;
+      const isCompletionKey = data === "\t" || data === "\x1b[Z";
       if (
-        data !== "\t" &&
-        inputStateRef.current.desynced &&
-        inputStateRef.current.desyncReason === "tab"
+        inputState.desynced &&
+        !inputState.pasteMode &&
+        !inputState.multiline &&
+        terminal.buffer.active.type !== "alternate" &&
+        (isPlainTextInputData(data) || data === "\r") &&
+        inputState.desyncReason === "tab" &&
+        !isCompletionKey
       ) {
         const recovered = resyncFromTerminalLine(
-          inputStateRef.current,
+          inputState,
           readCurrentInputLine(terminal),
         );
         if (recovered) {
@@ -2578,7 +2593,7 @@ export default function XTerminal({
           command,
         );
       }
-      inputStateRef.current = applyTerminalInputData(
+      inputStateRef.current = historyRecovery.applyInput(
         inputStateRef.current,
         data,
       );
