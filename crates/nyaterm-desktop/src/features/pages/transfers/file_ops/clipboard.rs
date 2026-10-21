@@ -578,8 +578,10 @@ mod tests {
 
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut");
         std::fs::create_dir_all(root.path()).unwrap();
-        let source = root.join("source.txt");
-        let target = root.join("target.txt");
+        // macOS temporary paths can contain symlink ancestors such as /var.
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let source = canonical_root.join("source.txt");
+        let target = canonical_root.join("target.txt");
         std::fs::write(&source, b"payload").unwrap();
         run_clipboard_copy(
             ClipboardCopyRequest {
@@ -608,8 +610,10 @@ mod tests {
 
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-clipboard-cut-cancel");
         std::fs::create_dir_all(root.path()).unwrap();
-        let source = root.join("source.txt");
-        let target = root.join("target.txt");
+        // Exercise cancellation without failing the symlink-ancestor check first.
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let source = canonical_root.join("source.txt");
+        let target = canonical_root.join("target.txt");
         std::fs::write(&source, b"keep-me").unwrap();
         let control = SftpTransferControl::new();
         control.cancel();
