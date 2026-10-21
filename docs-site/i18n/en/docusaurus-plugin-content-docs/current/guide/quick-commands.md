@@ -75,12 +75,14 @@ Any other backslash sequence is left alone, so `\d` in a regular expression and 
 Device logins, serial menus, and older systems often need "send a chunk, wait a second, send the next one". Put `\p` between the chunks:
 
 ```text
-admin\psecret\pdisplay version
+admin\r\psecret\r\pdisplay version
 ```
 
-This script sends `admin`, waits one second, sends `secret`, then waits another second before sending `display version`. Stacking `\p\p` waits two seconds.
+This script sends `admin` and Enter, waits one second, sends `secret` and Enter, then waits another second before sending `display version`. `\p` only pauses; use `\r` to submit each login response. Stacking `\p\p` waits two seconds.
 
-A paused script keeps going to the session you clicked the command in, rather than following a later focus change. With synchronized input, or with **Send to all sessions**, every session receives the same staged writes.
+Targets are fixed when the script starts sending (after submitting any variables). Switching tabs during a pause keeps the same targets. New quick commands, typing, or pasting into a target cancel the remaining steps for that session; other targets continue. Disconnecting or closing a session also cancels its remaining steps.
+
+With synchronized input, or with **Send to all sessions**, every session receives the same staged writes.
 
 `\n` and `\t` only affect the script itself: the execution mode still decides whether the last chunk gets a carriage return, and a script that already ends in `\r` or `\n` does not get another one.
 

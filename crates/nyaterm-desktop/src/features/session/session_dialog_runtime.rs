@@ -258,6 +258,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.commands.cancel_staged_quick_command(session_id);
         self.close_terminal_executions_for_session(session_id, cx);
         self.cancel_native_run_for_closed_session(session_id, cx);
         self.flush_session_asset_monitoring(session_id, cx);

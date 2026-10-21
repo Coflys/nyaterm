@@ -3,6 +3,7 @@ use nyaterm_core::{AiCommandCard, AppendAiAuditRequest, QuickCommand, QuickComma
 use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
+use crate::features::commands::staged::StagedCommandHistory;
 use crate::models::QuickCommandVariablePromptState;
 
 use super::escapes::{QuickCommandChunk, plan_quick_command, quick_command_needs_staging};
@@ -10,6 +11,11 @@ use super::helpers::{
     ai_command_card_category_name, unique_quick_command_category_id, validated_quick_command_text,
 };
 use super::variables::parse_quick_command_variables;
+
+struct StagedQuickCommandTarget {
+    session_id: String,
+    history: StagedCommandHistory,
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn save_ai_command_card_by_id(
@@ -324,10 +330,9 @@ impl NyaTermApp {
         send_to_all: bool,
         cx: &mut Context<Self>,
     ) {
-        // The ordinary input path also refuses to write while a session is
-        // still coming up, so a staged script waits for it the same way.
-        let starting = !send_to_all
-            && (self.session.start_has_active_pending() || self.session.start_has_active_failed());
+        if !send_to_all && self.active_terminal_input_blocked() {
+            return;
+        }
         let targets = if send_to_all {
             self.session
                 .ordered_sessions()
@@ -335,8 +340,6 @@ impl NyaTermApp {
                 .filter(|session| !self.session.is_disconnected(&session.id))
                 .map(|session| session.id)
                 .collect::<Vec<_>>()
-        } else if starting {
-            Vec::new()
         } else {
             let primary = self
                 .session
@@ -351,16 +354,20 @@ impl NyaTermApp {
             }
         };
         if targets.is_empty() {
-            if starting {
-                // Nothing to report: the panel already shows the connection.
-                return;
-            }
             self.shell
                 .set_status("start a terminal session before using a quick command".to_string());
             cx.notify();
             return;
         }
 
+        let run_id = self.commands.staged.begin(&targets);
+        let targets = targets
+            .into_iter()
+            .map(|session_id| StagedQuickCommandTarget {
+                session_id,
+                history: StagedCommandHistory::default(),
+            })
+            .collect::<Vec<_>>();
         let steps = chunks.len();
         self.shell
             .set_status(format!("sending quick command '{label}' in {steps} steps"));
@@ -369,18 +376,20 @@ impl NyaTermApp {
         cx.spawn(async move |this, cx| {
             let mut live = targets;
             let total = live.len();
+            let mut cancelled = false;
             for chunk in chunks {
                 if !chunk.delay.is_zero() {
                     cx.background_executor().timer(chunk.delay).await;
                 }
-                let Ok(survivors) = this.update(cx, |this, cx| {
-                    let survivors = this.write_quick_command_chunk(&live, &chunk.bytes, cx);
+                let Ok((survivors, interrupted)) = this.update(cx, |this, cx| {
+                    let survivors = this.write_quick_command_chunk(live, run_id, &chunk.bytes, cx);
                     cx.notify();
                     survivors
                 }) else {
                     // The window went away, so there is no one left to report to.
                     return;
                 };
+                cancelled |= interrupted;
                 live = survivors;
                 if live.is_empty() {
                     break;
@@ -389,6 +398,13 @@ impl NyaTermApp {
             let failed = total - live.len();
             let delivered = live.len();
             let _ = this.update(cx, |this, cx| {
+                for target in &live {
+                    this.commands.staged.finish(&target.session_id, run_id);
+                }
+                // A superseded task must not replace the newer input's status.
+                if cancelled {
+                    return;
+                }
                 this.shell.set_status(quick_command_delivery_status(
                     &label,
                     execute,
@@ -402,31 +418,54 @@ impl NyaTermApp {
         .detach();
     }
 
-    /// Write one staged chunk to every target that is still connected, and
-    /// return the ones that took it.
+    /// Keep history and liveness per pinned target; the active editor may now
+    /// belong to an unrelated tab and must never supply this script's history.
     fn write_quick_command_chunk(
         &mut self,
-        targets: &[String],
+        targets: Vec<StagedQuickCommandTarget>,
+        run_id: u64,
         bytes: &[u8],
         cx: &mut Context<Self>,
-    ) -> Vec<String> {
+    ) -> (Vec<StagedQuickCommandTarget>, bool) {
         let mut survivors = Vec::with_capacity(targets.len());
-        for session_id in targets {
-            if self.session.is_disconnected(session_id) {
+        let mut cancelled = false;
+        let mut submissions: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+        for mut target in targets {
+            let session_id = &target.session_id;
+            if !self.commands.staged.owns(session_id, run_id) {
+                cancelled = true;
                 continue;
             }
-            if self.write_session_input_recorded(session_id, bytes).is_ok() {
-                survivors.push(session_id.clone());
+            let sensitive = self.recording_input_is_sensitive(session_id);
+            if self.session.is_disconnected(session_id)
+                || self
+                    .write_staged_quick_command_input(session_id, bytes, run_id)
+                    .is_err()
+            {
+                self.commands.staged.finish(session_id, run_id);
+                continue;
             }
+            let submitted = target.history.push(bytes, sensitive);
+            if !submitted.is_empty() {
+                if let Some((_, sessions)) = submissions
+                    .iter_mut()
+                    .find(|(lines, _)| *lines == submitted)
+                {
+                    sessions.push(session_id.clone());
+                } else {
+                    submissions.push((submitted, vec![session_id.clone()]));
+                }
+            }
+            survivors.push(target);
+        }
+        for (submitted, sessions) in submissions {
+            let session_refs = sessions.iter().map(String::as_str).collect::<Vec<_>>();
+            self.record_submitted_command_history(&session_refs, submitted);
         }
         if !survivors.is_empty() {
-            // A chunk without a return key records nothing on its own, so a
-            // paused script still lands in history as one command line.
-            let session_refs: Vec<&str> = survivors.iter().map(String::as_str).collect();
-            self.record_command_history_for_sessions(&session_refs, bytes);
             self.arm_terminal_input_wake(cx);
         }
-        survivors
+        (survivors, cancelled)
     }
 }
 
@@ -459,71 +498,4 @@ fn quick_command_executes(command: &QuickCommand) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use nyaterm_core::QuickCommand;
-
-    use super::{quick_command_delivery_status, quick_command_executes};
-
-    fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
-        QuickCommand {
-            id: "command-1".to_string(),
-            label: "Command".to_string(),
-            command: "pwd".to_string(),
-            category_id: None,
-            description: None,
-            color_tag: None,
-            icon_tag: None,
-            pinned: None,
-            execution_mode: execution_mode.map(ToOwned::to_owned),
-            source: None,
-            risk_level: None,
-            updated_at: None,
-            created_at: None,
-            use_count: None,
-            sort_order: None,
-        }
-    }
-
-    #[test]
-    fn append_mode_inserts_without_execution() {
-        assert!(!quick_command_executes(&command_with_execution_mode(Some(
-            "append"
-        ))));
-    }
-
-    #[test]
-    fn execute_and_legacy_modes_execute() {
-        assert!(quick_command_executes(&command_with_execution_mode(Some(
-            "execute"
-        ))));
-        assert!(quick_command_executes(&command_with_execution_mode(None)));
-    }
-
-    #[test]
-    fn staged_delivery_reports_broadcast_reach() {
-        assert_eq!(
-            quick_command_delivery_status("Login", true, true, 4, 0),
-            "sent quick command 'Login' to 4 session(s)"
-        );
-        assert_eq!(
-            quick_command_delivery_status("Login", true, true, 2, 1),
-            "sent quick command 'Login' to 2 session(s), 1 failed"
-        );
-    }
-
-    #[test]
-    fn staged_delivery_keeps_the_single_session_wording() {
-        assert_eq!(
-            quick_command_delivery_status("Login", true, false, 1, 0),
-            "ran quick command 'Login'"
-        );
-        assert_eq!(
-            quick_command_delivery_status("Login", false, false, 1, 0),
-            "inserted quick command 'Login'"
-        );
-        assert_eq!(
-            quick_command_delivery_status("Login", true, false, 0, 1),
-            "quick command 'Login' failed on 1 session(s)"
-        );
-    }
-}
+mod tests;
