@@ -451,6 +451,13 @@ impl NyaInputState {
         self
     }
 
+    pub fn set_readonly(&mut self, readonly: bool, cx: &mut Context<Self>) {
+        if self.readonly != readonly {
+            self.readonly = readonly;
+            cx.notify();
+        }
+    }
+
     pub fn error(mut self, error: bool) -> Self {
         self.error = error;
         self

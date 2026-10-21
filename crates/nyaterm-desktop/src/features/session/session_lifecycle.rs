@@ -325,6 +325,7 @@ impl NyaTermApp {
             self.terminal.clear_active_session_assist();
         }
         self.prune_workspace_split();
+        self.mark_file_manager_session_disconnected(session_id, true, cx);
         cx.notify();
     }
 
@@ -522,6 +523,8 @@ impl NyaTermApp {
             self.restore_transfer_browser_navigation(snapshot);
         }
         self.transfer.replace_session_id(old_id, new_id);
+        self.file_manager.replace_session_id(old_id, new_id, cx);
+        self.mark_file_manager_session_disconnected(new_id, false, cx);
         self.session.migrate_session_presentation(old_id, new_id);
 
         self.shell.replace_workspace_session_id(old_id, new_id);

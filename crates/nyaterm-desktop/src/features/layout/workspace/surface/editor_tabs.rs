@@ -244,4 +244,141 @@ impl NyaTermApp {
         })
         .into_any_element()
     }
+
+    pub(super) fn file_manager_strip_tab(
+        &mut self,
+        id: String,
+        index: usize,
+        number: usize,
+        active: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let palette = self.theme_palette();
+        let key = WorkspaceTabId::FileManager(id.clone()).layout_key();
+        let selected = active == Some(key.as_str());
+        let tab_group = SharedString::from(format!("file-manager-tab-group-{id}"));
+        let hover_bg = self.shell_surface_color(palette.hover);
+        let click_key = key.clone();
+        let close_key = key.clone();
+        let middle_key = key.clone();
+        let drop_key = key.clone();
+        let title = self.file_manager_tab_title(&id, cx);
+        let payload = WorkspaceTabDragPayload {
+            source_workspace_id: self.workspace_id,
+            root_tab_id: key.clone(),
+            source_revision: self.workspace_revision(),
+            tab_id: crate::features::shell::session_tabs::SessionStripTabId::Workspace(
+                WorkspaceTabId::from_layout_key(&key),
+            ),
+            order_index: index,
+            source_group_id: self.shell.terminal_group_for_tab(&key),
+            display_name: title.clone(),
+            kind_icon: "icons/file-manager.svg",
+            preview_background: palette.surface,
+            preview_border: palette.border,
+            preview_text: palette.text,
+            preview_text_muted: palette.text_muted,
+            preview_accent: palette.link,
+        };
+        let app = cx.weak_entity();
+        let tab = div()
+            .id(SharedString::from(format!("file-manager-tab-{id}")))
+            .group(tab_group.clone())
+            .h(px(36.))
+            .min_w(px(118.))
+            .max_w(px(236.))
+            .flex_none()
+            .pl_3()
+            .pr_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .relative()
+            .border_r_1()
+            .border_color(rgb(palette.border))
+            .when(!selected, |this| this.border_b_1())
+            .bg(if selected {
+                self.shell_surface_color(palette.bg)
+            } else {
+                rgba(0x00000000)
+            })
+            .cursor_pointer()
+            .hover(move |this| this.bg(hover_bg))
+            .tooltip(move |window, cx| NyaTooltip::new(title.clone()).build(window, cx))
+            .on_click(cx.listener(move |app, _, _, cx| app.activate_workspace_tab(&click_key, cx)))
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.request_workspace_tabs_close(vec![middle_key.clone()], None, cx);
+                }),
+            )
+            .on_drag(payload, move |payload, position, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    app.begin_session_tab_drag(payload, position, window, cx)
+                });
+                cx.new(|_| SessionTabDragPreview::new(payload.clone(), position))
+            })
+            .on_drop(
+                cx.listener(move |app, payload: &WorkspaceTabDragPayload, _, cx| {
+                    let group = app.shell.terminal_group_for_tab(&drop_key);
+                    if payload.tab_id.is_start()
+                        && (payload.source_workspace_id != app.workspace_id
+                            || payload.source_group_id != group)
+                    {
+                        app.clear_session_tab_drag(cx);
+                        return;
+                    }
+                    app.accept_session_tab_drop(payload, cx);
+                    if app.commit_session_tab_preview(payload, &group, cx) {
+                        return;
+                    }
+                    if payload.source_workspace_id == app.workspace_id {
+                        app.reorder_session_relative(
+                            payload.tab_id.layout_key(),
+                            drop_key.clone(),
+                            false,
+                            cx,
+                        );
+                    }
+                }),
+            )
+            .child(
+                svg()
+                    .path("icons/file-manager.svg")
+                    .size(px(14.))
+                    .text_color(rgb(palette.link)),
+            )
+            .child(
+                div()
+                    .min_w(px(12.))
+                    .flex_none()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight(700.))
+                    .text_color(rgb(palette.text_dimmed))
+                    .child(number.to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(t!("fileManager.tabTitle").to_string()),
+            )
+            .child(
+                NyaTabCloseButton::new(
+                    format!("file-manager-tab-close-{id}"),
+                    tab_group,
+                    palette,
+                    t!("common.close").to_string(),
+                )
+                .active(selected)
+                .on_click(cx.listener(move |app, _, _, cx| {
+                    app.request_workspace_tabs_close(vec![close_key.clone()], None, cx);
+                })),
+            );
+        tab.into_any_element()
+    }
 }

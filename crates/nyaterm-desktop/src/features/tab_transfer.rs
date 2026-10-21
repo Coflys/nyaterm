@@ -73,14 +73,12 @@ impl NyaTermApp {
         placement: MoveTabPlacement,
         cx: &mut Context<Self>,
     ) {
-        if matches!(
-            crate::models::WorkspaceTabId::from_layout_key(&root_tab_id),
-            crate::models::WorkspaceTabId::Editor(_)
-        ) || (source_workspace_id == self.workspace_id
-            && self
-                .tab_tree_session_ids(&root_tab_id)
-                .iter()
-                .any(|id| self.transfer.editor_references_session(id)))
+        if !crate::models::WorkspaceTabId::key_is_session(&root_tab_id)
+            || (source_workspace_id == self.workspace_id
+                && self
+                    .tab_tree_session_ids(&root_tab_id)
+                    .iter()
+                    .any(|id| self.workspace_references_session(id, cx)))
         {
             self.shell.set_status(
                 "Close the referencing file editors before moving this session to another window",
@@ -186,6 +184,7 @@ impl NyaTermApp {
         &self,
         root_tab_id: &str,
         source_revision: u64,
+        cx: &gpui::App,
     ) -> Result<Vec<String>, String> {
         if self.workspace_revision != source_revision {
             return Err("the source workspace changed during the drag".to_string());
@@ -195,7 +194,7 @@ impl NyaTermApp {
             .ok_or_else(|| "the source tab no longer exists".to_string())?;
         if session_ids
             .iter()
-            .any(|id| self.transfer.editor_references_session(id))
+            .any(|id| self.workspace_references_session(id, cx))
         {
             return Err(
                 "Close the referencing file editors before moving this session to another window"
@@ -232,7 +231,7 @@ impl NyaTermApp {
         source_revision: u64,
         cx: &mut Context<Self>,
     ) -> Result<WorkspaceTabTransferBundle, String> {
-        let session_ids = self.can_transfer_tab_tree(root_tab_id, source_revision)?;
+        let session_ids = self.can_transfer_tab_tree(root_tab_id, source_revision, cx)?;
         let source_index = self.session.session_index(root_tab_id).unwrap_or(0);
         let source_active_id = self.session.active_id_owned();
         let source_terminal_tree = self.shell.terminal_window_tree();

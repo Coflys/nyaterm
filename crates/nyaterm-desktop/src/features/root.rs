@@ -546,26 +546,7 @@ impl NyaTermApp {
                             window,
                             cx,
                         )))
-                        .child(self.panel_resize_handle(PanelResizeSide::Left, cx))
-                        .when(panel != NavItem::Plugins, |this| {
-                            this.child(
-                                div()
-                                    .id("floating-left-panel-close")
-                                    .absolute()
-                                    .top(px(6.))
-                                    .right(px(8.))
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .child("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_floating_panel(PanelSide::Left, cx);
-                                    })),
-                            )
-                        }),
+                        .child(self.panel_resize_handle(PanelResizeSide::Left, cx)),
                 );
             }
 
@@ -591,26 +572,7 @@ impl NyaTermApp {
                             panel,
                             window,
                             cx,
-                        )))
-                        .when(panel != NavItem::Plugins, |this| {
-                            this.child(
-                                div()
-                                    .id("floating-right-panel-close")
-                                    .absolute()
-                                    .top(px(6.))
-                                    .right(px(8.))
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .child("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_floating_panel(PanelSide::Right, cx);
-                                    })),
-                            )
-                        }),
+                        ))),
                 );
             }
 

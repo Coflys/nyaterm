@@ -17,6 +17,7 @@ pub(crate) struct ReflowRowMetadata {
     pub timestamp_ms: Option<u64>,
     pub cleared: bool,
     pub display_line_number: Option<usize>,
+    pub logical_line_number: Option<usize>,
 }
 
 pub(crate) struct ReflowTimestamps {
@@ -93,6 +94,14 @@ pub(crate) fn capture(term: &Term<NyaTermEventProxy>, state: &ScreenLineState) -
                             .clear_line_origin
                             .and_then(|origin| usize::try_from(logical - origin).ok())
                             .map(|line| line.saturating_add(1)),
+                        logical_line_number: state
+                            .clear_line_origin
+                            .filter(|_| !metadata.is_some_and(|metadata| metadata.cleared))
+                            .and_then(|_| {
+                                state
+                                    .line_numbers
+                                    .number(logical, state.logical_line(term.topmost_line()))
+                            }),
                     },
                 }
             })
@@ -141,6 +150,7 @@ pub(crate) fn restore(
             if metadata.timestamp_ms.is_some()
                 || metadata.cleared
                 || metadata.display_line_number.is_some()
+                || metadata.logical_line_number.is_some()
             {
                 restored.push((line, metadata));
             }

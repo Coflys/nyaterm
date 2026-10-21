@@ -62,6 +62,9 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn open_panel(&mut self, item: NavItem, cx: &mut Context<Self>) {
+        if item == NavItem::Transfers {
+            self.note_file_manager_manual_sidebar_open();
+        }
         let browser_was_visible = self.transfer_browser_is_visible();
         self.hide_secret_inputs(cx);
         if item == NavItem::Settings || item.opens_settings() {

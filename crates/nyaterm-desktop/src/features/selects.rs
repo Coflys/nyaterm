@@ -524,6 +524,7 @@ impl NyaTermApp {
                 let select = match id {
                     "connection-editor-group-select" => ConnectionEditorSelect::Group,
                     "connection-editor-saved-password" => ConnectionEditorSelect::SavedPassword,
+                    "connection-editor-account" => ConnectionEditorSelect::Account,
                     "connection-editor-ssh-key" => ConnectionEditorSelect::SshKey,
                     "connection-editor-otp" => ConnectionEditorSelect::Otp,
                     "connection-editor-proxy" => ConnectionEditorSelect::Proxy,
@@ -532,6 +533,9 @@ impl NyaTermApp {
                     "connection-editor-encoding" => ConnectionEditorSelect::Encoding,
                     "connection-editor-sftp-cwd-follow" => {
                         ConnectionEditorSelect::SftpCwdFollowMode
+                    }
+                    "connection-editor-sftp-pipeline-depth" => {
+                        ConnectionEditorSelect::SftpPipelineDepth
                     }
                     "connection-editor-sftp-filename-encoding" => {
                         ConnectionEditorSelect::SftpFilenameEncoding
@@ -556,6 +560,10 @@ impl NyaTermApp {
                     "connection-editor-rdp-clipboard-mode" => {
                         ConnectionEditorSelect::RdpClipboardMode
                     }
+                    "connection-editor-vnc-security-mode" => {
+                        ConnectionEditorSelect::VncSecurityMode
+                    }
+                    "connection-editor-vnc-scale-mode" => ConnectionEditorSelect::VncScaleMode,
                     "connection-editor-recording-mode" => ConnectionEditorSelect::RecordingMode,
                     "connection-editor-telnet-enter-mode" => {
                         ConnectionEditorSelect::TelnetEnterMode

@@ -747,16 +747,13 @@ impl TransferBrowserState {
     }
 
     fn record_history(&mut self, path: String) {
-        if self.history.get(self.history_index) == Some(&path) {
-            return;
+        if super::browser_logic::record_browser_history(
+            &mut self.history,
+            &mut self.history_index,
+            &path,
+        ) {
+            self.record_visited_history(path);
         }
-        if !self.history.is_empty() {
-            let current_index = self.history_index.min(self.history.len() - 1);
-            self.history.drain(..current_index);
-        }
-        self.history.push_front(path.clone());
-        self.history_index = 0;
-        self.record_visited_history(path);
     }
 
     fn record_visited_history(&mut self, path: String) {

@@ -82,6 +82,8 @@ This script sends `admin` and Enter, waits one second, sends `secret` and Enter,
 
 Targets are fixed when the script starts sending (after submitting any variables). Switching tabs during a pause keeps the same targets. New quick commands, typing, or pasting into a target cancel the remaining steps for that session; other targets continue. Disconnecting or closing a session also cancels its remaining steps.
 
+Cancellation only stops content that has not been sent. A prefix already sent to the remote terminal remains there, and new input may be appended to it. For example, replacing `old\pobsolete` with `new command` during the pause may send `oldnew command` to the terminal. Check the remote prompt and existing input before continuing, especially during login interactions. NyaTerm does not automatically send Ctrl+C or clear input because control characters have different meanings across devices and interactive programs.
+
 With synchronized input, or with **Send to all sessions**, every session receives the same staged writes.
 
 `\n` and `\t` only affect the script itself: the execution mode still decides whether the last chunk gets a carriage return, and a script that already ends in `\r` or `\n` does not get another one.

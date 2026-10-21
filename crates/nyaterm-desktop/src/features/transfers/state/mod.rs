@@ -15,10 +15,11 @@ mod browser_logic;
 mod tree;
 pub(in crate::features) use tree::TransferTreePresentation;
 
-use self::browser_logic::BrowserFilterCache;
-pub(in crate::features) use self::browser_logic::natural_compare_ascii;
 #[cfg(test)]
 pub(in crate::features) use self::browser_logic::transfer_browser_entry_is_visible;
+pub(in crate::features) use self::browser_logic::{
+    BrowserFilterCache, BrowserFilterKey, natural_compare_ascii, record_browser_history,
+};
 mod editor;
 mod preview;
 pub(in crate::features) use self::preview::{PdfPageRequest, TransferPreviewCloseOutcome};

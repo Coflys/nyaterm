@@ -44,10 +44,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn close_active_session(&mut self, cx: &mut Context<Self>) {
         if let Some(key) = self.active_workspace_tab()
-            && matches!(
-                crate::models::WorkspaceTabId::from_layout_key(&key),
-                crate::models::WorkspaceTabId::Editor(_)
-            )
+            && !crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
         {
             self.request_workspace_tabs_close(vec![key], None, cx);
             return;
@@ -206,7 +203,7 @@ impl NyaTermApp {
                 .rekey_workspace_pane_root(tab_root_id, survivor_id);
         }
 
-        if self.transfer.editor_references_session(&pane_id) {
+        if self.workspace_references_session(&pane_id, cx) {
             let next = self
                 .tab_tree_session_ids(&pane_id)
                 .into_iter()

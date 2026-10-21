@@ -447,6 +447,9 @@ impl NyaTermApp {
                     TransferJobEvent::Finished(Ok(TransferJobOutput::Sent { .. }))
                 ),
             );
+            if let TransferJobEvent::Finished(Ok(output)) = &event.event {
+                self.apply_file_manager_job_output(&event_id, output, cx);
+            }
         }
         let cleanup_internal_job = event_finished
             && !job.is_user_transfer()

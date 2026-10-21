@@ -519,11 +519,6 @@ impl SettingsFeatureState {
         self.summary.interaction_alt_as_meta = !self.summary.interaction_alt_as_meta;
     }
 
-    pub(in crate::features) fn toggle_mac_ime_compatibility(&mut self) {
-        self.summary.interaction_mac_ime_compatibility =
-            !self.summary.interaction_mac_ime_compatibility;
-    }
-
     pub(in crate::features) fn set_interaction_encoding(&mut self, encoding: &str) {
         self.summary.interaction_default_encoding = encoding.to_string();
     }
@@ -550,11 +545,6 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn set_terminal_x11_display(&mut self, text: String) {
         self.summary.x11_display = text;
-    }
-
-    pub(in crate::features) fn toggle_terminal_low_latency_mode(&mut self) -> bool {
-        self.summary.terminal_low_latency_mode = !self.summary.terminal_low_latency_mode;
-        self.summary.terminal_low_latency_mode
     }
 
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self) {
@@ -611,44 +601,20 @@ impl SettingsFeatureState {
         self.summary.terminal_paste_image_as_path = !self.summary.terminal_paste_image_as_path;
     }
 
-    pub(in crate::features) fn toggle_remote_stats_panel(&mut self) {
-        self.summary.ui_show_remote_stats = !self.summary.ui_show_remote_stats;
-    }
-
-    pub(in crate::features) fn toggle_notes_panel(&mut self) {
-        self.summary.ui_show_notes_panel = !self.summary.ui_show_notes_panel;
-    }
-
     pub(in crate::features) fn set_remote_stats_interval(&mut self, value: u32) {
         self.summary.ui_remote_stats_interval = value.clamp(1, 60);
-    }
-
-    pub(in crate::features) fn toggle_gpu_monitor_panel(&mut self) {
-        self.summary.ui_show_gpu_monitor = !self.summary.ui_show_gpu_monitor;
     }
 
     pub(in crate::features) fn set_gpu_monitor_interval(&mut self, value: u32) {
         self.summary.ui_gpu_monitor_interval = value.clamp(3, 120);
     }
 
-    pub(in crate::features) fn toggle_ascend_npu_monitor_panel(&mut self) {
-        self.summary.ui_show_ascend_npu_monitor = !self.summary.ui_show_ascend_npu_monitor;
-    }
-
     pub(in crate::features) fn set_ascend_npu_monitor_interval(&mut self, value: u32) {
         self.summary.ui_ascend_npu_monitor_interval = value.clamp(3, 120);
     }
 
-    pub(in crate::features) fn toggle_process_manager_panel(&mut self) {
-        self.summary.ui_show_process_manager = !self.summary.ui_show_process_manager;
-    }
-
     pub(in crate::features) fn set_process_manager_interval(&mut self, value: u32) {
         self.summary.ui_process_manager_interval = value.clamp(3, 120);
-    }
-
-    pub(in crate::features) fn toggle_docker_manager_panel(&mut self) {
-        self.summary.ui_show_docker_manager = !self.summary.ui_show_docker_manager;
     }
 
     pub(in crate::features) fn set_docker_manager_interval(&mut self, value: u32) {
@@ -963,6 +929,18 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn set_transfer_download_path(&mut self, path: String) {
         self.summary.transfer_download_path = path;
+    }
+
+    pub(in crate::features) fn set_file_manager_ui(
+        &mut self,
+        settings: nyaterm_core::FileManagerUiSettings,
+    ) {
+        self.summary.ui_file_manager = settings;
+    }
+
+    pub(in crate::features) fn toggle_file_manager_auto_collapse(&mut self) {
+        self.summary.ui_file_manager.auto_collapse_sidebar =
+            !self.summary.ui_file_manager.auto_collapse_sidebar;
     }
 
     pub(in crate::features) fn set_recording_path(&mut self, path: String) {
@@ -1921,8 +1899,6 @@ mod tests {
         assert_eq!(summary.ui_process_manager_interval, 3);
         assert_eq!(summary.ui_docker_manager_interval, 120);
 
-        let low_latency = summary.terminal_low_latency_mode;
-        assert_eq!(state.toggle_terminal_low_latency_mode(), !low_latency);
         let zebra = state.summary().terminal_zebra_stripes_enabled;
         state.toggle_terminal_zebra_stripes();
         assert_eq!(state.summary().terminal_zebra_stripes_enabled, !zebra);

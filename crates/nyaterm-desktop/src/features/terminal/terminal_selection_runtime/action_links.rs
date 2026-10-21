@@ -86,7 +86,6 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if !self.settings.summary().terminal_action_links_enabled
-            || self.settings.summary().terminal_low_latency_mode
             || self.runtime_output_pressure_active()
         {
             self.clear_action_link_tooltip(cx);
@@ -470,8 +469,7 @@ impl NyaTermApp {
             || view.output_burst_bytes > 0
             || view.performance_mode == TerminalPerformanceMode::Overloaded;
         terminal_expensive_interactions_enabled(
-            self.settings.summary().terminal_action_links_enabled
-                && !self.settings.summary().terminal_low_latency_mode,
+            self.settings.summary().terminal_action_links_enabled,
             is_active,
             render_degraded,
             runtime_output_pressure,

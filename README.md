@@ -121,7 +121,7 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 - Optional line-number and timestamp gutter
 - Optional action links for IPv4 addresses, `host:port`, and archive filenames
 - Optional keyword highlighting with expanded built-in presets, custom rules, and JSON import
-- Terminal zoom, workspace padding, font weight controls, macOS IME compatibility, image path paste handling, and a clear-terminal action
+- Terminal zoom, workspace padding, font weight controls, native IME support, image path paste handling, and a clear-terminal action
 - AI shortcuts for explaining recent output, plus inline Agent command output with configurable `Terminal Output Lines`
 - Large-output protection, configurable scrollback, SSH keep-alive, and session recording
 - Online search and translation from selected terminal text

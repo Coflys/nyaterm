@@ -80,20 +80,16 @@ pub(super) fn terminal_session_write_failure_log(context: &str, error: &str) -> 
 
 pub(super) fn terminal_should_track_command_suggestion_input(
     track_suggestions: bool,
-    low_latency_mode: bool,
     command_suggestions_enabled: bool,
 ) -> bool {
-    track_suggestions && !low_latency_mode && command_suggestions_enabled
+    track_suggestions && command_suggestions_enabled
 }
 
 impl NyaTermApp {
     pub(in crate::features) fn active_terminal_input_blocked(&self) -> bool {
-        self.active_workspace_tab().is_some_and(|key| {
-            matches!(
-                crate::models::WorkspaceTabId::from_layout_key(&key),
-                crate::models::WorkspaceTabId::Editor(_)
-            )
-        }) || self.session.start_has_active_pending()
+        self.active_workspace_tab()
+            .is_some_and(|key| !crate::models::WorkspaceTabId::from_layout_key(&key).is_session())
+            || self.session.start_has_active_pending()
             || self.session.start_has_active_failed()
     }
 
@@ -199,7 +195,6 @@ impl NyaTermApp {
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
-            self.settings.summary().terminal_low_latency_mode,
             self.settings
                 .summary()
                 .interaction_command_suggestions_enabled,
@@ -337,7 +332,6 @@ impl NyaTermApp {
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
-            self.settings.summary().terminal_low_latency_mode,
             self.settings
                 .summary()
                 .interaction_command_suggestions_enabled,
@@ -1451,7 +1445,6 @@ impl NyaTermApp {
         event: &KeyDownEvent,
     ) -> bool {
         terminal_should_defer_key_text_to_input_handler_for_state(
-            self.settings.summary().interaction_mac_ime_compatibility,
             &self.terminal.input.ime_marked_text,
             event,
         )
@@ -1527,15 +1520,13 @@ pub(super) fn terminal_key_bytes_for_mode_and_settings(
 }
 
 pub(super) fn terminal_should_defer_key_text_to_input_handler_for_state(
-    ime_compatibility: bool,
     marked_text: &str,
     event: &KeyDownEvent,
 ) -> bool {
-    if !ime_compatibility
-        || !event
-            .keystroke
-            .modifiers
-            .is_subset_of(&gpui::Modifiers::shift())
+    if !event
+        .keystroke
+        .modifiers
+        .is_subset_of(&gpui::Modifiers::shift())
     {
         return false;
     }
