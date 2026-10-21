@@ -17,7 +17,7 @@ pub fn build_capture_command(
 
 fn build_posix_capture_command(marker_id: &str, command: &str) -> String {
     format!(
-        " printf '\\n{MARKER_PREFIX}''START_{marker_id}__\\n'; {{ {command}; }}; _dfec=$?; printf '\\n{MARKER_PREFIX}''END_{marker_id}_'\"$_dfec\"'__\\n'; unset _dfec\n",
+        " printf '\\n{MARKER_PREFIX}''START_{marker_id}__\\n'; {{\n{command}\n}}; _dfec=$?; printf '\\n{MARKER_PREFIX}''END_{marker_id}_'\"$_dfec\"'__\\n'; unset _dfec\n",
     )
 }
 
