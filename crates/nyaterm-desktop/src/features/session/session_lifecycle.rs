@@ -286,6 +286,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.commands.cancel_staged_quick_command(session_id);
         self.terminal.invalidate_shell_editing_session(session_id);
         self.clear_terminal_mouse_report_for_session(session_id);
         self.transfer.clear_file_clipboard_for_session(session_id);
@@ -401,6 +402,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
+        self.commands.cancel_staged_quick_command(&old_id);
         self.session.mark_session_disconnected(&old_id);
         self.close_terminal_executions_for_session(&old_id, cx);
         let launch_config = metadata.launch_config;

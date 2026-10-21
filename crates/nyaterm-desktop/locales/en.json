@@ -1860,6 +1860,7 @@
     "emptyCommand": "Empty command",
     "errorCommandRequired": "Command required",
     "errorLabelRequired": "Label required",
+    "escapeHint": "Sent in order: \\r return, \\n newline, \\t tab, \\p one-second pause, \\\\ a literal backslash. Any other sequence (\\d, C:\\Users) is sent as typed.",
     "executeHint": "Run automatically when clicked.",
     "executeImmediately": "Run now",
     "executionMode": "Mode",

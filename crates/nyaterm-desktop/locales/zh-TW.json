@@ -1860,6 +1860,7 @@
     "emptyCommand": "命令為空",
     "errorCommandRequired": "命令指令碼不能為空",
     "errorLabelRequired": "標籤名稱不能為空",
+    "escapeHint": "命令腳本依序送出：\\r 回車、\\n 換行、\\t 定位字元、\\p 暫停 1 秒、\\\\ 一個反斜線；其他反斜線序列（如 \\d、C:\\Users）原樣送出。",
     "executeHint": "點選後會自動在終端按 Enter 執行。",
     "executeImmediately": "立即執行",
     "executionMode": "執行模式",

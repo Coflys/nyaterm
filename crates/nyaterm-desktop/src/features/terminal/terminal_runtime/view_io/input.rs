@@ -86,6 +86,13 @@ pub(super) fn terminal_should_track_command_suggestion_input(
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn active_terminal_input_blocked(&self) -> bool {
+        self.active_workspace_tab()
+            .is_some_and(|key| !crate::models::WorkspaceTabId::from_layout_key(&key).is_session())
+            || self.session.start_has_active_pending()
+            || self.session.start_has_active_failed()
+    }
+
     pub(in crate::features) fn send_terminal_input(
         &mut self,
         bytes: Vec<u8>,
@@ -109,13 +116,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let input_started_at = Instant::now();
-        if bytes.is_empty()
-            || self.active_workspace_tab().is_some_and(|key| {
-                !crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
-            })
-            || self.session.start_has_active_pending()
-            || self.session.start_has_active_failed()
-        {
+        if bytes.is_empty() || self.active_terminal_input_blocked() {
             return false;
         }
         // Tauri/xterm custom key path: non-smart buffer selections stay painted while
@@ -833,6 +834,28 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.commands.cancel_staged_quick_command(session_id);
+        self.write_guarded_terminal_input(session_id, bytes)
+    }
+
+    /// Only the current script owner may bypass cancellation by competing input.
+    pub(in crate::features) fn write_staged_quick_command_input(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        run_id: u64,
+    ) -> Result<(), String> {
+        if !self.commands.owns_staged_quick_command(session_id, run_id) {
+            return Err("quick command cancelled by newer input".into());
+        }
+        self.write_guarded_terminal_input(session_id, bytes)
+    }
+
+    fn write_guarded_terminal_input(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         if self
             .mcp
             .capabilities
@@ -841,10 +864,19 @@ impl NyaTermApp {
         {
             return Err("An automatic command is capturing this terminal".into());
         }
-        self.write_automated_terminal_input(session_id, bytes)
+        self.write_terminal_input_recorded_impl(session_id, bytes)
     }
 
     pub(in crate::features) fn write_automated_terminal_input(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        self.commands.cancel_staged_quick_command(session_id);
+        self.write_terminal_input_recorded_impl(session_id, bytes)
+    }
+
+    fn write_terminal_input_recorded_impl(
         &mut self,
         session_id: &str,
         bytes: &[u8],
@@ -907,6 +939,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.commands.cancel_staged_quick_command(session_id);
         if self
             .mcp
             .capabilities
@@ -950,6 +983,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.commands.cancel_staged_quick_command(session_id);
         if self
             .mcp
             .capabilities
@@ -1023,6 +1057,7 @@ impl NyaTermApp {
         wire_bytes: &[u8],
         recording_bytes: &[u8],
     ) -> Result<(), String> {
+        self.commands.cancel_staged_quick_command(session_id);
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
         }

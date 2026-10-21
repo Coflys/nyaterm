@@ -1860,6 +1860,7 @@
     "emptyCommand": "命令为空",
     "errorCommandRequired": "命令脚本不能为空",
     "errorLabelRequired": "标签名称不能为空",
+    "escapeHint": "命令脚本按顺序发送：\\r 回车、\\n 换行、\\t 制表符、\\p 暂停 1 秒、\\\\ 一个反斜杠；其它反斜杠序列（如 \\d、C:\\Users）原样发送。",
     "executeHint": "点击后命令将自动在终端回车执行。",
     "executeImmediately": "立即执行",
     "executionMode": "执行模式",

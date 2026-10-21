@@ -1860,6 +1860,7 @@
     "emptyCommand": "Commande vide",
     "errorCommandRequired": "Commande requise",
     "errorLabelRequired": "Libellé requis",
+    "escapeHint": "Envoyé dans l'ordre : \\r retour chariot, \\n saut de ligne, \\t tabulation, \\p pause d'une seconde, \\\\ un antislash. Les autres séquences (\\d, C:\\Users) sont envoyées telles quelles.",
     "executeHint": "Exécuter automatiquement au clic.",
     "executeImmediately": "Exécuter maintenant",
     "executionMode": "Mode",
