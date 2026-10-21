@@ -21,6 +21,57 @@ describe("terminal input line recovery", () => {
     expect(readCurrentInputLine(terminal)).toBe("$ ");
     expect(translate).toHaveBeenCalledWith(false, 0, 2);
   });
+
+  it("joins wrapped rows without trimming spaces or reading beyond the cursor", () => {
+    const rows = ["unrelated", "$ echo  ", " a  b   ", " c tail"];
+    const terminal = {
+      cols: 8,
+      buffer: {
+        active: {
+          baseY: 1,
+          cursorY: 2,
+          cursorX: 2,
+          getLine: (y: number) => ({
+            isWrapped: y > 1,
+            getCell: () => undefined,
+            translateToString: (_trim: boolean, start: number, end: number) =>
+              rows[y]?.slice(start, end),
+          }),
+        },
+      },
+    } as unknown as Terminal;
+    expect(readCurrentInputLine(terminal)).toBe("$ echo   a  b    c");
+  });
+
+  it.each([
+    "rows",
+    "characters",
+    "missing prompt",
+    "missing row",
+  ])("rejects incomplete input when the %s budget or boundary is invalid", (reason) => {
+    const cursorY = reason === "rows" ? 512 : 1;
+    const translate = vi.fn(() => "x".repeat(reason === "characters" ? 65_537 : 80));
+    const terminal = {
+      cols: reason === "characters" ? 65_537 : 80,
+      buffer: {
+        active: {
+          baseY: cursorY,
+          cursorY: 0,
+          cursorX: 1,
+          getLine: (y: number) =>
+            reason === "missing row" && y === 0
+              ? undefined
+              : {
+                  isWrapped: y > 0 || reason === "missing prompt",
+                  getCell: () => undefined,
+                  translateToString: translate,
+                },
+        },
+      },
+    } as unknown as Terminal;
+    expect(readCurrentInputLine(terminal)).toBe("");
+    if (reason !== "characters") expect(translate).not.toHaveBeenCalled();
+  });
 });
 
 describe("Smart Cursor logical line budget", () => {
@@ -44,9 +95,7 @@ describe("Smart Cursor logical line budget", () => {
     } as unknown as Terminal;
     const state = { ...createTerminalInputState(), value: "x", cursor: 1 };
 
-    expect(
-      getInputIndexAtBufferPosition(terminal, state, { x: 1, y: 9_999 }),
-    ).toBeNull();
+    expect(getInputIndexAtBufferPosition(terminal, state, { x: 1, y: 9_999 })).toBeNull();
     expect(translate).not.toHaveBeenCalled();
   });
 });

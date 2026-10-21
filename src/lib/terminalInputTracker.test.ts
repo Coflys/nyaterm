@@ -28,7 +28,8 @@ describe("terminal command tracker recovery", () => {
     expect(state.desyncReason).toBe("history");
     expect(canSuggestFromTracker(state)).toBe(false);
 
-    const recovered = resyncFromTerminalLine(state, "$ ");
+    expect(resyncFromTerminalLine(state, "$ ")).toBeNull();
+    const recovered = resyncFromTerminalLine(state, "$ ", true);
     expect(recovered).not.toBeNull();
     state = applyTerminalInputData(recovered!, "s");
     expect(state.value).toBe("s");
@@ -40,7 +41,8 @@ describe("terminal command tracker recovery", () => {
 
   it("takes a completely different history command instead of appending to the old one", () => {
     const historyState = applyTerminalInputData(typeInput("old command"), "\x1b[A");
-    const recovered = resyncFromTerminalLine(historyState, "user@host:~$ git status");
+    expect(resyncFromTerminalLine(historyState, "user@host:~$ git status")).toBeNull();
+    const recovered = resyncFromTerminalLine(historyState, "user@host:~$ git status", true);
     expect(recovered?.value).toBe("git status");
     expect(recovered?.cursor).toBe("git status".length);
     expect(recovered?.lineRewriteRequired).toBe(false);
@@ -50,7 +52,7 @@ describe("terminal command tracker recovery", () => {
 
   it("does not trust an unrecognized history prompt or cursor edits", () => {
     const historyState = applyTerminalInputData(typeInput("old"), "\x1b[A");
-    expect(resyncFromTerminalLine(historyState, "custom>> other command")).toBeNull();
+    expect(resyncFromTerminalLine(historyState, "custom>> other command", true)).toBeNull();
     const unresolved = applyTerminalInputData(historyState, "s");
     expect(unresolved.desynced).toBe(true);
     expect(canSuggestFromTracker(unresolved)).toBe(false);

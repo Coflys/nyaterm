@@ -76,7 +76,8 @@ it.each([
       for (const key of keys) {
         inputStateRef.current = applyTerminalInputData(inputStateRef.current, key);
       }
-      const recovered = resyncFromTerminalLine(inputStateRef.current, shellLine);
+      // This provider test starts after the terminal has confirmed history echo.
+      const recovered = resyncFromTerminalLine(inputStateRef.current, shellLine, true);
       expect(recovered).not.toBeNull();
       inputStateRef.current = applyTerminalInputData(recovered!, nextKey);
       result.current.triggerSearch();

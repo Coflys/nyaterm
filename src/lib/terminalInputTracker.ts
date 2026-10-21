@@ -355,6 +355,12 @@ export function applyTerminalInputData(
     return markDesynced(state, "terminal");
   }
 
+  if (state.desynced && state.desyncReason === "history") {
+    // Text sent before history echo is confirmed cannot be replayed against
+    // a later screen snapshot: it may already be present in that snapshot.
+    return insertText(markDesynced(state, "terminal"), data);
+  }
+
   if (state.desynced && state.desyncReason === "tab") {
     if (state.value.length > 0) {
       // An unverified completion must not append to stale keystrokes and
@@ -414,12 +420,18 @@ export function getTrackedSubmissionCommand(state: TerminalInputState): string {
  * Replace the tracker value with command text read from the terminal buffer.
  * Used after Tab completion or shell history navigation: the terminal buffer
  * may contain a replaced command rather than the tracker's stale keystrokes.
+ * History requires confirmation from parsed output for the same navigation;
+ * keyboard/Enter callers must leave historyOutputConfirmed at its default.
  */
 export function resyncFromTerminalLine(
   current: TerminalInputState,
   lineContent: string,
+  historyOutputConfirmed = false,
 ): TerminalInputState | null {
-  if (current.desyncReason === "terminal") {
+  if (
+    current.desyncReason === "terminal" ||
+    (current.desyncReason === "history" && !historyOutputConfirmed)
+  ) {
     return null;
   }
   const value = chooseTerminalLineCommand(

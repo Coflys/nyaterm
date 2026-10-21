@@ -115,6 +115,7 @@ import {
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
+import { createTerminalHistoryRecovery } from "./terminalHistoryRecovery";
 import type { TerminalOutputDrain } from "./terminalOutputDrain";
 import { AlternateScreenStateTracker } from "./alternateScreenStateTracker";
 import type { Dec2026FrameGate } from "./dec2026FrameGate";
@@ -1858,7 +1859,15 @@ export default function XTerminal({
       },
     );
 
+    const historyRecovery = createTerminalHistoryRecovery(
+      terminal,
+      () =>
+        (outputDrainRef.current?.getPendingBytes() ?? 0) > 0 ||
+        (frameGateRef.current?.getHeldBytes() ?? 0) > 0,
+    );
     const writeParsedDisposable = terminal.onWriteParsed(() => {
+      const recovered = historyRecovery.onWriteParsed(inputStateRef.current);
+      if (recovered) inputStateRef.current = recovered;
       alternateScreenTrackerRef.current.setXtermBufferType(
         terminal.buffer.active.type,
       );
@@ -2505,10 +2514,9 @@ export default function XTerminal({
         !inputState.pasteMode &&
         !inputState.multiline &&
         terminal.buffer.active.type !== "alternate" &&
-        (isPlainTextInputData(data) || data === "\r" ||
-          (inputState.desyncReason === "history" && isCompletionKey)) &&
-        (inputState.desyncReason === "history" ||
-          (inputState.desyncReason === "tab" && !isCompletionKey))
+        (isPlainTextInputData(data) || data === "\r") &&
+        inputState.desyncReason === "tab" &&
+        !isCompletionKey
       ) {
         const recovered = resyncFromTerminalLine(
           inputState,
@@ -2585,7 +2593,7 @@ export default function XTerminal({
           command,
         );
       }
-      inputStateRef.current = applyTerminalInputData(
+      inputStateRef.current = historyRecovery.applyInput(
         inputStateRef.current,
         data,
       );
