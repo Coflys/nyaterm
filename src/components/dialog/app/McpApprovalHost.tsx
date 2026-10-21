@@ -1,5 +1,5 @@
 import { listen } from "@/lib/backend/api";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -20,6 +20,8 @@ type Decision = "deny" | "allow_once" | "allow_session";
 export function McpApprovalHost() {
   const { t } = useTranslation();
   const [requests, setRequests] = useState<McpApprovalRequest[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const respondingRef = useRef(false);
   const current = requests[0] ?? null;
 
   useEffect(() => {
@@ -48,8 +50,9 @@ export function McpApprovalHost() {
   const respond = useCallback(
     async (decision: Decision) => {
       const request = requests[0];
-      if (!request) return;
-      setRequests((items) => items.slice(1));
+      if (!request || respondingRef.current) return;
+      respondingRef.current = true;
+      setSubmitting(true);
       try {
         await invoke("respond_external_mcp_approval", {
           requestId: request.requestId,
@@ -57,6 +60,10 @@ export function McpApprovalHost() {
         });
       } catch (error) {
         toast.error(getErrorMessage(error));
+      } finally {
+        setRequests((items) => items.filter((item) => item.requestId !== request.requestId));
+        respondingRef.current = false;
+        setSubmitting(false);
       }
     },
     [requests],
@@ -112,13 +119,13 @@ export function McpApprovalHost() {
           </div>
         ) : null}
         <AlertDialogFooter>
-          <Button variant="outline" onClick={() => void respond("deny")}>
+          <Button variant="outline" disabled={submitting} onClick={() => void respond("deny")}>
             {t("ai.externalMcpDeny")}
           </Button>
-          <Button variant="outline" onClick={() => void respond("allow_once")}>
+          <Button variant="outline" disabled={submitting} onClick={() => void respond("allow_once")}>
             {t("ai.externalMcpAllowOnce")}
           </Button>
-          <Button onClick={() => void respond("allow_session")}>
+          <Button disabled={submitting} onClick={() => void respond("allow_session")}>
             {t("ai.externalMcpAllowSession")}
           </Button>
         </AlertDialogFooter>
