@@ -536,8 +536,20 @@ impl CloudSyncManager {
 
     async fn startup_check(self: &Arc<Self>) -> AppResult<RemoteCheckOutcome> {
         let allow_auto_pull = self.settings.lock().await.auto_pull_remote_changes;
-        self.check_remote_changes("startup_check", allow_auto_pull)
-            .await
+        let outcome = self
+            .check_remote_changes("startup_check", allow_auto_pull)
+            .await?;
+        self.requeue_pending_auto_push_after_startup(outcome).await;
+        Ok(outcome)
+    }
+
+    async fn requeue_pending_auto_push_after_startup(
+        self: &Arc<Self>,
+        outcome: RemoteCheckOutcome,
+    ) {
+        if outcome == RemoteCheckOutcome::LocalChanged {
+            self.notify_config_changed().await;
+        }
     }
 
     async fn check_remote_changes(
@@ -3209,6 +3221,42 @@ mod tests {
         let retry = manager.automatic_retry.lock().await.clone();
         assert!(!retry.suspended_until_settings_change);
         assert!(retry.blocked_until_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn startup_check_requeues_pending_auto_push_only_for_local_changes() {
+        for (outcome, enabled, auto_push_on_change, expected_notification) in [
+            (RemoteCheckOutcome::LocalChanged, true, true, true),
+            (RemoteCheckOutcome::LocalChanged, false, true, false),
+            (RemoteCheckOutcome::LocalChanged, true, false, false),
+            (RemoteCheckOutcome::NoRemote, true, true, false),
+            (RemoteCheckOutcome::UpToDate, true, true, false),
+            (RemoteCheckOutcome::AutoPulled, true, true, false),
+            (RemoteCheckOutcome::RemoteAvailable, true, true, false),
+            (RemoteCheckOutcome::Conflict, true, true, false),
+            (RemoteCheckOutcome::Skipped, true, true, false),
+        ] {
+            let manager = Arc::new(CloudSyncManager::new());
+            {
+                let mut settings = manager.settings.lock().await;
+                settings.enabled = enabled;
+                settings.auto_push_on_change = auto_push_on_change;
+            }
+
+            manager
+                .requeue_pending_auto_push_after_startup(outcome)
+                .await;
+            let notified = tokio::time::timeout(
+                Duration::from_millis(10),
+                manager.auto_push_notify.notified(),
+            )
+            .await
+            .is_ok();
+            assert_eq!(
+                notified, expected_notification,
+                "outcome={outcome:?}, enabled={enabled}, auto_push_on_change={auto_push_on_change}"
+            );
+        }
     }
 
     #[tokio::test]
