@@ -3227,22 +3227,43 @@ where
         path_options.is_promised_download(),
     )?;
     crate::download_path::ensure_no_symlink(download_root, local_path)?;
-    let (expected_bytes, item_count_total) =
-        remote_directory_transfer_totals_bytes(sftp, raw_path.clone(), control).await?;
+    let mut expected_bytes = 0_u64;
+    let mut item_count_total = 0_u64;
     let mut files = Vec::new();
     let mut item_count_completed = 0_u64;
-    let mut pending = vec![(raw_path, remote_path.to_string(), local_path.to_path_buf())];
+    let mut pending = vec![(
+        raw_path,
+        remote_path.to_string(),
+        Some(local_path.to_path_buf()),
+    )];
     while let Some((remote_dir_raw, remote_dir, local_dir)) = pending.pop() {
         control.wait_if_paused().await?;
-        path_options.download_runtime()?.ensure_directory(
-            download_root,
-            &local_dir,
-            path_options.is_promised_download(),
-        )?;
-        crate::download_path::ensure_no_symlink(download_root, &local_dir)?;
+        if let Some(local_dir) = &local_dir {
+            path_options.download_runtime()?.ensure_directory(
+                download_root,
+                local_dir,
+                path_options.is_promised_download(),
+            )?;
+            crate::download_path::ensure_no_symlink(download_root, local_dir)?;
+        }
         for entry in await_sftp_request(control, sftp.read_dir_bytes(remote_dir_raw)).await? {
             control.wait_if_paused().await?;
+            if entry.file_name_bytes() == b"." || entry.file_name_bytes() == b".." {
+                continue;
+            }
             let file_type = entry.file_type();
+            // Keep totals for all regular files, including conflicts skipped below.
+            // A skipped directory has no local target but is still scanned for totals.
+            if file_type == russh_sftp::protocol::FileType::File {
+                item_count_total = item_count_total.saturating_add(1);
+                expected_bytes = expected_bytes.saturating_add(entry.metadata().size.unwrap_or(0));
+            }
+            let Some(local_dir) = &local_dir else {
+                if file_type == russh_sftp::protocol::FileType::Dir {
+                    pending.push((entry.path_bytes(), String::new(), None));
+                }
+                continue;
+            };
             let name = codec.decode_path_lossy(entry.file_name_bytes());
             if !crate::download_path::validate_directory_entry(
                 &name,
@@ -3255,17 +3276,15 @@ where
             let local_child = local_dir.join(&name);
             match file_type {
                 russh_sftp::protocol::FileType::Dir => {
-                    if let Some(local_child) =
+                    let local_child =
                         resolve_local_download_target(SftpLocalDownloadTargetContext {
                             remote_path: &remote_child,
                             remote_path_raw: &remote_child_raw,
                             local_path: &local_child,
                             is_directory: true,
                             path_options,
-                        })?
-                    {
-                        pending.push((remote_child_raw, remote_child, local_child));
-                    }
+                        })?;
+                    pending.push((remote_child_raw, remote_child, local_child));
                 }
                 russh_sftp::protocol::FileType::File => {
                     if let Some(local_child) =
@@ -4024,36 +4043,6 @@ fn directory_transfer_progress(
         item_count_completed: Some(item_count_completed.min(item_count_total)),
         item_count_total: Some(item_count_total),
     }
-}
-
-async fn remote_directory_transfer_totals_bytes(
-    sftp: &SftpSession,
-    raw_path: Vec<u8>,
-    control: &SftpTransferControl,
-) -> anyhow::Result<(u64, u64)> {
-    let mut total_bytes = 0_u64;
-    let mut total_items = 0_u64;
-    let mut pending = vec![raw_path];
-    while let Some(remote_dir) = pending.pop() {
-        control.wait_if_paused().await?;
-        for entry in await_sftp_request(control, sftp.read_dir_bytes(remote_dir)).await? {
-            if entry.file_name_bytes() == b"." || entry.file_name_bytes() == b".." {
-                continue;
-            }
-            match entry.file_type() {
-                russh_sftp::protocol::FileType::Dir => {
-                    pending.push(entry.path_bytes());
-                }
-                russh_sftp::protocol::FileType::File => {
-                    total_items = total_items.saturating_add(1);
-                    total_bytes = total_bytes.saturating_add(entry.metadata().size.unwrap_or(0));
-                }
-                russh_sftp::protocol::FileType::Other => {}
-                russh_sftp::protocol::FileType::Symlink => {}
-            }
-        }
-    }
-    Ok((total_bytes, total_items))
 }
 
 async fn ensure_remote_dir(

@@ -16,6 +16,7 @@ pub(super) struct Files {
     pub(super) directories: HashSet<Vec<u8>>,
     pub(super) requests: usize,
     pub(super) request_kinds: Vec<u8>,
+    pub(super) directory_opens: Vec<Vec<u8>>,
     pub(super) request_delay: HashMap<u8, std::time::Duration>,
     pub(super) modified: Option<u32>,
     pub(super) reads: Vec<(u64, usize)>,
@@ -95,6 +96,7 @@ fn reply(
                     return status(id, 2);
                 }
             } else {
+                files.directory_opens.push(path.clone());
                 enumerated.remove(&path);
             }
             packet.push(102);
@@ -326,6 +328,150 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
         .unwrap();
     *compatibility.cache.lock().unwrap() = Some(session);
     (service, files)
+}
+
+#[test]
+fn directory_download_enumerates_each_directory_once_and_preserves_totals() -> anyhow::Result<()> {
+    use crate::{SftpPathTransferOptions, SftpTransferControl};
+
+    let (service, files) = service("UTF-8");
+    {
+        let mut files = files.lock().unwrap();
+        files.directories.extend(
+            [
+                "/folder",
+                "/folder/sub",
+                "/folder/sub/deep",
+                "/folder/empty",
+            ]
+            .map(|path| path.as_bytes().to_vec()),
+        );
+        files.contents.extend([
+            (b"/folder/a".to_vec(), b"abc".to_vec()),
+            (b"/folder/sub/zero".to_vec(), Vec::new()),
+            (b"/folder/sub/deep/b".to_vec(), b"defg".to_vec()),
+        ]);
+    }
+    let root = tempfile::tempdir()?;
+    let target = root.path().join("folder");
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&progress);
+    let summary = service.download_path_with_progress_and_path_options(
+        "/folder",
+        &target,
+        SftpTransferControl::new(),
+        SftpPathTransferOptions::default(),
+        move |current| recorded.lock().unwrap().push(current),
+    )?;
+
+    assert_eq!(summary.bytes, 7);
+    assert_eq!(std::fs::read(target.join("a"))?, b"abc");
+    assert_eq!(std::fs::read(target.join("sub/zero"))?, b"");
+    assert_eq!(std::fs::read(target.join("sub/deep/b"))?, b"defg");
+    assert!(target.join("empty").is_dir());
+    let mut opened = files.lock().unwrap().directory_opens.clone();
+    opened.sort();
+    assert_eq!(
+        opened,
+        [
+            "/folder",
+            "/folder/empty",
+            "/folder/sub",
+            "/folder/sub/deep"
+        ]
+        .map(|path| path.as_bytes().to_vec())
+    );
+    let progress = progress.lock().unwrap();
+    assert!(!progress.is_empty());
+    assert!(
+        progress.iter().all(|current| {
+            current.total_bytes == Some(7) && current.item_count_total == Some(3)
+        })
+    );
+    assert_eq!(progress.last().unwrap().bytes_transferred, 7);
+    assert_eq!(progress.last().unwrap().item_count_completed, Some(3));
+    Ok(())
+}
+
+#[test]
+fn directory_download_totals_include_skipped_files_and_subtrees() -> anyhow::Result<()> {
+    use crate::{
+        SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
+        SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions,
+    };
+
+    struct Resolver;
+    impl SftpDuplicateResolver for Resolver {
+        fn resolve_duplicate(
+            &self,
+            request: &SftpDuplicateRequest,
+        ) -> Result<SftpDuplicateDecision, String> {
+            Ok(if request.source_path.ends_with("/skip") {
+                SftpDuplicateDecision::Skip
+            } else {
+                SftpDuplicateDecision::Overwrite
+            })
+        }
+    }
+
+    let (service, files) = service("UTF-8");
+    {
+        let mut files = files.lock().unwrap();
+        files.directories.extend(
+            ["/folder", "/folder/skip", "/folder/skip/deep"].map(|path| path.as_bytes().to_vec()),
+        );
+        files.contents.extend([
+            (b"/folder/keep".to_vec(), b"abc".to_vec()),
+            (b"/folder/file/skip".to_vec(), b"unused".to_vec()),
+            (b"/folder/skip/deep/bad\\name".to_vec(), b"defg".to_vec()),
+        ]);
+        files.directories.insert(b"/folder/file".to_vec());
+    }
+    let root = tempfile::tempdir()?;
+    let target = root.path().join("folder");
+    std::fs::create_dir_all(target.join("skip"))?;
+    std::fs::create_dir_all(target.join("file"))?;
+    std::fs::write(target.join("file/skip"), b"local")?;
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&progress);
+    let summary = service.download_path_with_progress_and_path_options(
+        "/folder",
+        &target,
+        SftpTransferControl::new(),
+        SftpPathTransferOptions::new(
+            SftpDuplicatePolicy::Ask,
+            Some(Arc::new(Resolver)),
+            SftpTransferOptions::default(),
+        ),
+        move |current| recorded.lock().unwrap().push(current),
+    )?;
+
+    assert_eq!(summary.bytes, 3);
+    assert_eq!(std::fs::read(target.join("keep"))?, b"abc");
+    assert_eq!(std::fs::read(target.join("file/skip"))?, b"local");
+    assert_eq!(std::fs::read_dir(target.join("skip"))?.count(), 0);
+    let mut opened = files.lock().unwrap().directory_opens.clone();
+    opened.sort();
+    assert_eq!(
+        opened,
+        [
+            "/folder",
+            "/folder/file",
+            "/folder/skip",
+            "/folder/skip/deep"
+        ]
+        .map(|path| path.as_bytes().to_vec())
+    );
+    let progress = progress.lock().unwrap();
+    assert!(!progress.is_empty());
+    assert!(
+        progress.iter().all(|current| {
+            current.total_bytes == Some(13) && current.item_count_total == Some(3)
+        })
+    );
+    // The existing completed-item contract counts direct file skips, not skipped subtrees.
+    assert_eq!(progress.last().unwrap().item_count_completed, Some(2));
+    Ok(())
 }
 
 #[test]
