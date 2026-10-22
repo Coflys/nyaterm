@@ -4,9 +4,9 @@ use std::borrow::Cow;
 
 use gpui::{
     App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px,
-    rgb,
+    rgb, svg,
 };
-use nyaterm_ui::NyaSelectOption;
+use nyaterm_ui::{NyaSelectOption, NyaTooltip};
 
 use crate::features::pages::settings::panel::SettingsPanel;
 use crate::theme::ThemePalette;
@@ -32,6 +32,12 @@ impl SettingsPanel {
             .existing_text_input_box("settings.terminal.timestamp-format", false)
             .into_any_element();
         let action_links_enabled = self.settings.summary().terminal_action_links_enabled;
+        let keep_alive_description = match self.settings.summary().terminal_keep_alive_mode.as_str()
+        {
+            "strict" => t!("settings.keepAliveModeStrictDescription"),
+            "disabled" => t!("settings.keepAliveModeDisabledDescription"),
+            _ => t!("settings.keepAliveModeCompatibleDescription"),
+        };
 
         div()
             .flex()
@@ -54,9 +60,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.keepAliveMode"),
-                        Some(SharedString::from(t!(
-                            "settings.keepAliveModeCompatibleDescription"
-                        ))),
+                        Some(SharedString::from(keep_alive_description)),
                         self.settings_select_control(
                             "settings.terminal.keep-alive-mode",
                             vec![
@@ -90,8 +94,10 @@ impl SettingsPanel {
                             .gap_2()
                             .child(terminal_settings_field_meta(
                                 palette,
+                                "settings-x11-display-help",
                                 t!("settings.x11Display"),
                                 t!("settings.x11DisplayDesc"),
+                                t!("settings.x11DisplayHelp"),
                             ))
                             .child(div().w_full().max_w(px(520.)).child(x11_display_input)),
                     )
@@ -124,7 +130,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.showLineNumbers"),
-                        Some(SharedString::from(t!("settings.showLineNumbersDesc"))),
+                        None,
                         settings_switch(
                             palette,
                             "terminal-line-numbers",
@@ -137,7 +143,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.showTimestamps"),
-                        Some(SharedString::from(t!("settings.showTimestampsDesc"))),
+                        None,
                         settings_switch(
                             palette,
                             "terminal-timestamps",
@@ -155,8 +161,10 @@ impl SettingsPanel {
                                 .gap_2()
                                 .child(terminal_settings_field_meta(
                                     palette,
+                                    "settings-timestamp-format-help",
                                     t!("settings.timestampFormat"),
                                     t!("settings.timestampFormatDesc"),
+                                    t!("settings.timestampFormatHelp"),
                                 ))
                                 .child(
                                     div().w_full().max_w(px(520.)).child(timestamp_format_input),
@@ -210,7 +218,7 @@ impl SettingsPanel {
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.interactionEncoding")),
-                Some(t!("settings.interactionEncodingDesc")),
+                None,
                 self.settings_select_field(
                     "settings.interaction.default-encoding",
                     t!("settings.defaultEncoding"),
@@ -324,19 +332,33 @@ impl SettingsPanel {
 
 fn terminal_settings_field_meta(
     palette: ThemePalette,
+    id: &'static str,
     label: impl Into<SharedString>,
     desc: impl Into<SharedString>,
+    help: impl Into<SharedString>,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
     let desc: SharedString = desc.into();
+    let help: SharedString = help.into();
     div()
         .min_w_0()
         .child(
             div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
                 .text_size(px(13.))
                 .font_weight(FontWeight(500.))
                 .text_color(rgb(palette.text))
-                .child(label),
+                .child(label)
+                .child(
+                    svg()
+                        .size(px(13.))
+                        .path("icons/menu/info.svg")
+                        .text_color(rgb(palette.text_dimmed)),
+                )
+                .tooltip(move |window, cx| NyaTooltip::new(help.clone()).build(window, cx)),
         )
         .child(
             div()

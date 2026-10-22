@@ -7,7 +7,7 @@ use gpui::{
 use nyaterm_core::truncate_preview;
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaPopover, NyaScrollArea, NyaScrollable, NyaSwitch, NyaTabItem,
-    NyaTabs, NyaTabsVariant,
+    NyaTabs, NyaTabsVariant, NyaTooltip,
 };
 
 use super::{
@@ -67,6 +67,7 @@ impl NyaTermApp {
         let command_script_label = t!("quickCommands.commandScript");
         let command_placeholder = t!("quickCommands.commandPlaceholder");
         let escape_hint = t!("quickCommands.escapeHint");
+        let escape_summary = t!("quickCommands.escapeSummary");
         let cancel_label = t!("common.cancel");
         let save_label = t!("common.save");
         let wide_fields = viewport_width >= 768.;
@@ -652,10 +653,23 @@ impl NyaTermApp {
                                     .child(command_input)
                                     .child(
                                         div()
+                                            .id("quick-command-escape-help")
                                             .mt_1()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
                                             .text_size(px(10.))
                                             .text_color(rgb(palette.text_muted))
-                                            .child(escape_hint),
+                                            .child(escape_summary)
+                                            .child(
+                                                svg()
+                                                    .size(px(12.))
+                                                    .path("icons/menu/info.svg")
+                                                    .text_color(rgb(palette.text_muted)),
+                                            )
+                                            .tooltip(move |window, cx| {
+                                                NyaTooltip::new(escape_hint.clone()).build(window, cx)
+                                            }),
                                     ),
                             ),
                     )

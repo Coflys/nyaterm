@@ -13,6 +13,7 @@ use nyaterm_core::{
 use nyaterm_ui::chat::{NyaMessageScroller, NyaMessageScrollerState};
 use nyaterm_ui::{
     NyaDropdownMenu, NyaInputShell, NyaMenuAnchor, NyaMenuItem, NyaScrollable, NyaSearchInput,
+    NyaTooltip,
 };
 
 use crate::features::NyaTermApp;
@@ -1497,10 +1498,24 @@ impl AiPanel {
                     .gap_0()
                     .child(
                         div()
+                            .id("ai-background-execution-help")
+                            .flex()
+                            .items_center()
+                            .gap_1()
                             .text_size(px(12.))
                             .font_weight(FontWeight(600.))
                             .text_color(rgb(palette.text))
-                            .child(t!("ai.backgroundAgentExecution")),
+                            .child(t!("ai.backgroundAgentExecution"))
+                            .child(
+                                svg()
+                                    .size(px(12.))
+                                    .path("icons/menu/info.svg")
+                                    .text_color(rgb(palette.text_muted)),
+                            )
+                            .tooltip(|window, cx| {
+                                NyaTooltip::new(t!("ai.backgroundAgentExecutionHelp"))
+                                    .build(window, cx)
+                            }),
                     )
                     .child(
                         div()
