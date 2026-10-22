@@ -293,6 +293,30 @@ impl SemanticHighlighter {
                 permissions: false,
             }
         })));
+        if let Some(color) = self.color("builtin-number") {
+            let in_input = &in_input;
+            let in_prompt = &in_prompt;
+            // Ping sequences are counters even below ten. Keep this exception
+            // in output context so ordinary single digits retain their noise filter.
+            sources.push(Box::new(line.match_indices("icmp_seq=").filter_map(
+                move |(field_start, field)| {
+                    let start = field_start + field.len();
+                    let end = start + line[start..].bytes().take_while(u8::is_ascii_digit).count();
+                    (start < end
+                        && semantic_word_boundary(line, field_start, end)
+                        && numeric_boundary(line, start, end)
+                        && !in_input(field_start, end)
+                        && !in_prompt(field_start, end))
+                    .then_some(SemanticMatch {
+                        start,
+                        end,
+                        color,
+                        priority: 80,
+                        permissions: false,
+                    })
+                },
+            )));
+        }
         for rule in &self.regex {
             let in_input = &in_input;
             let in_prompt = &in_prompt;

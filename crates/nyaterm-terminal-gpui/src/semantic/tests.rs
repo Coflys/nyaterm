@@ -397,6 +397,112 @@ fn listing_datetime_and_numbers_keep_windterm_colors_without_single_digit_noise(
 }
 
 #[test]
+fn ping_sequence_counters_highlight_single_digits_without_coloring_the_field_name() {
+    for dark in [true, false] {
+        let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(dark));
+        let color = parse_hex_rgb(builtin_keyword_rule_swatch("builtin-number", dark)).unwrap();
+        for sequence in 0..=10 {
+            let line = format!("64 bytes from 1.1.1.1: icmp_seq={sequence} ttl=51 time=74.1 ms");
+            let start = line.find("icmp_seq=").unwrap() + "icmp_seq=".len();
+            let end = start + sequence.to_string().len();
+            let ranges = highlighter.ranges(&line, &SemanticContext::default(), &[]);
+            assert!(ranges.contains(&(start, end, color)), "{line}, dark={dark}");
+            assert!(ranges.iter().all(|&(left, right, _)| {
+                right <= start - "icmp_seq=".len() || left >= start - 1
+            }));
+        }
+        assert!(
+            highlighter
+                .ranges("0 1 7 9", &SemanticContext::default(), &[])
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn ping_sequence_single_digit_exception_respects_boundaries_context_and_number_switch() {
+    let rules: Vec<_> = get_builtin_keyword_rules(true)
+        .into_iter()
+        .filter(|rule| rule.id == "builtin-number")
+        .collect();
+    let highlighter = SemanticHighlighter::compile(&rules);
+    for line in [
+        "prefixicmp_seq=1",
+        "prefix_icmp_seq=1",
+        "prefix-icmp_seq=1",
+        "icmp_seq=1x",
+        "icmp_seq=1_",
+        "icmp_seq=1-worker",
+        "icmp_seq=-1",
+        "icmp_seq=+1",
+        "icmp_seq=",
+        "icmp_seq=1\u{301}",
+        "icmp_seq=\n1",
+    ] {
+        assert!(
+            highlighter
+                .ranges(line, &SemanticContext::default(), &[])
+                .is_empty(),
+            "{line:?}"
+        );
+    }
+    let line = "icmp_seq=1";
+    for context in [
+        SemanticContext {
+            integrated: true,
+            input: std::iter::once(0..line.len()).collect(),
+            ..SemanticContext::default()
+        },
+        SemanticContext {
+            integrated: true,
+            prompt: std::iter::once(0..line.len()).collect(),
+            ..SemanticContext::default()
+        },
+    ] {
+        assert!(highlighter.ranges(line, &context, &[]).is_empty());
+    }
+    assert!(
+        highlighter
+            .ranges("$ echo icmp_seq=1", &SemanticContext::default(), &[])
+            .is_empty()
+    );
+    assert_eq!(
+        highlighter.ranges(line, &SemanticContext::default(), &[(9, 10, 0x123456)]),
+        vec![(9, 10, 0x123456)]
+    );
+
+    let mut disabled = rules;
+    disabled[0].enabled = false;
+    assert!(
+        SemanticHighlighter::compile(&disabled)
+            .ranges(line, &SemanticContext::default(), &[])
+            .is_empty()
+    );
+    for (token, id) in [
+        ("\"icmp_seq=1\"", "builtin-string"),
+        ("https://example.com/?icmp_seq=1", "builtin-url"),
+    ] {
+        assert_token(token, token, id, false);
+    }
+}
+
+#[test]
+fn ping_sequence_context_survives_soft_wraps_without_crossing_hard_newlines() {
+    let mut screen = TerminalScreen::new(8, 4);
+    screen.advance(b"icmp_seq=1");
+    let result = snapshot_colors(&screen.snapshot());
+    assert_eq!(result[9], Some(swatch("builtin-number")));
+
+    let mut screen = TerminalScreen::new(16, 4);
+    screen.advance(b"icmp_seq=\r\n1");
+    assert!(
+        snapshot_colors(&screen.snapshot())
+            .iter()
+            .all(|color| *color != Some(swatch("builtin-number")))
+    );
+}
+
+#[test]
 fn numeric_literals_and_durations_keep_their_complete_ranges_in_both_themes() {
     for dark in [true, false] {
         let highlighter = SemanticHighlighter::compile(&get_builtin_keyword_rules(dark));
