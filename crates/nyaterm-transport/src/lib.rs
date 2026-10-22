@@ -1104,7 +1104,7 @@ impl SessionManager {
             ))
             .map_err(SessionError::OpenPty)?;
 
-        let mut command = shell.command();
+        let mut command = shell.command(config.working_dir.as_deref());
         // Startup asynchronously warms the complete shell environment. Copy
         // values from the shared snapshot here without starting another shell.
         // If a terminal is created before warm-up finishes, retain portable-pty's
@@ -1116,9 +1116,6 @@ impl SessionManager {
             .flatten()
             .filter(|snapshot| shell.matches_environment(snapshot));
         configure_environment(&mut command, shell_snapshot.as_deref());
-        if let Some(working_dir) = &config.working_dir {
-            command.cwd(working_dir);
-        }
 
         let reader = pair
             .master
