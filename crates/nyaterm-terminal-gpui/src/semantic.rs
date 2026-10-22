@@ -50,6 +50,7 @@ struct RegexRule {
     shell_lexed: bool,
     option: bool,
     operator: bool,
+    numeric: bool,
 }
 
 struct LiteralRule {
@@ -142,6 +143,10 @@ impl SemanticHighlighter {
                                 ),
                                 option: rule.id == "builtin-option",
                                 operator: rule.id == "builtin-operator",
+                                numeric: matches!(
+                                    rule.id.as_str(),
+                                    "builtin-number" | "builtin-duration"
+                                ),
                             });
                         }
                     }
@@ -296,6 +301,7 @@ impl SemanticHighlighter {
                     .find_iter(line)
                     .filter(move |found| {
                         !found.is_empty()
+                            && (!rule.numeric || numeric_boundary(line, found.start(), found.end()))
                             && (!rule.option || option_start_boundary(line, found.start()))
                             && (!rule.whole_word
                                 || semantic_word_boundary(line, found.start(), found.end()))
@@ -313,6 +319,8 @@ impl SemanticHighlighter {
                                     break;
                                 }
                                 if line.as_bytes()[cursor] != b'-' {
+                                    // Keep punctuation separate from a following signed
+                                    // number: at the sign, the longer numeric token wins.
                                     cursor += 1;
                                     break;
                                 }
@@ -626,6 +634,20 @@ fn semantic_word_boundary(line: &str, start: usize, end: usize) -> bool {
     is_whole_word_match(line, start, end)
         && !line[..start].chars().next_back().is_some_and(word_char)
         && !line[end..].chars().next().is_some_and(word_char)
+}
+
+fn numeric_boundary(line: &str, start: usize, end: usize) -> bool {
+    // Do not recover numeric fragments inside names, dotted tokens or malformed
+    // literals (e.g. worker-123, 0x12GG, 12e+ or 12e--34). Consuming candidates
+    // before checking their neighbours also prevents retrying without their sign.
+    let continuation = |ch: char| {
+        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.') || terminal_is_zero_width_mark(ch)
+    };
+    !line[..start]
+        .chars()
+        .next_back()
+        .is_some_and(|ch| continuation(ch) || ch == '+')
+        && !line[end..].chars().next().is_some_and(continuation)
 }
 
 fn option_start_boundary(line: &str, start: usize) -> bool {
