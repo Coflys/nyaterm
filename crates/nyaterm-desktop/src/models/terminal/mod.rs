@@ -30,6 +30,7 @@ use crate::{
 };
 
 use super::RecordingWriteHandle;
+use crate::models::recording::ExecutionRecordingEvent;
 
 mod selection;
 pub(crate) use selection::{TerminalBufferCellPos, TerminalCellPos, TerminalSelection};
@@ -1644,6 +1645,38 @@ impl TerminalFramePipeline {
         });
     }
 
+    /// Recording-only events share the frame queue with ordinary decoded output,
+    /// so they cannot overtake output still being processed by this worker.
+    pub(crate) fn submit_execution_recording(
+        &self,
+        session_id: &str,
+        event: ExecutionRecordingEvent,
+    ) {
+        if let ExecutionRecordingEvent::Output(text) = event {
+            let mut remaining = text.as_str();
+            while !remaining.is_empty() {
+                let mut end = remaining.len().min(64 * 1024);
+                while !remaining.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let _ = self
+                    .command_tx
+                    .send(TerminalFrameCommand::ExecutionRecording {
+                        session_id: session_id.into(),
+                        event: ExecutionRecordingEvent::Output(remaining[..end].into()),
+                    });
+                remaining = &remaining[end..];
+            }
+        } else {
+            let _ = self
+                .command_tx
+                .send(TerminalFrameCommand::ExecutionRecording {
+                    session_id: session_id.into(),
+                    event,
+                });
+        }
+    }
+
     pub(crate) fn submit_synthetic_output(&self, session_id: String, text: String) {
         if !text.is_empty() {
             let _ = self
@@ -1914,6 +1947,10 @@ impl Default for TerminalFramePipeline {
 
 #[derive(Debug)]
 enum TerminalFrameCommand {
+    ExecutionRecording {
+        session_id: String,
+        event: ExecutionRecordingEvent,
+    },
     SetKeywordRules {
         rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
     },
@@ -3555,6 +3592,7 @@ fn terminal_frame_command_priority_snapshot_insert_before(command: &TerminalFram
 
 fn terminal_frame_command_output_bytes(command: &TerminalFrameCommand) -> usize {
     match command {
+        TerminalFrameCommand::ExecutionRecording { event, .. } => event.payload_bytes(),
         TerminalFrameCommand::Output { data, .. } => data.len(),
         TerminalFrameCommand::DecodedOutput { text, .. }
         | TerminalFrameCommand::SyntheticOutput { text, .. } => text.len(),
@@ -3713,6 +3751,9 @@ fn run_terminal_frame_processor(
                     let event = session.output_event_from_batch(session_id, batch, started_at);
                     push_event(&event_queue, TerminalFrameEvent::Output(event));
                 }
+            }
+            TerminalFrameCommand::ExecutionRecording { session_id, event } => {
+                recording_writer.write_execution_event(&session_id, event);
             }
             TerminalFrameCommand::SyntheticOutput { session_id, text } => {
                 if let Some(session) = sessions.get_mut(&session_id) {

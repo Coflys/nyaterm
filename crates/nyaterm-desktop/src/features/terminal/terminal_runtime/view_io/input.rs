@@ -7,6 +7,7 @@ use nyaterm_core::{
 };
 
 use crate::features::NyaTermApp;
+use crate::models::recording::ExecutionRecordingEvent;
 use crate::terminal::{
     TerminalKeyMode, terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
 };
@@ -864,22 +865,43 @@ impl NyaTermApp {
         {
             return Err("An automatic command is capturing this terminal".into());
         }
-        self.write_terminal_input_recorded_impl(session_id, bytes)
+        self.write_terminal_input_recorded_impl(session_id, bytes, None)
     }
 
     pub(in crate::features) fn write_automated_terminal_input(
         &mut self,
         session_id: &str,
         bytes: &[u8],
+        command: Option<&str>,
     ) -> Result<(), String> {
         self.commands.cancel_staged_quick_command(session_id);
-        self.write_terminal_input_recorded_impl(session_id, bytes)
+        self.write_terminal_input_recorded_impl(session_id, bytes, command)
+    }
+
+    pub(in crate::features) fn record_automated_terminal_command(
+        &self,
+        session_id: &str,
+        command: &str,
+    ) {
+        let include = self
+            .recording
+            .writer()
+            .capture_policy(session_id)
+            .include_input
+            && !self.recording_input_is_sensitive(session_id);
+        self.terminal.submit_execution_recording(
+            session_id,
+            ExecutionRecordingEvent::Boundary {
+                command: include.then(|| command.to_string()),
+            },
+        );
     }
 
     fn write_terminal_input_recorded_impl(
         &mut self,
         session_id: &str,
         bytes: &[u8],
+        command: Option<&str>,
     ) -> Result<(), String> {
         if self.security.screen_locked() {
             return Err("screen locked".to_string());
@@ -908,6 +930,24 @@ impl NyaTermApp {
         {
             // Covers typed Enter, paste, and autofill through the shared write path.
             self.terminal.assist.credential_prompt_awaiting_output = true;
+        }
+        if let Some(command) = command {
+            if self.recording.writer().capture_policy(session_id).mode
+                == nyaterm_transport::RecordingMode::Raw
+            {
+                if self
+                    .recording
+                    .writer()
+                    .capture_policy(session_id)
+                    .include_input
+                    && !self.recording_input_is_sensitive(session_id)
+                {
+                    self.recording.write_raw_input(session_id, encoded);
+                }
+            } else {
+                self.record_automated_terminal_command(session_id, command);
+            }
+            return Ok(());
         }
         if disposition.record_logical_input
             && self

@@ -19,6 +19,7 @@ use super::editing_state::TerminalEditingState;
 use super::terminal_surface::TerminalScrollbarDragState;
 use super::terminal_surface_entity::TerminalSurface;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
+use crate::models::recording::ExecutionRecordingEvent;
 use crate::models::{
     ActionLinkMenuState, ActionLinkTooltipState, RecordingHistorySearchEvent,
     RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
@@ -197,6 +198,16 @@ pub(in crate::features) struct TerminalOverlayVisibility {
 }
 
 impl TerminalFeatureState {
+    pub(in crate::features) fn submit_execution_recording(
+        &self,
+        session_id: &str,
+        event: ExecutionRecordingEvent,
+    ) {
+        self.view
+            .frame_pipeline
+            .submit_execution_recording(session_id, event);
+    }
+
     pub(in crate::features) fn recording_output_fence(
         &self,
     ) -> impl FnOnce() -> Result<(), String> + Send + 'static {

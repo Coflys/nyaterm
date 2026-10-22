@@ -37,6 +37,18 @@ peers. Dedicated sensitive-input adapters and terminal protocol replies are
 always excluded. Unknown hidden-input prompts cannot reliably be detected;
 this limitation is shown beside the input switch.
 
+Automatic terminal execution records the original command as INPUT, subject to
+the same input switch and sensitive-prompt checks. Internal shell wrappers and
+capture markers are excluded from Transcript. Captured output is recorded
+incrementally, independently of the bounded MCP result and AI card line limit;
+SendOnly output continues through the ordinary recording path once. Cancellation
+and timeout retain partial output, and late output keeps recording with internal
+markers removed. Background SSH/local execution records its submitted command
+and returned stdout/stderr without inserting the AI presentation into the log.
+Raw still records only session wire bytes, including shell wrappers, and excludes
+background execution that does not pass through that session. Prompt detection
+does not redact arbitrary secrets embedded in commands or command output.
+
 The binary-transfer switch selects either session bytes before transfer filters
 or terminal bytes after the existing X/Y/ZMODEM and trzsz filters. The Raw capture
 marker on terminal submissions prevents duplicate capture after decoding.
