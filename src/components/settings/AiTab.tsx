@@ -465,6 +465,21 @@ export function AiGeneralTab() {
         </SettingFieldGrid>
         <div className="text-xs text-muted-foreground">{t("ai.agentMaxStepsDesc")}</div>
         <div className="text-xs text-muted-foreground">{t("ai.terminalOutputLinesDesc")}</div>
+        {runtime === "desktop" && (
+          <div className="space-y-3">
+            <Label htmlFor="agent-custom-instructions">{t("ai.agentCustomInstructions")}</Label>
+            <Textarea
+              id="agent-custom-instructions"
+              aria-describedby="agent-custom-instructions-desc"
+              rows={5}
+              value={ai.agent_custom_instructions ?? ""}
+              onChange={(event) => update({ agent_custom_instructions: event.target.value })}
+            />
+            <p id="agent-custom-instructions-desc" className="text-xs text-muted-foreground">
+              {t("ai.agentCustomInstructionsDesc")}
+            </p>
+          </div>
+        )}
       </SettingSection>
     </div>
   );

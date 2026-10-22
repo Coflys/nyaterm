@@ -5,11 +5,20 @@ import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import type { AISettings } from "@/types/global";
 import { AiGeneralTab, AiModelsTab } from "./AiTab";
 
-const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+const { invokeMock, runtimeMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  runtimeMock: { value: "desktop" as "desktop" | "web" },
+}));
 let currentSettings: AISettings;
 let appState: Record<string, unknown>;
 vi.mock("@/context/AppContext", () => ({ useApp: () => appState }));
 vi.mock("@/lib/invoke", () => ({ invoke: invokeMock }));
+vi.mock("@/lib/backend/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/backend/runtime")>()),
+  get runtime() {
+    return runtimeMock.value;
+  },
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => vi.fn()) }));
 vi.mock("react-i18next", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react-i18next")>()),
@@ -89,6 +98,42 @@ function settingsWithNoKeyProvider(kind: "ollama" | "openai_compatible"): AISett
 describe("AI provider settings", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    runtimeMock.value = "desktop";
+  });
+
+  it("edits and clears built-in agent custom instructions without changing other settings", () => {
+    const initial = settingsWithProviders();
+    render(<Harness initial={initial} general />);
+    const input = screen.getByRole("textbox", { name: "ai.agentCustomInstructions" });
+    expect((input as HTMLTextAreaElement).value).toBe("");
+    expect(input.getAttribute("aria-describedby")).toBe("agent-custom-instructions-desc");
+
+    const instructions = "Prefer read-only diagnostics.\n先备份配置。";
+    fireEvent.change(input, { target: { value: instructions } });
+    expect(currentSettings).toEqual({ ...initial, agent_custom_instructions: instructions });
+    expect((input as HTMLTextAreaElement).value).toBe(instructions);
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(currentSettings).toEqual(initial);
+  });
+
+  it("loads saved multiline agent custom instructions", () => {
+    const initial = settingsWithProviders();
+    initial.agent_custom_instructions = "Prefer read-only diagnostics.\n先备份配置。";
+    render(<Harness initial={initial} general />);
+    expect(
+      (screen.getByRole("textbox", { name: "ai.agentCustomInstructions" }) as HTMLTextAreaElement)
+        .value,
+    ).toBe(initial.agent_custom_instructions);
+  });
+
+  it("hides agent custom instructions on Web without clearing saved instructions", () => {
+    runtimeMock.value = "web";
+    const initial = settingsWithProviders();
+    initial.agent_custom_instructions = "Saved desktop instructions";
+    render(<Harness initial={initial} general />);
+    expect(screen.queryByRole("textbox", { name: "ai.agentCustomInstructions" })).toBeNull();
+    expect(currentSettings).toEqual(initial);
   });
 
   it("edits global proxy modes and preserves custom fields while hidden", () => {

@@ -56,6 +56,8 @@
     "agentApproveExecute": "執行",
     "agentAwaitingApproval": "等待確認執行…",
     "agentCommandExecutionMode": "命令執行策略",
+    "agentCustomInstructions": "內建 Agent 附加指令",
+    "agentCustomInstructionsDesc": "附加至內建 NyaTerm Agent 的預設指令，從下一次請求起生效。留空使用預設行為，不影響 Ask、Codex、Claude Code 或命令審批。指令會傳送給模型供應商，請勿填寫敏感資訊。",
     "agentExecuting": "正在執行命令…",
     "agentMaxSteps": "Agent 最大步數",
     "agentMaxStepsDesc": "Agent 模式下 ReAct 迴圈的最大步數。",

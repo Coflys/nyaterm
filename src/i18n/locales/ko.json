@@ -56,6 +56,8 @@
     "agentApproveExecute": "실행",
     "agentAwaitingApproval": "승인 대기 중...",
     "agentCommandExecutionMode": "명령 실행 정책",
+    "agentCustomInstructions": "내장 Agent 추가 지침",
+    "agentCustomInstructionsDesc": "다음 요청부터 내장 NyaTerm Agent의 기본 지침에 추가됩니다. 비워 두면 기본 동작을 사용합니다. Ask, Codex, Claude Code 및 명령 승인에는 영향을 주지 않습니다. 지침은 모델 공급자에게 전송되므로 민감한 정보를 입력하지 마세요.",
     "agentExecuting": "명령 실행 중…",
     "agentMaxSteps": "에이전트 최대 단계 수",
     "agentMaxStepsDesc": "Agent 모드의 ReAct 루프 최대 단계 수입니다.",

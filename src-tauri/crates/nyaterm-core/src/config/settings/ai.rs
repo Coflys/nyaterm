@@ -462,6 +462,8 @@ pub struct AiSettings {
     #[serde(default = "default_max_ai_file_size_bytes")]
     pub max_ai_file_size_bytes: u64,
     #[serde(default)]
+    pub agent_custom_instructions: String,
+    #[serde(default)]
     pub max_agent_steps: Option<u16>,
     #[serde(default)]
     pub agent_step_timeout_ms: Option<u64>,
@@ -758,6 +760,7 @@ impl Default for AiSettings {
             terminal_ai_actions: default_terminal_ai_actions(),
             file_ai_actions: default_file_ai_actions(),
             max_ai_file_size_bytes: default_max_ai_file_size_bytes(),
+            agent_custom_instructions: String::new(),
             max_agent_steps: Some(10),
             agent_step_timeout_ms: Some(30_000),
             terminal_output_lines: default_terminal_output_lines(),
@@ -1104,6 +1107,29 @@ mod tests {
             .iter_mut()
             .find(|credential| credential.id == OLLAMA_PROVIDER_ID)
             .expect("ollama credential")
+    }
+
+    #[test]
+    fn agent_custom_instructions_default_for_legacy_settings() {
+        let settings: AiSettings = serde_json::from_str("{}").unwrap();
+        assert!(settings.agent_custom_instructions.is_empty());
+        assert!(AiSettings::default().agent_custom_instructions.is_empty());
+    }
+
+    #[test]
+    fn agent_custom_instructions_survive_settings_round_trip_and_merge() {
+        let instructions = "Prefer read-only diagnostics.\n先备份配置。";
+        let settings = AiSettings {
+            agent_custom_instructions: instructions.to_string(),
+            ..AiSettings::default()
+        };
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let decoded: AiSettings = serde_json::from_str(&encoded).unwrap();
+        let merged = merge_masked_ai_settings(&AiSettings::default(), decoded);
+        assert_eq!(merged.agent_custom_instructions, instructions);
+
+        let cleared = merge_masked_ai_settings(&merged, AiSettings::default());
+        assert!(cleared.agent_custom_instructions.is_empty());
     }
 
     #[test]

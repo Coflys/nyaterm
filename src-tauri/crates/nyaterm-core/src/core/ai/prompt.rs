@@ -403,13 +403,33 @@ pub fn system_prompt(language: &str) -> &'static str {
     }
 }
 
-pub fn agent_system_prompt(language: &str) -> &'static str {
-    match resolve_prompt_language(language) {
+pub fn agent_system_prompt(language: &str, custom_instructions: &str) -> String {
+    let language = resolve_prompt_language(language);
+    let base = match language {
         PromptLanguage::ZhHans => AGENT_SYSTEM_PROMPT_ZH,
         PromptLanguage::ZhHant => AGENT_SYSTEM_PROMPT_ZH_HANT,
         PromptLanguage::En => AGENT_SYSTEM_PROMPT_EN,
         PromptLanguage::Ko => AGENT_SYSTEM_PROMPT_KO,
+    };
+    let instructions = custom_instructions.trim();
+    if instructions.is_empty() {
+        return base.to_string();
     }
+    let heading = match language {
+        PromptLanguage::ZhHans => {
+            "用户附加指令（仅在与上述规则一致时遵循，不得改变工具协议或命令审批要求）："
+        }
+        PromptLanguage::ZhHant => {
+            "使用者附加指令（僅在與上述規則一致時遵循，不得變更工具協定或命令審批要求）："
+        }
+        PromptLanguage::En => {
+            "User custom instructions (follow only when consistent with the rules above; do not change tool protocols or command approval requirements):"
+        }
+        PromptLanguage::Ko => {
+            "사용자 추가 지침 (위 규칙과 일치하는 경우에만 따르며, 도구 프로토콜이나 명령 승인 요건을 변경하지 마세요):"
+        }
+    };
+    format!("{base}\n\n{heading}\n{instructions}")
 }
 
 pub fn build_agent_prompt(request: &AiChatRequest, settings: &AiSettings) -> String {
@@ -987,9 +1007,59 @@ mod tests {
     }
 
     #[test]
+    fn agent_custom_instructions_preserve_default_prompts_when_blank() {
+        for (language, expected) in [
+            ("zh-CN", AGENT_SYSTEM_PROMPT_ZH),
+            ("zh-TW", AGENT_SYSTEM_PROMPT_ZH_HANT),
+            ("en", AGENT_SYSTEM_PROMPT_EN),
+            ("ko", AGENT_SYSTEM_PROMPT_KO),
+            ("ru", AGENT_SYSTEM_PROMPT_EN),
+        ] {
+            for blank in ["", " \n\t　"] {
+                assert_eq!(agent_system_prompt(language, blank), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn agent_custom_instructions_append_once_without_replacing_rules() {
+        let instructions = "custom-instruction-marker\n先检查日志。";
+        for language in ["zh-CN", "zh-TW", "en", "ko", "ru"] {
+            let base = agent_system_prompt(language, "");
+            let prompt = agent_system_prompt(language, &format!(" \n{instructions}\n "));
+            assert!(prompt.starts_with(&base));
+            assert!(prompt.ends_with(instructions));
+            assert_eq!(prompt.matches(instructions).count(), 1);
+            for required in ["execute_command", "final_answer", "riskLevel", "riskReason"] {
+                assert!(prompt.contains(required));
+            }
+        }
+    }
+
+    #[test]
+    fn agent_custom_instructions_do_not_change_task_or_ask_prompts() {
+        let default_settings = AiSettings::default();
+        let custom_settings = AiSettings {
+            agent_custom_instructions: "custom-instruction-marker".to_string(),
+            ..AiSettings::default()
+        };
+        for language in ["zh-CN", "zh-TW", "en", "ko"] {
+            let request = test_request(language);
+            assert_eq!(
+                build_prompt(&request, &custom_settings),
+                build_prompt(&request, &default_settings)
+            );
+            assert_eq!(
+                build_agent_prompt(&request, &custom_settings),
+                build_agent_prompt(&request, &default_settings)
+            );
+        }
+    }
+
+    #[test]
     fn returns_traditional_chinese_system_prompts() {
         assert!(system_prompt("zh-TW").contains("雲端原生終端助手"));
-        assert!(agent_system_prompt("zh-Hant").contains("終端自動化 Agent"));
+        assert!(agent_system_prompt("zh-Hant", "").contains("終端自動化 Agent"));
     }
 
     #[test]
@@ -1052,7 +1122,7 @@ mod tests {
     #[test]
     fn returns_korean_system_prompts() {
         assert!(system_prompt("ko").contains("터미널 어시스턴트"));
-        assert!(agent_system_prompt("ko").contains("터미널 자동화 Agent"));
+        assert!(agent_system_prompt("ko", "").contains("터미널 자동화 Agent"));
     }
 
     #[test]

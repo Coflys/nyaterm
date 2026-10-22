@@ -56,6 +56,8 @@
     "agentApproveExecute": "Execute",
     "agentAwaitingApproval": "Awaiting approval...",
     "agentCommandExecutionMode": "Command execution policy",
+    "agentCustomInstructions": "Built-in Agent custom instructions",
+    "agentCustomInstructionsDesc": "Appended to the built-in NyaTerm Agent's default instructions starting with the next request. Leave blank to use the defaults. Does not affect Ask, Codex, Claude Code, or command approvals. These instructions are sent to your model provider; do not include secrets.",
     "agentExecuting": "Executing command…",
     "agentMaxSteps": "Agent max steps",
     "agentMaxStepsDesc": "Maximum steps in the ReAct loop for Agent mode.",

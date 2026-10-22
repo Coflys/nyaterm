@@ -709,6 +709,7 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
   terminal_ai_actions: DEFAULT_TERMINAL_AI_ACTIONS,
   file_ai_actions: DEFAULT_FILE_AI_ACTIONS,
   max_ai_file_size_bytes: 1048576,
+  agent_custom_instructions: "",
   max_agent_steps: 10,
   agent_step_timeout_ms: 30000,
   terminal_output_lines: 10,
