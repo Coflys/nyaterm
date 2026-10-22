@@ -126,12 +126,14 @@ function TmuxWindowStrip({
         </g>
       </svg>
       {/* Detach is a session-level action, so it sits with the session
-          badge rather than among the per-window controls. */}
+          badge rather than among the per-window controls. The warning
+          tint marks it as the one strip action that drops the whole
+          pane set at once. */}
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        className="ml-1.5 h-7 w-7"
+        className="ml-1.5 h-7 w-7 text-[var(--df-warning)] hover:bg-[var(--df-warning)]/10 hover:text-[var(--df-warning)]"
         title={t("tmux.detach")}
         onClick={detach}
       >
