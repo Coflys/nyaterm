@@ -24,21 +24,30 @@ pub(crate) enum InputSegment {
 /// literal bytes — a sequence split across flushes reaches the pane as the
 /// same byte stream a plain `send-keys -H` would have produced, so no extra
 /// buffering is needed.
+///
+/// Between bracketed-paste markers (`ESC[200~`/`ESC[201~`) nothing is a key:
+/// payloads copied out of a terminal can themselves contain raw escape
+/// sequences, and they must reach the pane as literal text.
 pub(crate) fn split_input(data: &[u8]) -> Vec<InputSegment> {
     let mut segments = Vec::new();
     let mut literal_start = 0;
     let mut i = 0;
+    let mut in_paste = false;
     while i < data.len() {
-        if data[i] == 0x1b
-            && let Some((name, len)) = key_at(&data[i..])
-        {
-            if literal_start < i {
-                segments.push(InputSegment::Literal(data[literal_start..i].to_vec()));
+        if data[i] == 0x1b {
+            if data[i..].starts_with(b"\x1b[200~") {
+                in_paste = true;
+            } else if data[i..].starts_with(b"\x1b[201~") {
+                in_paste = false;
+            } else if !in_paste && let Some((name, len)) = key_at(&data[i..]) {
+                if literal_start < i {
+                    segments.push(InputSegment::Literal(data[literal_start..i].to_vec()));
+                }
+                segments.push(InputSegment::Key(name));
+                i += len;
+                literal_start = i;
+                continue;
             }
-            segments.push(InputSegment::Key(name));
-            i += len;
-            literal_start = i;
-            continue;
         }
         i += 1;
     }
@@ -246,6 +255,28 @@ mod tests {
                 "{data:?} must pass through verbatim"
             );
         }
+    }
+
+    #[test]
+    fn bracketed_paste_payload_stays_literal() {
+        // Payload copied from a terminal may itself contain key-shaped
+        // sequences; inside the markers none of them classify as keys.
+        let data = b"\x1b[200~end \x1b[F home \x1b[H\x1b[201~";
+        assert_eq!(
+            split_input(data),
+            vec![lit("\x1b[200~end \x1b[F home \x1b[H\x1b[201~")]
+        );
+        // Keys after the closing marker classify again.
+        assert_eq!(
+            split_input(b"\x1b[200~x\x1b[201~\x1b[F"),
+            vec![lit("\x1b[200~x\x1b[201~"), key("End")]
+        );
+        // An unclosed marker keeps the remainder literal, matching the
+        // pre-patch `send-keys -H` behavior for truncated input.
+        assert_eq!(
+            split_input(b"\x1b[200~x\x1b[F"),
+            vec![lit("\x1b[200~x\x1b[F")]
+        );
     }
 
     #[test]
