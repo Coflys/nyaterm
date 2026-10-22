@@ -17,7 +17,7 @@
 //!   regular SSH loop, which continues as a normal shell.
 
 use super::control::{BlockId, ControlMessage, ControlParser, LayoutCell, TmuxUiNode, parse_line};
-use super::input::{InputSegment, split_input};
+use super::input::{InputParser, InputSegment};
 use crate::core::capture::OutputCaptureProcessor;
 use crate::core::terminal_session::TerminalOutputDecoder;
 use crate::core::{
@@ -114,6 +114,8 @@ struct VirtualPane {
     session_id: String,
     output: Arc<SessionOutputCoalescer>,
     decoder: TerminalOutputDecoder,
+    /// Paste classification state survives input flushes for this pane.
+    input_parser: InputParser,
     /// Forwarder task draining this pane's command channel.
     forwarder: JoinHandle<()>,
     /// Output received before `capture-pane` seeding completed. The instant
@@ -550,6 +552,7 @@ impl<'a> ControlSession<'a> {
                 session_id: session_id.clone(),
                 output,
                 decoder: TerminalOutputDecoder::new(&self.encoding),
+                input_parser: InputParser::default(),
                 forwarder,
                 pending_output,
                 pending_bytes,
@@ -1412,7 +1415,11 @@ impl<'a> ControlSession<'a> {
                 self.cwd_pending.insert(pane_id.clone());
                 self.arm_cwd_query();
             }
-            for segment in split_input(&data) {
+            let Some(pane) = self.panes.get_mut(&pane_id) else {
+                continue;
+            };
+            let segments = pane.input_parser.split_input(&data);
+            for segment in segments {
                 match segment {
                     InputSegment::Literal(bytes) => {
                         for chunk in bytes.chunks(SEND_KEYS_CHUNK_BYTES) {
@@ -2080,6 +2087,7 @@ mod output_tests {
             session_id: "test-pane".to_string(),
             output,
             decoder: TerminalOutputDecoder::new("utf-8"),
+            input_parser: InputParser::default(),
             forwarder: tokio::spawn(async {}),
             pending_output: VecDeque::new(),
             pending_bytes: 0,
