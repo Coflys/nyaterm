@@ -469,7 +469,8 @@ def create_macos_packages(
     shutil.copy2(binary, app_binary)
     make_executable(app_binary)
     helper_binaries = copy_helpers(macos_dir, info.target)
-    shutil.copy2(ICON_DIR / "icon.icns", resources_dir / "icon.icns")
+    # The macOS artwork includes the transparent margins used in Dock and Launchpad.
+    shutil.copy2(RESOURCE_DIR / "icons-macos" / "icon.icns", resources_dir / "icon.icns")
     copy_release_documents(resources_dir, version)
 
     plist = {
