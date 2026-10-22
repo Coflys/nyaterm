@@ -176,6 +176,19 @@ impl NyaTermApp {
             }
         }
         if self.terminal_should_defer_key_text_to_input_handler(event) {
+            // Text goes through the IME adapter, but its physical release must
+            // still belong to the same connection as this press.
+            if let Some(id) = self.session.active_id_owned() {
+                let mut targets = self.sync_peer_session_ids(&id);
+                targets.push(id);
+                for id in targets {
+                    if let Some(view) = self.terminal.view.views.get_mut(&id)
+                        && !event.is_held
+                    {
+                        view.pressed_keys.insert(event.keystroke.key.clone());
+                    }
+                }
+            }
             return;
         }
         cx.stop_propagation();

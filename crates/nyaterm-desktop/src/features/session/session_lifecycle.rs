@@ -289,6 +289,7 @@ impl NyaTermApp {
         self.commands.cancel_staged_quick_command(session_id);
         self.terminal.invalidate_shell_editing_session(session_id);
         self.clear_terminal_mouse_report_for_session(session_id);
+        self.terminal.clear_session_pressed_keys(session_id);
         self.transfer.clear_file_clipboard_for_session(session_id);
         let rollback = self.transfer.invalidate_browser_navigation(session_id);
         if self.session.active_id() == Some(session_id) {
@@ -394,6 +395,7 @@ impl NyaTermApp {
         }
         self.disconnect_recording_for_session(&old_id);
         self.clear_terminal_mouse_report_for_session(&old_id);
+        self.terminal.clear_session_pressed_keys(&old_id);
         self.transfer.clear_file_clipboard_for_session(&old_id);
         let Some(metadata) = self.session.metadata(&old_id).cloned() else {
             self.session.finish_busy_action(&old_id);

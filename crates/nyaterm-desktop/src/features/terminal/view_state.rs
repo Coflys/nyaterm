@@ -338,6 +338,12 @@ impl TerminalFeatureState {
         }
     }
 
+    pub(in crate::features) fn clear_session_pressed_keys(&mut self, session_id: &str) {
+        if let Some(view) = self.view.views.get_mut(session_id) {
+            view.pressed_keys.clear();
+        }
+    }
+
     pub(in crate::features) fn rekey_session_view(
         &mut self,
         old_id: &str,

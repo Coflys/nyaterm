@@ -1370,6 +1370,100 @@ fn telnet_gpui_enter_submits_locally_edited_text_in_the_session_charset() {
 }
 
 #[test]
+fn reconnect_drops_old_enter_release_and_repeat_even_after_new_kitty_negotiation() {
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    use gpui::KeyUpEvent;
+    use nyaterm_transport::TelnetSessionConfig;
+
+    use crate::features::terminal::terminal_runtime::view_io::TerminalMouseReportRequest;
+    use crate::models::{SessionLaunchConfig, TerminalProtocolState};
+
+    let root = TestConfigDir::new("nyaterm-reconnect-key-wire");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (manager, id) = cx.update_entity(&app, |app, _| {
+        let config = TelnetSessionConfig {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            raw_tcp: true,
+            ..TelnetSessionConfig::default()
+        };
+        let manager = app.session.manager_handle();
+        let info = manager.create_telnet_session(config.clone()).unwrap();
+        let mut metadata = app.session.metadata("fixture").unwrap().clone();
+        metadata.launch_config = SessionLaunchConfig::Telnet(config);
+        app.session.register_session_metadata(&info.id, metadata);
+        app.terminal
+            .seed_session_view("old".into(), "\x1b[>3u\x1b[?1003;1006hOLD".into(), "UTF-8");
+        app.terminal
+            .view
+            .views
+            .get_mut("old")
+            .unwrap()
+            .pressed_keys
+            .insert("enter".into());
+        app.terminal.rekey_session_view("old", &info.id, "UTF-8");
+        app.session.select_active_session(&info.id);
+        (manager, info.id)
+    });
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    cx.update_entity(&app, |app, cx| {
+        let press = key_event("enter", None, gpui::Modifiers::default());
+        let release = KeyUpEvent {
+            keystroke: press.keystroke.clone(),
+        };
+        assert_eq!(
+            app.terminal_key_bytes_for_event_for_session(Some(&id), &press),
+            Some(b"\r".to_vec())
+        );
+        assert!(!app.send_terminal_key_release_event(&release, cx));
+        for require_alt in [false, true] {
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_mouse_events_require_alt = require_alt;
+            app.settings.replace_summary(settings);
+            for modifiers in [gpui::Modifiers::default(), gpui::Modifiers::alt()] {
+                assert!(!app.maybe_send_mouse_report_for_session(
+                    TerminalMouseReportRequest {
+                        session_id: &id,
+                        button: 3,
+                        col: 1,
+                        row: 1,
+                        press: true,
+                        motion: true,
+                        modifiers,
+                    },
+                    cx,
+                ));
+            }
+        }
+
+        // A fresh TUI can enable Kitty before the reconnecting Enter is released.
+        let view = app.terminal.view.views.get_mut(&id).unwrap();
+        view.screen.advance(b"\x1b[>3u");
+        view.protocol_state = TerminalProtocolState::from_screen(&view.screen);
+        let mut repeat = press.clone();
+        repeat.is_held = true;
+        assert!(!app.send_terminal_key_event(&repeat, false, cx));
+        assert!(!app.send_terminal_key_release_event(&release, cx));
+        assert!(app.send_terminal_key_event(&press, false, cx));
+        assert!(app.send_terminal_key_release_event(&release, cx));
+        // A duplicate or unrelated release must not be written either.
+        assert!(!app.send_terminal_key_release_event(&release, cx));
+        app.write_session_protocol_response(&id, b"END").unwrap();
+    });
+    let expected = b"\x1b[13;1:1u\x1b[13;1:3uEND";
+    let mut actual = vec![0; expected.len()];
+    peer.read_exact(&mut actual).unwrap();
+    assert_eq!(actual, expected);
+    manager.close(&id).unwrap();
+}
+
+#[test]
 fn encoding_failures_write_nothing_and_mouse_and_protocol_bytes_bypass_charset() {
     use crate::features::terminal::terminal_runtime::view_io::TerminalMouseReportRequest;
     use crate::models::SessionLaunchConfig;

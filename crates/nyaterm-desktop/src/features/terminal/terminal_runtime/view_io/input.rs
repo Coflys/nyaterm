@@ -265,6 +265,16 @@ impl NyaTermApp {
             return false;
         }
         let encode_started_at = Instant::now();
+        if event.is_held
+            && !self
+                .terminal
+                .view
+                .views
+                .get(&session_id)
+                .is_some_and(|view| view.pressed_keys.contains(&event.keystroke.key))
+        {
+            return false;
+        }
         let Some(primary_bytes) =
             self.terminal_key_bytes_for_event_for_session(Some(&session_id), event)
         else {
@@ -300,6 +310,16 @@ impl NyaTermApp {
         let mut synced = 0usize;
         let mut failed = 0usize;
         for peer_id in peers {
+            if event.is_held
+                && !self
+                    .terminal
+                    .view
+                    .views
+                    .get(&peer_id)
+                    .is_some_and(|view| view.pressed_keys.contains(&event.keystroke.key))
+            {
+                continue;
+            }
             let peer_encode_started_at = Instant::now();
             let Some(peer_bytes) =
                 self.terminal_key_bytes_for_event_for_session(Some(&peer_id), event)
@@ -323,6 +343,11 @@ impl NyaTermApp {
         }
         let write_duration = write_started_at.elapsed();
 
+        for id in &ok_sessions {
+            if let Some(view) = self.terminal.view.views.get_mut(id) {
+                view.pressed_keys.insert(event.keystroke.key.clone());
+            }
+        }
         let input_wake_started_at = Instant::now();
         if !ok_sessions.is_empty() {
             self.arm_terminal_input_wake(cx);
@@ -379,6 +404,29 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return false;
         };
+        let peers = self.sync_peer_session_ids(&session_id);
+        // Consume ownership even if the connection is no longer writable. A
+        // reconnect key press and keys held by the previous TUI have no owner
+        // in the new connection, even if it has already enabled Kitty again.
+        let primary_pressed = self
+            .terminal
+            .view
+            .views
+            .get_mut(&session_id)
+            .is_some_and(|view| view.pressed_keys.remove(&event.keystroke.key));
+        let peers: Vec<String> = peers
+            .into_iter()
+            .filter(|id| {
+                self.terminal
+                    .view
+                    .views
+                    .get_mut(id)
+                    .is_some_and(|view| view.pressed_keys.remove(&event.keystroke.key))
+            })
+            .collect();
+        if !primary_pressed {
+            return false;
+        }
         if self.session.is_disconnected(&session_id) {
             return false;
         }
@@ -392,7 +440,6 @@ impl NyaTermApp {
         }
 
         let byte_count = primary_bytes.len();
-        let peers = self.sync_peer_session_ids(&session_id);
         let mut synced = 0usize;
         let mut failed = 0usize;
         match self.write_session_input_recorded(&session_id, &primary_bytes) {

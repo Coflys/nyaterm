@@ -727,6 +727,8 @@ pub(crate) struct TerminalViewState {
     pub(crate) selected_occurrence_visible_result: Option<TerminalFrameSearchResult>,
     pub(crate) pending_selected_occurrence_visible_key: Option<TerminalFrameSearchKey>,
     pub(crate) protocol_state: TerminalProtocolState,
+    /// Physical keys routed to this connection; never carried across reconnect.
+    pub(crate) pressed_keys: HashSet<String>,
     pub(crate) output_decoder: TerminalOutputDecoder,
     pub(crate) recording_decoder: TerminalOutputDecoder,
     pub(crate) screen_revision: u64,
@@ -793,6 +795,7 @@ impl TerminalViewState {
             selected_occurrence_visible_result: None,
             pending_selected_occurrence_visible_key: None,
             protocol_state: TerminalProtocolState::default(),
+            pressed_keys: HashSet::new(),
             output_decoder: TerminalOutputDecoder::default(),
             recording_decoder: TerminalOutputDecoder::default(),
             screen_revision: 0,
@@ -846,6 +849,7 @@ impl TerminalViewState {
             selected_occurrence_visible_result: None,
             pending_selected_occurrence_visible_key: None,
             protocol_state,
+            pressed_keys: HashSet::new(),
             output_decoder: TerminalOutputDecoder::default(),
             recording_decoder: TerminalOutputDecoder::default(),
             screen_revision: 0,
@@ -966,6 +970,15 @@ impl TerminalViewState {
 
     pub(crate) fn reset_reconnect_stream(&mut self, encoding: &str) {
         self.screen.reset_stream_state();
+        self.screen.reset_session_input_protocols();
+        // The UI screen mirrors geometry; only the worker knows the active
+        // screen. Keep that presentation bit while resetting input protocols.
+        self.protocol_state = TerminalProtocolState {
+            alternate_screen: self.protocol_state.alternate_screen,
+            alternate_scroll: self.screen.alternate_scroll(),
+            ..TerminalProtocolState::default()
+        };
+        self.pressed_keys.clear();
         self.output_decoder.reset_decoder();
         self.recording_decoder.reset_decoder();
         self.set_encoding(encoding);
@@ -2609,6 +2622,7 @@ impl TerminalFrameSession {
 
     fn reset_reconnect_stream(&mut self, encoding: &str, scrollback_limit: usize) {
         self.screen.reset_stream_state();
+        self.screen.reset_session_input_protocols();
         self.output_decoder.reset_decoder();
         self.recording_decoder.reset_decoder();
         self.set_encoding_and_limit(encoding, scrollback_limit);
