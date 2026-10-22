@@ -27,6 +27,52 @@ mod tests {
     }
 
     #[test]
+    fn posix_builder_keeps_heredoc_terminator_on_its_own_line() {
+        let command = build_capture_command(
+            AiExecutionProfile::Posix,
+            "marker-1",
+            "cat <<'EOF'\nhello\nEOF",
+        )
+        .unwrap();
+
+        assert!(command.contains("{\ncat <<'EOF'\nhello\nEOF\n};"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_builder_preserves_output_and_exit_status() {
+        for (script, expected_output, exit_code) in [
+            ("printf hello", "hello", 0),
+            ("cat <<'EOF'\nhello\nEOF", "hello\n", 0),
+            ("cat <<'EOF'\nhello\nEOF\n", "hello\n", 0),
+            ("printf hello;", "hello", 0),
+            ("printf hello # comment", "hello", 0),
+            ("false", "", 1),
+        ] {
+            let command =
+                build_capture_command(AiExecutionProfile::Posix, "marker-1", script).unwrap();
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .output()
+                .expect("failed to start sh");
+
+            assert!(
+                output.status.success(),
+                "{script:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!(
+                    "\n__DF_CMD_START_marker-1__\n{expected_output}\n__DF_CMD_END_marker-1_{exit_code}__\n"
+                ),
+                "{script:?}"
+            );
+        }
+    }
+
+    #[test]
     fn powershell_builder_is_single_logical_input_line() {
         let command = build_capture_command(
             AiExecutionProfile::Powershell,
