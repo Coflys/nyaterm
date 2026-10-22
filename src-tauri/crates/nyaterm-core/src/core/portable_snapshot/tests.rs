@@ -956,6 +956,30 @@ mod tests {
     }
 
     #[test]
+    fn portable_snapshot_preserves_agent_custom_instructions() {
+        let mut snapshot = sample_snapshot();
+        snapshot.settings.ai.agent_custom_instructions =
+            "Prefer read-only diagnostics.\n先备份配置。".to_string();
+        for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+            snapshot.snapshot_kind = kind;
+            snapshot.payload_hash = calculate_payload_hash(&snapshot).unwrap();
+            let encoded = encode_portable_snapshot(&snapshot).unwrap();
+            let decoded = super::decode_portable_snapshot(&encoded).unwrap();
+            assert_eq!(
+                decoded.settings.ai.agent_custom_instructions,
+                snapshot.settings.ai.agent_custom_instructions
+            );
+            let applied = decoded
+                .settings
+                .apply_to(config::AppSettings::default(), &decoded.snapshot_kind);
+            assert_eq!(
+                applied.ai.agent_custom_instructions,
+                snapshot.settings.ai.agent_custom_instructions
+            );
+        }
+    }
+
+    #[test]
     fn portable_snapshot_preserves_ai_proxy_settings() {
         let mut snapshot = sample_snapshot();
         snapshot.settings.ai.proxy.mode = config::AiProxyMode::Custom;

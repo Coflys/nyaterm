@@ -52,6 +52,7 @@ fn build_initial_agent_conversation(
 ) -> Vec<ChatMessage> {
     let mut conversation = vec![ChatMessage::system(agent_system_prompt(
         &request.options.language,
+        &settings.agent_custom_instructions,
     ))];
 
     if let Some(session_id) = request.session_id.as_deref() {
@@ -1314,6 +1315,54 @@ mod tests {
                     .is_some_and(|text| text.contains("current task")))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn agent_conversation_applies_current_custom_instructions_once() {
+        let request = agent_request(Some("s1"), 20);
+        let history = vec![
+            history_message("s1", AiMessageRole::System, "old-custom-instructions"),
+            history_message("s1", AiMessageRole::User, "previous task"),
+            history_message("s1", AiMessageRole::Assistant, "previous answer"),
+        ];
+        let mut settings = AiSettings {
+            agent_custom_instructions: "current-custom-instructions".to_string(),
+            ..AiSettings::default()
+        };
+        let conversation = build_initial_agent_conversation(&request, &settings, &history);
+        assert_eq!(conversation.len(), 4);
+        assert_eq!(conversation[0].role, ChatRole::System);
+        assert!(
+            conversation[0]
+                .content
+                .first_text()
+                .unwrap()
+                .contains("current-custom-instructions")
+        );
+        assert_eq!(
+            conversation
+                .iter()
+                .filter(|message| message
+                    .content
+                    .first_text()
+                    .is_some_and(|text| text.contains("current-custom-instructions")))
+                .count(),
+            1
+        );
+        assert!(conversation.iter().all(|message| {
+            !message
+                .content
+                .first_text()
+                .unwrap_or_default()
+                .contains("old-custom-instructions")
+        }));
+
+        settings.agent_custom_instructions.clear();
+        let cleared = build_initial_agent_conversation(&request, &settings, &history);
+        assert_eq!(
+            cleared[0].content.first_text(),
+            Some(agent_system_prompt(&request.options.language, "").as_str())
         );
     }
 

@@ -1630,6 +1630,7 @@ export interface AISettings {
   terminal_ai_actions: AICustomActionConfig[];
   file_ai_actions: AICustomActionConfig[];
   max_ai_file_size_bytes: number;
+  agent_custom_instructions: string;
   max_agent_steps?: number | null;
   agent_step_timeout_ms?: number | null;
   terminal_output_lines: number;
