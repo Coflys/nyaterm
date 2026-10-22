@@ -398,7 +398,8 @@ fn staged_quick_command_history_only_commits_complete_lines_and_collapses_crlf()
         );
     });
     fixture.advance();
-    fixture.assert_wire(0, b"one\r\npartial\nnext\r");
+    // Raw TCP text input now honors the fixture's default CR Enter mode.
+    fixture.assert_wire(0, b"one\rpartial\rnext\r");
     fixture.cx.update_entity(&fixture.app, |app, _| {
         assert_eq!(
             app.session.command_history_for(&fixture.ids[0]).unwrap(),

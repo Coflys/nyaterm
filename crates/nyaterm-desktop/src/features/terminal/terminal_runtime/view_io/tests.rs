@@ -1295,6 +1295,81 @@ fn paste_targets_use_their_own_charset_and_bracketed_mode() {
 }
 
 #[test]
+fn telnet_gpui_enter_submits_locally_edited_text_in_the_session_charset() {
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    use nyaterm_core::character_encoding::CharacterEncoding;
+    use nyaterm_transport::{TelnetEnterMode, TelnetSessionConfig};
+
+    use crate::models::SessionLaunchConfig;
+
+    let root = TestConfigDir::new("nyaterm-telnet-local-input");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    let enter = terminal_key_bytes_for_mode_and_settings(
+        &key_event("enter", None, gpui::Modifiers::default()),
+        TerminalKeyMode::default(),
+        false,
+    )
+    .unwrap();
+    let backspace = terminal_key_bytes_for_mode_and_settings(
+        &key_event("backspace", None, gpui::Modifiers::default()),
+        TerminalKeyMode::default(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(enter, b"\r");
+
+    for raw_tcp in [false, true] {
+        for encoding in [CharacterEncoding::Utf8, CharacterEncoding::Gbk] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let config = TelnetSessionConfig {
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().unwrap().port(),
+                raw_tcp,
+                local_line_edit: true,
+                local_echo: true,
+                enter_mode: TelnetEnterMode::Crlf,
+                encoding: encoding.label().into(),
+                send_naws: false,
+                keep_alive_interval_secs: 0,
+                auto_login: nyaterm_transport::TelnetAutoLoginConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let (manager, id) = cx.update_entity(&app, |app, _| {
+                let manager = app.session.manager_handle();
+                let info = manager.create_telnet_session(config.clone()).unwrap();
+                let mut metadata = app.session.metadata("fixture").unwrap().clone();
+                metadata.launch_config = SessionLaunchConfig::Telnet(config);
+                app.session.register_session_metadata(&info.id, metadata);
+                app.terminal
+                    .seed_session_view(info.id.clone(), String::new(), encoding.label());
+                (manager, info.id)
+            });
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            cx.update_entity(&app, |app, _| {
+                app.write_session_input_recorded(&id, "中中".as_bytes())
+                    .unwrap();
+                app.write_session_input_recorded(&id, &backspace).unwrap();
+                app.write_session_input_recorded(&id, &enter).unwrap();
+            });
+            let mut expected = encoding.encode("中").unwrap();
+            expected.extend_from_slice(b"\r\n");
+            let mut actual = vec![0; expected.len()];
+            peer.read_exact(&mut actual).unwrap();
+            assert_eq!(actual, expected);
+            manager.close(&id).unwrap();
+        }
+    }
+}
+
+#[test]
 fn encoding_failures_write_nothing_and_mouse_and_protocol_bytes_bypass_charset() {
     use crate::features::terminal::terminal_runtime::view_io::TerminalMouseReportRequest;
     use crate::models::SessionLaunchConfig;

@@ -216,8 +216,10 @@ fn automatic_execution_records_logical_commands_and_streamed_output_without_chan
                 .clone();
             (receiver, marker, cancellation)
         });
-        let wire = build_agent_capture_command(profile, &marker, "echo fixture")
+        let input = build_agent_capture_command(profile, &marker, "echo fixture")
             .unwrap_or_else(|| "echo fixture\r".into());
+        // The fixture uses CR Enter mode, including for Raw TCP text writes.
+        let wire = format!("{}\r", input.trim_end_matches(['\r', '\n']));
         let mut sent = vec![0; wire.len()];
         stream.read_exact(&mut sent).unwrap();
         assert_eq!(sent, wire.as_bytes());
@@ -225,10 +227,10 @@ fn automatic_execution_records_logical_commands_and_streamed_output_without_chan
             "echo fixture\r\nfixture\r\nRouter#".to_string()
         } else if ending == "complete" {
             format!(
-                "{wire}\r\n__DF_CMD_START_{marker}__\r\necho fixture\r\n\r\n__DF_CMD_END_{marker}_0__\r\nprompt>"
+                "{input}\r\n__DF_CMD_START_{marker}__\r\necho fixture\r\n\r\n__DF_CMD_END_{marker}_0__\r\nprompt>"
             )
         } else {
-            format!("{wire}\r\n__DF_CMD_START_{marker}__\r\npartial\r\n")
+            format!("{input}\r\n__DF_CMD_START_{marker}__\r\npartial\r\n")
         };
         let completion = cx.update_entity(&app, |app, cx| {
             app.session.extend_pending_events([
@@ -287,9 +289,11 @@ fn automatic_execution_records_logical_commands_and_streamed_output_without_chan
         }
         if mode == RecordingMode::Raw {
             assert_eq!(std::fs::read(&path).unwrap(), output.as_bytes());
+            // Raw input recording retains the encoded logical input, before
+            // transport newline conversion, just as it does for Telnet.
             assert_eq!(
                 std::fs::read(completion.input_file_path.unwrap()).unwrap(),
-                sent
+                input.as_bytes()
             );
         } else {
             let text = std::fs::read_to_string(&path).unwrap();

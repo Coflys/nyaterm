@@ -49,6 +49,7 @@ mod ssh_algorithms;
 mod ssh_auth;
 mod ssh_mailbox;
 mod telnet_codec;
+mod telnet_input;
 mod writer_mailbox;
 use nyaterm_core::runtime::reaper::Reaper;
 use writer_mailbox::WriterMailbox;
@@ -59,10 +60,8 @@ use ssh_algorithms::resolve_preferred_algorithms;
 use ssh_auth::{authenticate_ssh, is_agent_retry};
 #[cfg(test)]
 use telnet_codec::{DO, IAC, OPT_SUPPRESS_GO_AHEAD, WILL};
-use telnet_codec::{
-    edit_telnet_line_input, maybe_build_naws, negotiate_response, normalize_telnet_input,
-    strip_telnet_commands, telnet_auto_login_line_bytes, unescape_iac_iac,
-};
+use telnet_codec::{maybe_build_naws, negotiate_response, strip_telnet_commands, unescape_iac_iac};
+use telnet_input::{TelnetInputState, telnet_auto_login_line_bytes};
 use telnet_prompts::{
     compile_optional_regex, default_failure_regex, default_password_regex, default_success_regex,
     default_username_regex, default_wake_regex, last_chars, last_login_regex, last_non_empty_line,
@@ -627,7 +626,7 @@ pub struct TelnetTransport {
     reader_stream: TcpStream,
     config: TelnetSessionConfig,
     backspace_as_bs: bool,
-    local_line_buffer: Vec<u8>,
+    input: TelnetInputState,
     auto_login: Option<Arc<Mutex<TelnetAutoLoginState>>>,
     event_queue: SessionEventQueue,
     reader_thread: Option<JoinHandle<()>>,
@@ -1317,7 +1316,7 @@ impl SessionManager {
                 &config.backspace_mode,
             )
                 == nyaterm_core::terminal::connection_input::BackspaceMode::Backspace,
-            local_line_buffer: Vec::new(),
+            input: TelnetInputState::default(),
             auto_login,
             event_queue: self.event_queue.clone(),
             config,
@@ -1910,20 +1909,12 @@ impl TerminalTransport for TelnetTransport {
         } else {
             data.to_vec()
         };
-        let mut next_line_buffer = self.local_line_buffer.clone();
-        let (data, visible_echo) = if self.config.local_line_edit {
-            edit_telnet_line_input(&data, &mut next_line_buffer, &self.config)
-        } else {
-            let visible_echo = if self.config.local_echo {
-                data.clone()
-            } else {
-                Vec::new()
-            };
-            (data, visible_echo)
-        };
-        let data = normalize_telnet_input(&data, &self.config);
+        // Commit editing and escape-filter state only after the complete wire
+        // payload is accepted, so backpressure leaves the input retryable.
+        let mut next_input = self.input.clone();
+        let (data, visible_echo) = next_input.prepare(&data, &self.config);
         self.writer.write(data)?;
-        self.local_line_buffer = next_line_buffer;
+        self.input = next_input;
         if user_input
             && let Some(auto_login) = self.auto_login.as_ref()
             && let Ok(mut auto_login) = auto_login.lock()
