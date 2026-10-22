@@ -1065,6 +1065,7 @@ pub(super) fn keyword_highlight_spans_compiled(
             strikeout: false,
             bold: false,
             italic: false,
+            hidden: false,
         }];
     }
 
@@ -1079,6 +1080,7 @@ pub(super) fn keyword_highlight_spans_compiled(
             strikeout: false,
             bold: false,
             italic: false,
+            hidden: false,
         }];
     }
 
@@ -1095,6 +1097,7 @@ pub(super) fn keyword_highlight_spans_compiled(
                 strikeout: false,
                 bold: false,
                 italic: false,
+                hidden: false,
             });
         }
         spans.push(TerminalHighlightSpan {
@@ -1106,6 +1109,7 @@ pub(super) fn keyword_highlight_spans_compiled(
             strikeout: false,
             bold: false,
             italic: false,
+            hidden: false,
         });
         cursor = end;
     }
@@ -1120,6 +1124,7 @@ pub(super) fn keyword_highlight_spans_compiled(
             strikeout: false,
             bold: false,
             italic: false,
+            hidden: false,
         });
     }
     spans

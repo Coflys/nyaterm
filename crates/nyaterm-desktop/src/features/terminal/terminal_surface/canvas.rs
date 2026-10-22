@@ -599,6 +599,7 @@ impl NyaTermApp {
             );
             grid = grid
                 .with_bold_default_foreground(self.settings.summary().bold_default_foreground)
+                .with_minimum_contrast_ratio(self.settings.terminal_minimum_contrast_ratio())
                 .with_selection(terminal_selection.map(TerminalGridSelection::from_selection))
                 .with_font_fallbacks(terminal_font_fallbacks.clone());
             if let Some(cache) = layout_cache {
@@ -626,6 +627,7 @@ impl NyaTermApp {
             );
             grid = grid
                 .with_bold_default_foreground(self.settings.summary().bold_default_foreground)
+                .with_minimum_contrast_ratio(self.settings.terminal_minimum_contrast_ratio())
                 .with_selection(terminal_selection.map(TerminalGridSelection::from_selection))
                 .with_font_fallbacks(terminal_font_fallbacks.clone());
             if let Some(cache) = layout_cache {
