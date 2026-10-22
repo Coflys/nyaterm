@@ -291,7 +291,7 @@ impl NyaTermApp {
                             return;
                         };
                         cx.open_with_system(path);
-                        this.shell.set_status("recording opened".to_string());
+                        this.shell.set_status(t!("recording.opened").to_string());
                     })),
                 NyaMenuItem::action(t!("recording.showInFolder"))
                     .icon("icons/session/folder-open.svg")
@@ -301,7 +301,7 @@ impl NyaTermApp {
                         };
                         cx.reveal_path(path);
                         this.shell
-                            .set_status("recording folder revealed".to_string());
+                            .set_status(t!("recording.folderRevealed").to_string());
                     })),
             ]
         } else {

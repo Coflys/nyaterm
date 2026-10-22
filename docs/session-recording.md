@@ -6,6 +6,21 @@ Existing path templates, extensions and settings keys retain their meanings.
 `recording.include_input` is an additive setting and defaults to `false` when
 loading older documents or backups. Unknown settings fields remain intact.
 
+## Desktop controls
+
+The recording panel and recording shortcut start directly with the effective
+recording profile: configured directory, template, default mode and connection
+overrides. An empty directory uses Downloads with the existing fallback. The
+Transcript/Raw menu actions override only the requested mode. Saving session text
+exports to the configured directory with a unique `session-...log` name.
+These actions do not open a path picker or insert application notices into the
+terminal; completion and errors are reported in the status bar.
+
+Recording rows reserve separate lines for the session, mode/size, path and error.
+Text stays on one line with ellipsis and a full-value tooltip. A fixed action area
+contains start/stop and a menu for mode selection, opening/revealing the current
+file and text export. Row height stays fixed across recording/error transitions.
+
 ## Capture
 
 By default only session output is recorded. Transcript removes terminal control
