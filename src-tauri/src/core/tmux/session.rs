@@ -8,13 +8,16 @@
 //!
 //! - Pane output (`%output` / `%extended-output`) is octal-decoded and pushed
 //!   to the pane's own `SessionOutputCoalescer` (i.e. `terminal-output-<id>`).
-//! - Pane input is sent back as `send-keys -t %<id> -H <hex>`.
+//! - Pane input is sent back through `send-keys -t %<id>`: literal bytes go
+//!   as `-H <hex>`, while recognized special-key sequences are named
+//!   (`send-keys -t %<id> End`) so tmux encodes them for the pane's own TERM.
 //! - Layout notifications rebuild the pane tree which is emitted to the
 //!   frontend via the `tmux-session-state` event.
 //! - `%exit` (after `detach` or a remote kill) hands the channel back to the
 //!   regular SSH loop, which continues as a normal shell.
 
 use super::control::{BlockId, ControlMessage, ControlParser, LayoutCell, TmuxUiNode, parse_line};
+use super::input::{InputParser, InputSegment};
 use crate::core::capture::OutputCaptureProcessor;
 use crate::core::terminal_session::TerminalOutputDecoder;
 use crate::core::{
@@ -111,6 +114,8 @@ struct VirtualPane {
     session_id: String,
     output: Arc<SessionOutputCoalescer>,
     decoder: TerminalOutputDecoder,
+    /// Paste classification state survives input flushes for this pane.
+    input_parser: InputParser,
     /// Forwarder task draining this pane's command channel.
     forwarder: JoinHandle<()>,
     /// Output received before `capture-pane` seeding completed. The instant
@@ -547,6 +552,7 @@ impl<'a> ControlSession<'a> {
                 session_id: session_id.clone(),
                 output,
                 decoder: TerminalOutputDecoder::new(&self.encoding),
+                input_parser: InputParser::default(),
                 forwarder,
                 pending_output,
                 pending_bytes,
@@ -1409,13 +1415,29 @@ impl<'a> ControlSession<'a> {
                 self.cwd_pending.insert(pane_id.clone());
                 self.arm_cwd_query();
             }
-            for chunk in data.chunks(SEND_KEYS_CHUNK_BYTES) {
-                let mut line = String::from("send-keys -H -t ");
-                line.push_str(&pane_id);
-                for byte in chunk {
-                    let _ = write!(line, " {byte:02x}");
+            let Some(pane) = self.panes.get_mut(&pane_id) else {
+                continue;
+            };
+            let segments = pane.input_parser.split_input(&data);
+            for segment in segments {
+                match segment {
+                    InputSegment::Literal(bytes) => {
+                        for chunk in bytes.chunks(SEND_KEYS_CHUNK_BYTES) {
+                            let mut line = String::from("send-keys -H -t ");
+                            line.push_str(&pane_id);
+                            for byte in chunk {
+                                let _ = write!(line, " {byte:02x}");
+                            }
+                            self.send_line(channel, PendingKind::Ignore, &line).await;
+                        }
+                    }
+                    // A named key is re-encoded by tmux for the pane's TERM,
+                    // matching the translation a normal tmux client applies.
+                    InputSegment::Key(name) => {
+                        let line = format!("send-keys -t {pane_id} {name}");
+                        self.send_line(channel, PendingKind::Ignore, &line).await;
+                    }
                 }
-                self.send_line(channel, PendingKind::Ignore, &line).await;
             }
         }
         self.input_flush = None;
@@ -2065,6 +2087,7 @@ mod output_tests {
             session_id: "test-pane".to_string(),
             output,
             decoder: TerminalOutputDecoder::new("utf-8"),
+            input_parser: InputParser::default(),
             forwarder: tokio::spawn(async {}),
             pending_output: VecDeque::new(),
             pending_bytes: 0,

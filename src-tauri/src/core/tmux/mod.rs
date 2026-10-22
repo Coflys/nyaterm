@@ -8,6 +8,7 @@
 pub(crate) mod control;
 pub(crate) mod detect;
 mod handshake;
+mod input;
 pub(crate) mod session;
 
 pub(crate) use detect::{TmuxControlDetector, TmuxFeed, is_tmux_control_command};
