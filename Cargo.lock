@@ -323,14 +323,27 @@ dependencies = [
 
 [[package]]
 name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2 0.10.6",
+ "cpufeatures 0.2.17",
+ "password-hash 0.5.0",
+ "zeroize",
+]
+
+[[package]]
+name = "argon2"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
 dependencies = [
  "base64ct",
- "blake2",
+ "blake2 0.11.0",
  "cpufeatures 0.3.1",
- "password-hash",
+ "password-hash 0.6.1",
 ]
 
 [[package]]
@@ -894,6 +907,15 @@ dependencies = [
  "radium",
  "tap",
  "wyz",
+]
+
+[[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -2300,7 +2322,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -6350,6 +6372,7 @@ name = "nyaterm-core"
 version = "2.0.0-preview.8"
 dependencies = [
  "aes-gcm",
+ "argon2 0.5.3",
  "base64 0.22.1",
  "crypto_secretbox",
  "csscolorparser",
@@ -6504,6 +6527,7 @@ dependencies = [
  "ironrdp-core",
  "ironrdp-input",
  "ironrdp-pdu",
+ "ironrdp-svc",
  "ironrdp-tls",
  "nyaterm-core",
  "nyaterm-remote-desktop",
@@ -6548,6 +6572,7 @@ dependencies = [
  "ssh-key",
  "thiserror 2.0.20",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -7213,6 +7238,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]
@@ -9625,7 +9661,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.2.8",
+ "errno 0.3.14",
  "libc",
 ]
 
@@ -9873,7 +9909,7 @@ version = "0.7.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9a32fae177b74a22aa9c5b01bf7e68b33545be32d9e381e248058d2adc15ce3"
 dependencies = [
- "argon2",
+ "argon2 0.6.0",
  "bcrypt-pbkdf",
  "ctutils",
  "dsa",
