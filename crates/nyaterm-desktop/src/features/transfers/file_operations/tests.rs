@@ -196,13 +196,17 @@ fn verified_move_keeps_source_if_it_changes_during_copy() {
     };
     let root = fixture("nyaterm-file-manager-source-change");
     fs::write(root.join("source/item"), vec![7; 512 * 1024]).unwrap();
+    // macOS temp paths can pass through /var -> /private/var. Resolve that
+    // alias so the move's symlink-ancestor guard lets this test reach the copy.
+    let source_directory = fs::canonicalize(root.join("source")).unwrap();
+    let target_directory = fs::canonicalize(root.join("target")).unwrap();
     let service = FileBrowserService::local();
     let entry = service
-        .list_dir(root.join("source").to_string_lossy())
+        .list_dir(source_directory.to_string_lossy())
         .unwrap()
         .pop()
         .unwrap();
-    let source = root.join("source/item");
+    let source = source_directory.join("item");
     let changed = Arc::new(AtomicBool::new(false));
     let record = changed.clone();
     // Distinct logical sources exercise copy/verify/delete rather than rename.
@@ -211,7 +215,7 @@ fn verified_move_keeps_source_if_it_changes_during_copy() {
             source: FileOperationEndpoint::Session("source".into()),
             entries: vec![entry],
             target: FileOperationEndpoint::Session("target".into()),
-            target_directory: RemoteFilePath::new(root.join("target").to_string_lossy()),
+            target_directory: RemoteFilePath::new(target_directory.to_string_lossy()),
             operation: FileTransferOperation::Move,
         }),
         service.clone(),
@@ -230,7 +234,11 @@ fn verified_move_keeps_source_if_it_changes_during_copy() {
             }
         },
     );
-    assert!(changed.load(Ordering::SeqCst));
+    assert!(
+        changed.load(Ordering::SeqCst),
+        "copy did not reach the source mutation: {:?}",
+        result.as_ref().err()
+    );
     assert!(result.unwrap_err().contains("source changed"));
     assert!(root.join("source/item").exists());
 }

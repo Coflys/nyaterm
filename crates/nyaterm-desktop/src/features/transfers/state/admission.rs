@@ -6,6 +6,7 @@ use futures::channel::mpsc::UnboundedSender;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState, TransferJobStatus,
 };
+use crate::thread_owner::spawn_joinable;
 
 #[cfg(test)]
 mod tests;
@@ -196,18 +197,16 @@ impl TransferAdmission {
                 let failure_id = id.clone();
                 // A paused transfer must not occupy a shared blocking-pool slot:
                 // its operation retains its runtime and can be readmitted later.
-                match std::thread::Builder::new()
-                    .name(task.name.into())
-                    .spawn(move || {
-                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
-                            let _ = tx.unbounded_send(TransferJobResult {
-                                id: failure_id,
-                                event: TransferJobEvent::Finished(Err(
-                                    "transfer worker panicked".into()
-                                )),
-                            });
-                        }
-                    }) {
+                match spawn_joinable(task.name, move || {
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
+                        let _ = tx.unbounded_send(TransferJobResult {
+                            id: failure_id,
+                            event: TransferJobEvent::Finished(Err(
+                                "transfer worker panicked".into()
+                            )),
+                        });
+                    }
+                }) {
                     Ok(thread) => task.thread = Some(thread),
                     Err(_) => {
                         let _ = task.tx.unbounded_send(TransferJobResult {
