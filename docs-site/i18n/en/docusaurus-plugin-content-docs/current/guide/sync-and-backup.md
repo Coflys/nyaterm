@@ -2,13 +2,16 @@
 
 NyaTerm's **Cloud Sync** capability is not remote file transfer. It syncs portable application configuration through one encrypted current snapshot in remote storage.
 
-The remote side is intentionally current-state oriented:
+Remote storage uses immutable snapshots and independent device commits:
 
-- `sync/current.redb.enc` stores the encrypted current core snapshot
-- `sync/latest.redb` stores revision, device, timestamp, and hash metadata
-- legacy `sync/snapshots/` objects are only used for compatibility reads and cleanup
+- `sync/snapshots/<revision>.redb.enc` stores encrypted snapshots used by the current protocol
+- `sync/heads/` stores device commits and temporary upload markers, preserving concurrent branches
+- `sync/latest.redb` is a compatibility pointer with revision, device, timestamp, and hash metadata
+- `sync/current.redb.enc` is a best-effort compatibility/recovery copy, not the sole authority
 
-Local `.nya` export / import remains the backup and migration path. Cloud Sync no longer creates remote multi-version backups, and it does not automatically delete any old `backups/` objects that may already exist in user storage.
+Simultaneous device uploads preserve both commits. A subsequent check detects concurrent branches and asks you to choose local or cloud explicitly. Providers with delayed visibility may reveal the conflict on a later check. Causal records, rather than device wall clocks, determine which changes supersede others.
+
+Local `.nya` export / import remains the backup and migration path. Maintenance retains referenced device snapshots, unresolved branches, and staged uploads while collecting eligible older snapshots. It does not delete existing `backups/` objects. Retained sync snapshots do not replace independent backups.
 
 NyaTerm currently supports these remote storage provider types:
 
@@ -29,7 +32,11 @@ Without a master password:
 - Cloud Sync cannot be enabled
 - Manual actions such as test, push, and pull cannot be run
 
-That requirement exists because NyaTerm uploads encrypted portable snapshots, not plain-text config files.
+New encrypted snapshots use Argon2id with a random salt and AES-256-GCM. The version header, KDF parameters, salt, and nonce are authenticated along with the payload.
+
+Existing NyaTerm and Dragonfly ciphertext remains readable. The next actual upload or explicit overwrite writes the new envelope; an unchanged-content check does not rewrite old ciphertext. Upgrade every participating device before publishing new-format snapshots: older clients cannot decrypt them or participate in the new concurrency protocol. Keep a local `.nya` backup before upgrading.
+
+An old sync baseline cannot prove that all entities are unchanged. The first check after upgrade can therefore require explicit conflict resolution, protecting VNC trust records and extension data omitted by the historical change hash.
 
 ## Where to access it
 
@@ -99,6 +106,8 @@ When the provider is **S3-compatible**, you will typically configure:
 ### Gitee Snippet
 
 When the provider is **Gitee Snippet**, NyaTerm stores encrypted cloud sync objects in a Gitee code snippet.
+
+Gitee's file-count limit includes snapshots, device commits, and pending markers. Many devices or unresolved branches may require a new snippet or another provider; synchronization never deletes unresolved branches to make room.
 
 You will typically configure:
 
@@ -244,7 +253,7 @@ The important boundary is:
 - this is not collaborative conflict resolution
 - it is effectively a choice between the local snapshot and the remote snapshot
 
-NyaTerm keeps metadata for the current remote snapshot to help you decide whether to download the remote version or upload the local version. Legacy `sync/snapshots/` objects are only used for compatibility reads and cleanup, not as the normal multi-version backup entry point.
+Device commits and causal records preserve concurrent branches. Explicitly choosing local or cloud publishes a new commit resolving the observed branches; cloud uses the remote branch read when the operation starts. Later concurrent edits can produce another conflict. Do not manually clear `sync/snapshots/`: it is the current data path.
 
 ## What gets synced?
 

@@ -189,6 +189,9 @@ fn permanent_auto_sync_error(error: &nyaterm_core::CloudSyncError) -> bool {
         nyaterm_core::CloudSyncError::Disabled
         | nyaterm_core::CloudSyncError::PortableSnapshot(
             nyaterm_core::PortableSnapshotError::MissingMasterPassword
+            | nyaterm_core::PortableSnapshotError::UnsupportedEncryptionVersion(_)
+            | nyaterm_core::PortableSnapshotError::InvalidEncryptionEnvelope
+            | nyaterm_core::PortableSnapshotError::UnsupportedVersion(_)
             | nyaterm_core::PortableSnapshotError::Decrypt { .. },
         ) => true,
         nyaterm_core::CloudSyncError::Remote(message) => {
