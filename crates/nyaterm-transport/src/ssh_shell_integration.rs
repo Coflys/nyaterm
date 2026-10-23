@@ -94,7 +94,7 @@ impl ShellIntegrationMode {
 }
 
 impl ShellKind {
-    fn from_name(name: &str) -> Self {
+    pub(super) fn from_name(name: &str) -> Self {
         let value = name.to_ascii_lowercase();
         if value.contains("fish") {
             Self::Fish
@@ -133,11 +133,94 @@ enum SshShellIntegrationPhase {
     Suppressing,
 }
 
+const ESC: u8 = 0x1b;
+
+/// An unterminated control sequence longer than this is dropped instead of
+/// buffered forever.
+const PASSTHROUGH_PENDING_LIMIT: usize = 4096;
+
+/// Copies terminal queries out of suppressed output so the emulator can answer
+/// them (`wsl.exe` waits for a `CSI 6 n` reply before it starts the shell).
+/// Only query sequences are forwarded; cursor movement and styling from the
+/// suppressed stream would otherwise paint over an empty screen.
+#[derive(Default)]
+struct ControlPassthrough {
+    pending: Vec<u8>,
+}
+
+impl ControlPassthrough {
+    fn reset(&mut self) {
+        self.pending.clear();
+    }
+
+    fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut data = std::mem::take(&mut self.pending);
+        data.extend_from_slice(bytes);
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < data.len() {
+            if data[index] != ESC {
+                index += 1;
+                continue;
+            }
+            match sequence_len(&data[index..]) {
+                Some(length) => {
+                    let sequence = &data[index..index + length];
+                    if is_terminal_query(sequence) {
+                        out.extend_from_slice(sequence);
+                    }
+                    index += length;
+                }
+                None => {
+                    let tail = &data[index..];
+                    if tail.len() <= PASSTHROUGH_PENDING_LIMIT {
+                        self.pending = tail.to_vec();
+                    }
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Device status (`CSI n`) and device attributes (`CSI c`) are the queries a
+/// terminal must answer; anything else in the suppressed stream is visual.
+fn is_terminal_query(sequence: &[u8]) -> bool {
+    sequence.len() >= 3
+        && sequence[1] == b'['
+        && matches!(sequence[sequence.len() - 1], b'n' | b'c')
+}
+
+fn sequence_len(bytes: &[u8]) -> Option<usize> {
+    match *bytes.get(1)? {
+        b'[' => bytes
+            .iter()
+            .enumerate()
+            .skip(2)
+            .find_map(|(offset, byte)| (0x40..=0x7e).contains(byte).then_some(offset + 1)),
+        b']' | b'P' | b'^' | b'_' => {
+            let mut offset = 2;
+            while offset < bytes.len() {
+                match bytes[offset] {
+                    0x07 => return Some(offset + 1),
+                    ESC if bytes.get(offset + 1) == Some(&b'\\') => return Some(offset + 2),
+                    _ => offset += 1,
+                }
+            }
+            None
+        }
+        _ => Some(2),
+    }
+}
+
 pub(super) struct SshShellIntegrationState {
     phase: SshShellIntegrationPhase,
     pending_integration: Option<PreparedSshShellIntegration>,
     stripper: OscStripper,
     suppress_started_at: Option<Instant>,
+    timeout: Duration,
+    passthrough: Option<ControlPassthrough>,
     suppressed_visible_bytes: usize,
     suppressed_rx_bytes: usize,
     suppressed_rx_chunks: usize,
@@ -160,11 +243,31 @@ impl SshShellIntegrationState {
             pending_integration,
             stripper: OscStripper::new(&ready_marker, legacy_ready_marker.as_deref()),
             suppress_started_at: None,
+            timeout: SSH_INTEGRATION_TIMEOUT,
+            passthrough: None,
             suppressed_visible_bytes: 0,
             suppressed_rx_bytes: 0,
             suppressed_rx_chunks: 0,
             last_diagnostic_at: None,
         }
+    }
+
+    /// Local PTYs can take far longer to reach a prompt than an SSH session
+    /// (WSL cold boot), so callers may widen the suppression window.
+    pub(super) fn set_integration_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
+    #[cfg(test)]
+    pub(super) fn integration_timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// While suppressing, forward terminal control sequences instead of dropping
+    /// them. Queries such as `wsl.exe`'s `CSI 6 n` need an emulator reply or the
+    /// shell never starts, and they paint no text.
+    pub(super) fn enable_control_passthrough(&mut self) {
+        self.passthrough = Some(ControlPassthrough::default());
     }
 
     pub(super) fn is_normal(&self) -> bool {
@@ -222,7 +325,7 @@ impl SshShellIntegrationState {
             suppressed_rx_chunks = self.suppressed_rx_chunks,
             suppressed_visible_bytes = self.suppressed_visible_bytes,
             buffered_osc_bytes = flushed.len(),
-            "SSH shell integration timed out; releasing queued terminal input"
+            "shell integration timed out; releasing queued terminal input"
         );
         self.force_normal();
         SshIntegrationOutput::default()
@@ -232,13 +335,16 @@ impl SshShellIntegrationState {
         self.phase == SshShellIntegrationPhase::Suppressing
             && self
                 .suppress_started_at
-                .is_some_and(|started_at| started_at.elapsed() >= SSH_INTEGRATION_TIMEOUT)
+                .is_some_and(|started_at| started_at.elapsed() >= self.timeout)
     }
 
     fn force_normal(&mut self) {
         self.phase = SshShellIntegrationPhase::Normal;
         self.suppress_started_at = None;
         self.pending_integration = None;
+        if let Some(passthrough) = self.passthrough.as_mut() {
+            passthrough.reset();
+        }
         self.suppressed_visible_bytes = 0;
         self.suppressed_rx_bytes = 0;
         self.suppressed_rx_chunks = 0;
@@ -271,6 +377,10 @@ impl SshShellIntegrationState {
                         .suppressed_visible_bytes
                         .saturating_add(result.visible.len())
                         .min(SUPPRESSED_OUTPUT_LIMIT);
+                    let visible = match self.passthrough.as_mut() {
+                        Some(passthrough) => passthrough.feed(bytes),
+                        None => Vec::new(),
+                    };
                     let now = Instant::now();
                     if self.suppress_started_at.is_some_and(|started| {
                         now.saturating_duration_since(started) >= SUPPRESSION_DIAGNOSTIC_INITIAL
@@ -286,7 +396,7 @@ impl SshShellIntegrationState {
                         );
                     }
                     SshIntegrationOutput {
-                        visible: Vec::new(),
+                        visible,
                         cwd_paths,
                         accepted_commands,
                     }
@@ -1543,10 +1653,24 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     use super::{
-        PreparedSshShellIntegration, SSH_INTEGRATION_TIMEOUT, ShellIntegrationMode, ShellKind,
-        SshShellIntegrationPhase, SshShellIntegrationState, build_legacy_ssh_ready_marker,
-        build_ssh_ready_marker,
+        ControlPassthrough, PreparedSshShellIntegration, SSH_INTEGRATION_TIMEOUT,
+        ShellIntegrationMode, ShellKind, SshShellIntegrationPhase, SshShellIntegrationState,
+        build_legacy_ssh_ready_marker, build_ssh_ready_marker,
     };
+
+    #[test]
+    fn control_passthrough_keeps_queries_and_drops_text() {
+        let mut passthrough = ControlPassthrough::default();
+
+        assert_eq!(passthrough.feed(b"text\x1b[6nmore"), b"\x1b[6n");
+        assert!(passthrough.feed(b"\x1b[").is_empty());
+        assert_eq!(passthrough.feed(b"6ntext"), b"\x1b[6n");
+        assert_eq!(passthrough.feed(b"\x1b[0cquery"), b"\x1b[0c");
+        assert!(passthrough.feed(b"\x1b]0;title\x07x").is_empty());
+        assert!(passthrough.feed(b"\x1b]0;t\x1b\\y").is_empty());
+        assert!(passthrough.feed(b"\x1b[?2004hprompt$ ").is_empty());
+        assert!(passthrough.feed(b"\x1b[29;120H").is_empty());
+    }
 
     fn shell_integration_state(session_id: &str) -> SshShellIntegrationState {
         let ready_marker = build_ssh_ready_marker(session_id);
