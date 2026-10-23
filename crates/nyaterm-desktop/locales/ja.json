@@ -1303,6 +1303,27 @@
     "uploadPrompt": "リモートファイルが変更されました。変更をアップロードしますか？"
   },
   "fileManager": {
+    "connected": "接続済み",
+    "skipped": "スキップ済み",
+    "copy": "コピー",
+    "move": "移動",
+    "leftPane": "左",
+    "rightPane": "右",
+    "filterName": "ファイル名で絞り込み…",
+    "directoryMissing": "ディレクトリが存在しないためホームを開きます",
+    "sourceUnavailable": "保存された接続先は利用できません",
+    "selectionStatus": "%{count} 項目 · %{selected} 項目を選択",
+    "compactRows": "行をコンパクトに表示",
+    "viewFile": "表示",
+    "editFile": "編集",
+    "columns": {
+      "name": "名前",
+      "size": "サイズ",
+      "modified": "更新日時",
+      "permissions": "権限",
+      "owner": "所有者",
+      "group": "グループ"
+    },
     "tabTitle": "ファイルマネージャー",
     "local": "ローカル",
     "session": "セッション",

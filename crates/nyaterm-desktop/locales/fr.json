@@ -1303,6 +1303,27 @@
     "uploadPrompt": "Fichier distant modifié. Téléverser les modifications ?"
   },
   "fileManager": {
+    "connected": "Connecté",
+    "skipped": "Ignoré",
+    "copy": "Copier",
+    "move": "Déplacer",
+    "leftPane": "Gauche",
+    "rightPane": "Droite",
+    "filterName": "Filtrer les noms…",
+    "directoryMissing": "Le répertoire n’existe plus ; ouverture du dossier personnel",
+    "sourceUnavailable": "La source enregistrée est indisponible",
+    "selectionStatus": "%{count} éléments · %{selected} sélectionnés",
+    "compactRows": "Lignes compactes",
+    "viewFile": "Afficher",
+    "editFile": "Modifier",
+    "columns": {
+      "name": "Nom",
+      "size": "Taille",
+      "modified": "Modifié",
+      "permissions": "Permissions",
+      "owner": "Propriétaire",
+      "group": "Groupe"
+    },
     "tabTitle": "Gestionnaire de fichiers",
     "local": "Local",
     "session": "Session",

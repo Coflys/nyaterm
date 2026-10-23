@@ -195,9 +195,14 @@ impl NyaTermApp {
             .filter(|job| job.is_visible_for_session(active_session_id))
             .collect::<Vec<_>>();
 
-        let has_running = visible
-            .iter()
-            .any(|job| job.status == TransferJobStatus::Running && job.control.is_some());
+        let has_running = visible.iter().any(|job| {
+            job.status == TransferJobStatus::Running
+                && job.control.is_some()
+                && self
+                    .transfer
+                    .file_operation(&job.id)
+                    .is_none_or(|context| context.can_pause())
+        });
         let has_paused = visible
             .iter()
             .any(|job| job.status == TransferJobStatus::Paused && job.control.is_some());

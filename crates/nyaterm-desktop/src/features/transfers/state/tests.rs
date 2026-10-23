@@ -2106,3 +2106,105 @@ fn promised_retry_keeps_original_source_and_execution_contract_until_released() 
     transfer.release_transfer_job_path_options("promise");
     assert!(transfer.promised_download_source("promise").is_none());
 }
+
+#[test]
+fn file_operation_context_retains_both_sessions_and_migrates_retry_identity() {
+    use crate::features::transfers::file_operations::{
+        FileOperationContext, FileOperationEndpoint, FileOperationRequest, FileTransferIntent,
+        FileTransferOperation,
+    };
+    use nyaterm_transport::RemoteFilePath;
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = transfer_state(&cx);
+    state.enqueue_transfer_job(transfer_job(
+        "frozen",
+        "source",
+        TransferJobStatus::Running,
+        true,
+    ));
+    state.transfer_job_mut("frozen").unwrap().kind = TransferJobKind::SendTo {
+        source_path: "/original/file".into(),
+        target_session_id: "target".into(),
+        target_path: "/target/file".into(),
+        target_parent_path: "/target".into(),
+    };
+    state.track_file_operation(
+        "frozen".into(),
+        FileOperationContext {
+            source_label: "source".into(),
+            target_label: "target".into(),
+            request: FileOperationRequest::Transfer(FileTransferIntent {
+                source: FileOperationEndpoint::Session("source".into()),
+                entries: vec![file_entry("/original/file")],
+                target: FileOperationEndpoint::Session("target".into()),
+                target_directory: RemoteFilePath::from_raw("/target", b"/target"),
+                operation: FileTransferOperation::Move,
+            }),
+        },
+    );
+    assert!(state.file_operation_references_session("source"));
+    assert!(state.file_operation_references_session("target"));
+    assert!(state.replace_session_id("target", "reconnected"));
+    assert!(matches!(
+        &state.transfer_job("frozen").unwrap().kind,
+        TransferJobKind::SendTo { target_session_id, .. } if target_session_id == "reconnected"
+    ));
+    assert!(!state.file_operation_references_session("target"));
+    assert!(state.file_operation_references_session("reconnected"));
+    state.transfer_job_mut("frozen").unwrap().status = TransferJobStatus::Failed;
+    assert!(!state.file_operation_references_session("source"));
+    let context = state.file_operation("frozen").unwrap();
+    let FileOperationRequest::Transfer(intent) = &context.request else {
+        panic!("lost transfer context");
+    };
+    assert_eq!(
+        intent.source,
+        FileOperationEndpoint::Session("source".into())
+    );
+    assert_eq!(
+        intent.target,
+        FileOperationEndpoint::Session("reconnected".into())
+    );
+    assert_eq!(intent.entries[0].path, "/original/file");
+    assert_eq!(
+        intent.target_directory.raw_path().unwrap().unwrap(),
+        b"/target"
+    );
+    assert_eq!(intent.operation, FileTransferOperation::Move);
+}
+
+#[test]
+fn metadata_file_operations_are_excluded_from_shared_pause() {
+    use crate::features::transfers::file_operations::{
+        FileMutation, FileMutationIntent, FileOperationContext, FileOperationEndpoint,
+        FileOperationRequest,
+    };
+    use nyaterm_transport::RemoteFilePath;
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = transfer_state(&cx);
+    state.enqueue_transfer_job(transfer_job(
+        "metadata",
+        "source",
+        TransferJobStatus::Running,
+        true,
+    ));
+    state.track_file_operation(
+        "metadata".into(),
+        FileOperationContext {
+            source_label: "source".into(),
+            target_label: "source".into(),
+            request: FileOperationRequest::Mutation(FileMutationIntent {
+                endpoint: FileOperationEndpoint::Session("source".into()),
+                directory: RemoteFilePath::new("/frozen"),
+                mutation: FileMutation::CreateDirectory("new".into()),
+            }),
+        },
+    );
+    assert_eq!(state.pause_visible_transfer_jobs(Some("source")), 0);
+    assert_eq!(
+        state.transfer_job("metadata").unwrap().status,
+        TransferJobStatus::Running
+    );
+}

@@ -29,9 +29,13 @@ impl NyaTermApp {
                 y: px(24.),
             });
         let job = self.transfer.transfer_job(&state.job_id).cloned();
-        let can_pause = job
-            .as_ref()
-            .is_some_and(|job| job.status == TransferJobStatus::Running && job.control.is_some());
+        let pause_supported = self
+            .transfer
+            .file_operation(&state.job_id)
+            .is_none_or(|context| context.can_pause());
+        let can_pause = job.as_ref().is_some_and(|job| {
+            pause_supported && job.status == TransferJobStatus::Running && job.control.is_some()
+        });
         let can_resume = job
             .as_ref()
             .is_some_and(|job| job.status == TransferJobStatus::Paused && job.control.is_some());
@@ -91,28 +95,30 @@ impl NyaTermApp {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(transfer_job_menu_button(
-                                palette,
-                                "transfer-job-menu-pause",
-                                t!("fileTransfer.pause"),
-                                can_pause,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.transfer.close_transfer_job_menu();
-                                    this.pause_transfer_job(&pause_id, cx);
-                                    this.defer_transfer_panel_snapshot_flush(cx);
-                                }),
-                            ))
-                            .child(transfer_job_menu_button(
-                                palette,
-                                "transfer-job-menu-resume",
-                                t!("fileTransfer.resume"),
-                                can_resume,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.transfer.close_transfer_job_menu();
-                                    this.resume_transfer_job(&resume_id, cx);
-                                    this.defer_transfer_panel_snapshot_flush(cx);
-                                }),
-                            ))
+                            .when(pause_supported, |menu| {
+                                menu.child(transfer_job_menu_button(
+                                    palette,
+                                    "transfer-job-menu-pause",
+                                    t!("fileTransfer.pause"),
+                                    can_pause,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.transfer.close_transfer_job_menu();
+                                        this.pause_transfer_job(&pause_id, cx);
+                                        this.defer_transfer_panel_snapshot_flush(cx);
+                                    }),
+                                ))
+                                .child(transfer_job_menu_button(
+                                    palette,
+                                    "transfer-job-menu-resume",
+                                    t!("fileTransfer.resume"),
+                                    can_resume,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.transfer.close_transfer_job_menu();
+                                        this.resume_transfer_job(&resume_id, cx);
+                                        this.defer_transfer_panel_snapshot_flush(cx);
+                                    }),
+                                ))
+                            })
                             .child(transfer_job_menu_button(
                                 palette,
                                 "transfer-job-menu-retry",

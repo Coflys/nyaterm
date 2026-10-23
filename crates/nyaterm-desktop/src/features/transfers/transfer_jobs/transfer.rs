@@ -312,6 +312,13 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn pause_transfer_job(&mut self, job_id: &str, cx: &mut Context<Self>) {
+        if self
+            .transfer
+            .file_operation(job_id)
+            .is_some_and(|context| !context.can_pause())
+        {
+            return;
+        }
         let Some(job) = self.transfer.transfer_job_mut(job_id) else {
             self.shell.set_status("transfer job not found".to_string());
             cx.notify();
@@ -381,6 +388,9 @@ impl NyaTermApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.retry_file_operation(&job_id, cx) {
+            return;
+        }
         let promised_source = self.transfer.promised_download_source(&job_id);
         let service = if let Some(source) = &promised_source {
             let Some(source) = source.upgrade() else {

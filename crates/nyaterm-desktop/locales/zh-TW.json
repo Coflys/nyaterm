@@ -1303,6 +1303,27 @@
     "uploadPrompt": "遠端檔案已修改，是否上傳變更？"
   },
   "fileManager": {
+    "connected": "已連線",
+    "skipped": "已略過",
+    "copy": "複製",
+    "move": "移動",
+    "leftPane": "左欄",
+    "rightPane": "右欄",
+    "filterName": "篩選檔案名稱…",
+    "directoryMissing": "目錄已不存在，正在開啟家目錄",
+    "sourceUnavailable": "已儲存的來源無法使用",
+    "selectionStatus": "%{count} 個項目 · 已選 %{selected} 個",
+    "compactRows": "緊湊列高",
+    "viewFile": "檢視",
+    "editFile": "編輯",
+    "columns": {
+      "name": "名稱",
+      "size": "大小",
+      "modified": "修改時間",
+      "permissions": "權限",
+      "owner": "擁有者",
+      "group": "群組"
+    },
     "tabTitle": "檔案管理器",
     "local": "本機",
     "session": "工作階段",

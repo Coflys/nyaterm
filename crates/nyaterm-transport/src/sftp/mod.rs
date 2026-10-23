@@ -1073,12 +1073,20 @@ impl SftpService {
         remote_path: impl AsRef<str>,
         mode: Option<u32>,
     ) -> anyhow::Result<()> {
-        let remote_path = remote_path.as_ref().to_string();
+        self.create_dir_remote_path(&RemoteFilePath::new(remote_path.as_ref()), mode)
+    }
+
+    pub fn create_dir_remote_path(
+        &self,
+        remote_path: &RemoteFilePath,
+        mode: Option<u32>,
+    ) -> anyhow::Result<()> {
+        let remote_path = remote_path.clone();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
         self.run_operation("create_directory", async move {
             let codec = SftpPathCodec::from_ssh_config(&config)?;
-            let remote_path_bytes = codec.encode_path(&remote_path)?;
+            let remote_path_bytes = remote_file_path_bytes(&codec, &remote_path)?;
             let session = open_sftp_session(&config, multiplex.as_ref()).await?;
             let result = async {
                 session
@@ -1110,15 +1118,42 @@ impl SftpService {
         remote_path: impl AsRef<str>,
         mode: Option<u32>,
     ) -> anyhow::Result<()> {
-        let remote_path = remote_path.as_ref().to_string();
+        self.create_file_path_impl(&RemoteFilePath::new(remote_path.as_ref()), mode, false)
+    }
+
+    pub fn create_file_remote_path(
+        &self,
+        remote_path: &RemoteFilePath,
+        mode: Option<u32>,
+    ) -> anyhow::Result<()> {
+        self.create_file_path_impl(remote_path, mode, true)
+    }
+
+    fn create_file_path_impl(
+        &self,
+        remote_path: &RemoteFilePath,
+        mode: Option<u32>,
+        exclusive: bool,
+    ) -> anyhow::Result<()> {
+        let remote_path = remote_path.clone();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
         self.run_operation("create_file", async move {
             let codec = SftpPathCodec::from_ssh_config(&config)?;
-            let remote_path_bytes = codec.encode_path(&remote_path)?;
+            let remote_path_bytes = remote_file_path_bytes(&codec, &remote_path)?;
             let session = open_sftp_session(&config, multiplex.as_ref()).await?;
             let result = async {
-                let _file = session.sftp.create_bytes(remote_path_bytes.clone()).await?;
+                let flags = russh_sftp::protocol::OpenFlags::CREATE
+                    | russh_sftp::protocol::OpenFlags::WRITE
+                    | if exclusive {
+                        russh_sftp::protocol::OpenFlags::EXCLUDE
+                    } else {
+                        russh_sftp::protocol::OpenFlags::TRUNCATE
+                    };
+                let _file = session
+                    .sftp
+                    .open_with_flags_bytes(remote_path_bytes.clone(), flags)
+                    .await?;
                 if let Some(mode) = mode {
                     session
                         .sftp

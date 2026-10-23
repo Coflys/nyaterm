@@ -18,7 +18,7 @@ pub(in crate::features) use tree::TransferTreePresentation;
 #[cfg(test)]
 pub(in crate::features) use self::browser_logic::transfer_browser_entry_is_visible;
 pub(in crate::features) use self::browser_logic::{
-    BrowserFilterCache, BrowserFilterKey, natural_compare_ascii, record_browser_history,
+    BrowserFilterCache, BrowserFilterKey, natural_compare_ascii,
 };
 mod editor;
 mod preview;
@@ -58,6 +58,7 @@ struct TransferRetryContext {
 }
 
 pub(in crate::features) struct TransferFeatureState {
+    file_operations: HashMap<String, super::file_operations::FileOperationContext>,
     clipboard: Option<TransferFileClipboard>,
     clipboard_generation: u64,
     cut_jobs: HashMap<String, (u64, String)>,
@@ -131,6 +132,7 @@ struct TransferPathState {
 /// can inspect browser state without receiving the authoritative child.
 pub(in crate::features) struct TransferBrowserView<'a> {
     pub path: &'a String,
+    pub raw_path_token: &'a Option<String>,
     pub home_dir: &'a String,
     pub home_dir_pending: bool,
     pub path_draft: &'a String,
@@ -306,6 +308,37 @@ struct TransferPanelState {
 }
 
 impl TransferFeatureState {
+    pub(in crate::features) fn track_file_operation(
+        &mut self,
+        id: String,
+        context: super::file_operations::FileOperationContext,
+    ) {
+        self.file_operations.insert(id, context);
+    }
+
+    pub(in crate::features) fn file_operation(
+        &self,
+        id: &str,
+    ) -> Option<&super::file_operations::FileOperationContext> {
+        self.file_operations.get(id)
+    }
+
+    pub(in crate::features) fn file_operation_references_session(&self, session: &str) -> bool {
+        self.file_operations.iter().any(|(id, context)| {
+            let (source, target) = context.endpoints();
+            (source.session_id() == Some(session) || target.session_id() == Some(session))
+                && self.queue.jobs.iter().any(|job| {
+                    job.id == *id
+                        && matches!(
+                            job.status,
+                            TransferJobStatus::Running
+                                | TransferJobStatus::Paused
+                                | TransferJobStatus::Cancelling
+                        )
+                })
+        })
+    }
+
     pub(in crate::features) fn session_has_active_transfer(&self, session_ids: &[String]) -> bool {
         let session_ids = session_ids
             .iter()
@@ -334,6 +367,7 @@ impl TransferFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
+            file_operations: HashMap::new(),
             clipboard: None,
             clipboard_generation: 0,
             cut_jobs: HashMap::new(),
@@ -626,7 +660,14 @@ impl TransferFeatureState {
         &mut self,
         session_id: Option<&str>,
     ) -> usize {
-        self.queue.pause_visible_jobs(session_id)
+        let excluded: std::collections::HashSet<_> = self
+            .file_operations
+            .iter()
+            .filter(|(_, context)| !context.can_pause())
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.queue
+            .pause_visible_jobs_excluding(session_id, &excluded)
     }
 
     pub(in crate::features) fn resume_visible_transfer_jobs(
@@ -696,6 +737,8 @@ impl TransferFeatureState {
     }
 
     fn prune_transfer_job_path_options(&mut self) {
+        self.file_operations
+            .retain(|id, _| self.queue.jobs.iter().any(|job| job.id == *id));
         self.path_options_by_job
             .retain(|job_id, _| self.queue.jobs().iter().any(|job| job.id == *job_id));
     }
@@ -1284,6 +1327,11 @@ impl TransferFeatureState {
                 }
             }
         }
+        for context in self.file_operations.values_mut() {
+            let (source, target) = context.endpoints();
+            changed |= source.session_id() == Some(old_id) || target.session_id() == Some(old_id);
+            context.replace_session(old_id, new_id);
+        }
         self.tree.replace_session(old_id, new_id);
         if self.file_ops.delete_refresh_pending.remove(old_id) {
             self.file_ops
@@ -1303,6 +1351,14 @@ impl TransferFeatureState {
         self.prune_unreferenced_browser_navigation_snapshots();
 
         for job in &mut self.queue.jobs {
+            if let crate::models::TransferJobKind::SendTo {
+                target_session_id, ..
+            } = &mut job.kind
+                && target_session_id == old_id
+            {
+                *target_session_id = new_id.to_string();
+                changed = true;
+            }
             if (job.is_user_transfer()
                 || matches!(job.kind, crate::models::TransferJobKind::Delete { .. }))
                 && job.session_id.as_deref() == Some(old_id)
@@ -1678,10 +1734,20 @@ impl TransferQueueState {
         })
     }
 
+    #[cfg(test)]
     fn pause_visible_jobs(&mut self, session_id: Option<&str>) -> usize {
+        self.pause_visible_jobs_excluding(session_id, &HashSet::new())
+    }
+
+    fn pause_visible_jobs_excluding(
+        &mut self,
+        session_id: Option<&str>,
+        excluded: &HashSet<String>,
+    ) -> usize {
         let mut changed = 0;
         for job in &mut self.jobs {
-            if job.is_visible_for_session(session_id)
+            if !excluded.contains(&job.id)
+                && job.is_visible_for_session(session_id)
                 && job.status == TransferJobStatus::Running
                 && let Some(control) = job.control.as_ref()
             {

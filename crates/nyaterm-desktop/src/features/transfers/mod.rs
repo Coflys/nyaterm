@@ -1,5 +1,6 @@
 //! Transfer jobs, transfer options, path prompts and transfer widgets.
 
+pub(in crate::features) mod clipboard_copy;
 mod cwd_sync;
 mod delete_runtime;
 mod drag_aggregate;
@@ -8,12 +9,14 @@ pub(in crate::features) mod drag_export;
 mod editor_window;
 pub(in crate::features) mod external_sync_runtime;
 mod external_sync_window;
+pub(in crate::features) mod file_open;
+pub(in crate::features) mod file_operations;
 pub(in crate::features) mod preview;
 mod remote_text_editor;
 mod state;
 pub(in crate::features) use state::TransferSessionTransferBundle;
 pub(in crate::features) use state::TransferTreePresentation;
-pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey, record_browser_history};
+pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey};
 mod transfer_events;
 pub(in crate::features) mod transfer_jobs;
 mod transfer_options;
@@ -188,11 +191,10 @@ impl NyaTermApp {
         &mut self,
         session_id: Option<&str>,
     ) -> anyhow::Result<FileBrowserService> {
-        let session_id = session_id
-            .or_else(|| self.session.active_id())
-            .ok_or_else(|| anyhow::anyhow!("source file browser session is unavailable"))?
-            .to_string();
-        self.file_browser_service_for_session(&session_id)
+        match session_id {
+            Some(id) => self.file_browser_service_for_session(id),
+            None => Ok(FileBrowserService::local()),
+        }
     }
 
     pub(in crate::features) fn transfer_remote_file_service(
