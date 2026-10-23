@@ -948,7 +948,7 @@ __nyaterm_cwd_prompt(){
   [ -n "${NYATERM_BASH_CWD_READY:-}" ] || return "$ret"
   __nyaterm_prune_history
   __nyaterm_emit_history_command
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$PWD"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
   return "$ret"
 }
 __nyaterm_precmd_d(){
@@ -963,7 +963,7 @@ __nyaterm_prompt(){
   local ret=$?
   [ -n "${NYATERM_BASH_HOOKS_READY:-}" ] || return "$ret"
   __nyaterm_prune_history
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$PWD"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
   printf '\033]133;A\007'
   case "$PS1" in (*133\;B*) ;; (*) PS1="$PS1"'\[\033]133;B\007\]' ;; esac
   return "$ret"
@@ -1195,7 +1195,7 @@ __nyaterm_emit_command(){
 }
 __nyaterm_cwd_prompt(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$PWD"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
 }
 __nyaterm_cwd_preexec(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
@@ -1212,7 +1212,7 @@ __nyaterm_precmd_d(){
 }
 __nyaterm_prompt(){
   [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$PWD"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
   printf '\033]133;A\007'
   [[ "$PS1" == *$'\033]133;B\007'* ]] || PS1="$PS1"$'%{\033]133;B\007%}'
 }
@@ -1260,7 +1260,7 @@ function __nyaterm_emit_command
 end
 function __nyaterm_cwd_prompt
   set -q NYATERM_FISH_CWD_READY; or return 0
-  printf '\033]7;file://%s%s\007' (hostname) $PWD
+  printf '\033]7;file://%s%s\007' (hostname) (string replace -a -- '%' '%25' $PWD)
 end
 function __nyaterm_cwd_preexec
   set -q NYATERM_FISH_CWD_READY; or return 0
@@ -1286,7 +1286,7 @@ function __nyaterm_precmd
     printf '\033]133;D;%s\007' "$ret"
     set -e __nyaterm_cmd_active
   end
-  printf '\033]7;file://%s%s\007' (hostname) $PWD
+  printf '\033]7;file://%s%s\007' (hostname) (string replace -a -- '%' '%25' $PWD)
   printf '\033]133;A\007'
   __nyaterm_ensure_prompt_wrapper
 end
@@ -1360,7 +1360,7 @@ __nyaterm_cwd_prompt(){
     NYATERM_LAST_HISTCMD="$histcmd"
     __nyaterm_emit_command "$(fc -ln -1 2>/dev/null)"
   fi
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$PWD"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
   return "$ret"
 }
 __nyaterm_install_prompt(){
@@ -1399,7 +1399,7 @@ __nyaterm_emit_command(){
 }
 __nyaterm_cwd_prompt(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "$PWD"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
 }
 __nyaterm_cwd_preexec(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
@@ -1426,7 +1426,7 @@ function __nyaterm_emit_command
 end
 function __nyaterm_cwd_prompt
   set -q NYATERM_FISH_CWD_READY; or return 0
-  printf '\033]7;file://%s%s\007' (hostname) $PWD
+  printf '\033]7;file://%s%s\007' (hostname) (string replace -a -- '%' '%25' $PWD)
 end
 function __nyaterm_cwd_preexec
   set -q NYATERM_FISH_CWD_READY; or return 0
@@ -1577,7 +1577,40 @@ fn parse_osc7_payload(payload: &[u8]) -> Option<String> {
         let slash = after_scheme.find('/')?;
         after_scheme[slash..].to_string()
     };
-    if path.is_empty() { None } else { Some(path) }
+    if path.is_empty() {
+        None
+    } else {
+        Some(percent_decode_path(&path))
+    }
+}
+
+/// OSC 7 paths are URIs, so `%XX` hex escapes (spaces, non-ASCII) must be
+/// decoded. A `%` not followed by two hex digits is a literal percent sign and
+/// passes through unchanged; NyaTerm's own emitters escape literal `%` as
+/// `%25`, so those round-trip. If decoding produces invalid UTF-8, the original
+/// text is kept as-is.
+fn percent_decode_path(path: &str) -> String {
+    if !path.as_bytes().contains(&b'%') {
+        return path.to_string();
+    }
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && bytes[index + 1].is_ascii_hexdigit()
+            && bytes[index + 2].is_ascii_hexdigit()
+        {
+            let hex = &path[index + 1..index + 3];
+            decoded.push(u8::from_str_radix(hex, 16).expect("hex digits validated above"));
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| path.to_string())
 }
 
 fn parse_command_marker(inner: &[u8]) -> Option<String> {
@@ -1814,6 +1847,38 @@ mod tests {
         assert_eq!(output.cwd_paths, vec!["/home/user".to_string()]);
         assert_eq!(output.accepted_commands, vec!["git status".to_string()]);
         assert!(state.is_normal());
+    }
+
+    #[test]
+    fn osc7_cwd_paths_decode_percent_escapes_and_keep_literal_percent_signs() {
+        let mut state = shell_integration_state("session-1");
+        mark_injection_sent(&mut state);
+        let ready = "\x1b]7777;NyaTermReady:session-1\x07";
+        let osc7 = |path: &str| format!("\x1b]7;file://host{path}\x07").into_bytes();
+
+        // A path may arrive before the ready marker; only post-marker output is
+        // parsed, so feed the marker first.
+        let _ = state.filter_output(ready.as_bytes());
+
+        let output = state.filter_output(&osc7("/home/user/My%20Files"));
+        assert_eq!(output.cwd_paths, vec!["/home/user/My Files".to_string()]);
+
+        let output = state.filter_output(&osc7("/home/user/%E4%BD%A0%E5%A5%BD"));
+        assert_eq!(output.cwd_paths, vec!["/home/user/你好".to_string()]);
+
+        // NyaTerm emitters escape literal `%` as `%25`; it must round-trip.
+        let output = state.filter_output(&osc7("/tmp/50%25ab"));
+        assert_eq!(output.cwd_paths, vec!["/tmp/50%ab".to_string()]);
+
+        // A `%` not followed by two hex digits is a literal percent sign.
+        let output = state.filter_output(&osc7("/tmp/50%zz"));
+        assert_eq!(output.cwd_paths, vec!["/tmp/50%zz".to_string()]);
+        let output = state.filter_output(&osc7("/tmp/50%a"));
+        assert_eq!(output.cwd_paths, vec!["/tmp/50%a".to_string()]);
+
+        // Decoding to invalid UTF-8 keeps the original text.
+        let output = state.filter_output(&osc7("/tmp/50%FF"));
+        assert_eq!(output.cwd_paths, vec!["/tmp/50%FF".to_string()]);
     }
 
     #[test]
