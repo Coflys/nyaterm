@@ -3261,6 +3261,9 @@ fn ssh_client_config(config: &SshSessionConfig) -> anyhow::Result<Arc<russh::cli
     };
     let preferred = resolve_preferred_algorithms(config.ssh_algorithms.as_ref())?;
     Ok(Arc::new(russh::client::Config {
+        window_size: 32 * 1024 * 1024,
+        maximum_packet_size: 32 * 1024,
+        nodelay: true,
         inactivity_timeout: None,
         keepalive_interval,
         keepalive_max: 3,

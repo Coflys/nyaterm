@@ -804,7 +804,7 @@ impl RemoteFileService {
                 let bytes = self
                     .shell(kind)
                     .exec_ok(format!("cat -- {}", shell_quote(&remote_path)), None)?;
-                crate::download_path::staged_write_file(download_root, &local_path, &bytes)?;
+                crate::download_path::TransferDownload::write(download_root, &local_path, &bytes)?;
                 Ok(SftpTransferSummary {
                     remote_path,
                     local_path,
@@ -875,6 +875,7 @@ impl RemoteFileService {
                     &control,
                     progress,
                     download_root,
+                    &options,
                 )?;
                 Ok(SftpTransferSummary {
                     remote_path: remote_path.display_path,
@@ -955,6 +956,7 @@ impl RemoteFileService {
                     &control,
                     progress,
                     download_root,
+                    options.transfer_options(),
                 )?;
                 Ok(SftpTransferSummary {
                     remote_path: remote_path.display_path,
@@ -1735,6 +1737,7 @@ fn resolve_copy_remote_target(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 fn download_shell_path<F>(
     service: &RemoteFileService,
     kind: RemoteFileBackendKind,
@@ -1743,6 +1746,7 @@ fn download_shell_path<F>(
     control: &SftpTransferControl,
     progress: F,
     download_root: &Path,
+    options: &SftpTransferOptions,
 ) -> anyhow::Result<u64>
 where
     F: FnMut(SftpTransferProgress) + Send + 'static,
@@ -1783,6 +1787,11 @@ where
                 &local,
                 download_root,
                 properties.size,
+                if options.preserve_timestamps {
+                    properties.modified_at
+                } else {
+                    None
+                },
                 control.clone(),
                 move |current| {
                     report.lock().expect("shell progress lock")(SftpTransferProgress {

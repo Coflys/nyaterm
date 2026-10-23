@@ -245,6 +245,7 @@ impl NyaTermApp {
                             for event in batch {
                                 dirty |= this.apply_transfer_event(event, window, cx);
                             }
+                            this.reconcile_bulk_transfer_jobs();
                             if dirty {
                                 // Only the transfers panel. An app-wide notify here would
                                 // repaint the whole shell twenty times a second for a
@@ -322,6 +323,9 @@ impl NyaTermApp {
             return false;
         };
         if self.transfer.file_operation(&event.id).is_some() {
+            let cancelled_without_running = job.status == TransferJobStatus::Cancelling
+                && job.control.is_none()
+                && matches!(&event.event, TransferJobEvent::Finished(Err(error)) if error == SFTP_TRANSFER_CANCELLED);
             let finished = matches!(event.event, TransferJobEvent::Finished(_));
             match event.event {
                 TransferJobEvent::Started { detail } => job.detail = detail,
@@ -377,7 +381,13 @@ impl NyaTermApp {
             self.transfer
                 .restore_transfer_job_after_event((job_index, job));
             if finished {
-                self.finish_file_operation(&event.id, cx);
+                if cancelled_without_running {
+                    // No filesystem or network operation ran, so there is no
+                    // directory change to refresh after a queued cancellation.
+                    self.release_unreferenced_hidden_sessions(cx);
+                } else {
+                    self.finish_file_operation(&event.id, cx);
+                }
             }
             return true;
         }

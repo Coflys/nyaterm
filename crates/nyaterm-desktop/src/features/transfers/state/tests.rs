@@ -2208,3 +2208,53 @@ fn metadata_file_operations_are_excluded_from_shared_pause() {
         TransferJobStatus::Running
     );
 }
+
+#[test]
+fn session_close_and_window_shutdown_cancel_queued_work_without_starting_it() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = transfer_state(&cx);
+    for (id, session) in [("closed", "a"), ("other", "b"), ("copy", "b")] {
+        let mut job = transfer_job(id, session, TransferJobStatus::Running, true);
+        if id == "copy" {
+            job.kind = TransferJobKind::SendTo {
+                source_path: "/file".into(),
+                target_session_id: "a".into(),
+                target_path: "/target".into(),
+                target_parent_path: "/".into(),
+            };
+        }
+        state.enqueue_transfer_job(job);
+        state.admit_bulk_job(
+            id,
+            "queued-close-test",
+            state.transfer_event_sender(),
+            Box::new(|| panic!("cancelled queue entry started")),
+        );
+    }
+    assert_eq!(state.pause_visible_transfer_jobs(None), 3);
+    state.cancel_bulk_jobs_for_session("a");
+    state.reconcile_bulk_jobs(2, 2);
+    assert_eq!(
+        state.transfer_job("closed").unwrap().status,
+        TransferJobStatus::Cancelling
+    );
+    assert_eq!(
+        state.transfer_job("copy").unwrap().status,
+        TransferJobStatus::Cancelling
+    );
+    assert_eq!(
+        state.transfer_job("other").unwrap().status,
+        TransferJobStatus::Paused
+    );
+    let other = state
+        .transfer_job("other")
+        .unwrap()
+        .control
+        .clone()
+        .unwrap();
+    state.begin_bulk_shutdown()();
+    assert!(other.is_cancelled());
+    assert!(!state.manages_bulk_job("other"));
+    assert!(state.admission.shutdown().is_empty());
+}

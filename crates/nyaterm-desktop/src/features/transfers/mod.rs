@@ -99,6 +99,12 @@ impl NyaTermApp {
         tx: futures::channel::mpsc::UnboundedSender<crate::models::TransferJobResult>,
         run: impl FnOnce() + Send + 'static,
     ) {
+        if self.transfer.supports_bulk_admission(&job_id) {
+            self.transfer
+                .admit_bulk_job(&job_id, name, tx, Box::new(run));
+            self.reconcile_bulk_transfer_jobs();
+            return;
+        }
         match self.transfer.bulk_executor() {
             Ok(executor) => {
                 transfer_jobs::submit_transfer_blocking_job(executor, name, job_id, tx, run)
@@ -110,6 +116,13 @@ impl NyaTermApp {
                 });
             }
         }
+    }
+
+    pub(in crate::features) fn reconcile_bulk_transfer_jobs(&mut self) {
+        self.transfer.reconcile_bulk_jobs(
+            self.settings.summary().transfer_download_threads,
+            self.settings.summary().transfer_upload_threads,
+        );
     }
 
     pub(in crate::features) fn submit_transfer_blocking_job(

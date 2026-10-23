@@ -333,7 +333,7 @@ impl NyaTermApp {
                 TransferJobStatus::Paused => paused_transfers += 1,
                 TransferJobStatus::Completed => completed_transfers += 1,
                 TransferJobStatus::Failed => failed_transfers += 1,
-                TransferJobStatus::Cancelled => {}
+                TransferJobStatus::Queued | TransferJobStatus::Cancelled => {}
             }
         }
 

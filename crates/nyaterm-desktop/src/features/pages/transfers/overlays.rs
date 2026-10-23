@@ -34,7 +34,12 @@ impl NyaTermApp {
             .file_operation(&state.job_id)
             .is_none_or(|context| context.can_pause());
         let can_pause = job.as_ref().is_some_and(|job| {
-            pause_supported && job.status == TransferJobStatus::Running && job.control.is_some()
+            pause_supported
+                && matches!(
+                    job.status,
+                    TransferJobStatus::Queued | TransferJobStatus::Running
+                )
+                && job.control.is_some()
         });
         let can_resume = job
             .as_ref()
@@ -42,7 +47,7 @@ impl NyaTermApp {
         let can_cancel = job.as_ref().is_some_and(|job| {
             matches!(
                 job.status,
-                TransferJobStatus::Running | TransferJobStatus::Paused
+                TransferJobStatus::Queued | TransferJobStatus::Running | TransferJobStatus::Paused
             ) && (job.control.is_some() || matches!(job.kind, TransferJobKind::RdpClipboard { .. }))
         });
         let can_retry = job.as_ref().is_some_and(transfer_job_can_retry);

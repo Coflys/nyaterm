@@ -299,6 +299,8 @@ impl NyaTermApp {
             self.transfer.clear_pending_cwd_sync();
             self.defer_transfer_panel_snapshot_flush(cx);
         }
+        self.transfer.cancel_bulk_jobs_for_session(session_id);
+        self.reconcile_bulk_transfer_jobs();
         self.session.remove_remote_file_service(session_id);
         let Some(update) = self.session.mark_session_disconnected(session_id) else {
             return;

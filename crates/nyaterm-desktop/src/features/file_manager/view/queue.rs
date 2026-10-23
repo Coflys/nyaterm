@@ -28,7 +28,8 @@ impl FileManagerWorkspace {
             .filter(|(job, _)| {
                 matches!(
                     job.status,
-                    TransferJobStatus::Running
+                    TransferJobStatus::Queued
+                        | TransferJobStatus::Running
                         | TransferJobStatus::Paused
                         | TransferJobStatus::Cancelling
                 )
@@ -139,7 +140,8 @@ impl FileManagerWorkspace {
                 FileManagerQueueFilter::All => true,
                 FileManagerQueueFilter::Active => matches!(
                     job.status,
-                    TransferJobStatus::Running
+                    TransferJobStatus::Queued
+                        | TransferJobStatus::Running
                         | TransferJobStatus::Paused
                         | TransferJobStatus::Cancelling
                 ),
@@ -217,7 +219,9 @@ impl FileManagerWorkspace {
                 if can_pause
                     && matches!(
                         job.status,
-                        TransferJobStatus::Running | TransferJobStatus::Paused
+                        TransferJobStatus::Queued
+                            | TransferJobStatus::Running
+                            | TransferJobStatus::Paused
                     )
                 {
                     let id = job.id.clone();
@@ -249,7 +253,9 @@ impl FileManagerWorkspace {
                 }
                 if matches!(
                     job.status,
-                    TransferJobStatus::Running | TransferJobStatus::Paused
+                    TransferJobStatus::Queued
+                        | TransferJobStatus::Running
+                        | TransferJobStatus::Paused
                 ) {
                     let id = job.id.clone();
                     actions = actions.child(

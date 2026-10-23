@@ -257,3 +257,68 @@ fn shared_copy_engine_preserves_raw_targets_across_source_combinations() -> anyh
     cleanup?;
     Ok(())
 }
+
+/// Read-only remote fixtures; every sample downloads into a fresh local directory.
+#[test]
+#[ignore = "requires SFTP credentials, NYATERM_BENCH_LOCAL_ROOT and three prepared remote fixtures"]
+fn sftp_download_release_benchmark_five_samples() -> anyhow::Result<()> {
+    use std::time::Instant;
+    let service = SftpService::new(test_config());
+    let local_root = required_env("NYATERM_BENCH_LOCAL_ROOT");
+    let fixtures = [
+        required_env("NYATERM_BENCH_FILE"),
+        required_env("NYATERM_BENCH_SMALL_DIR"),
+        required_env("NYATERM_BENCH_MIXED_DIR"),
+    ];
+    for (index, fixture) in fixtures.iter().enumerate() {
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let root = tempfile::tempdir_in(&local_root)?;
+            let target = root.path().join("download");
+            let started = Instant::now();
+            let summary = service.download_path_with_progress_and_path_options(
+                fixture,
+                &target,
+                SftpTransferControl::new(),
+                Default::default(),
+                |_| {},
+            )?;
+            let elapsed_us = started.elapsed().as_micros();
+            if index == 0 {
+                anyhow::ensure!(
+                    summary.bytes == 1024 * 1024 * 1024,
+                    "single-file fixture must be 1 GiB"
+                );
+            }
+            let mut pending = vec![target];
+            let mut files = 0;
+            while let Some(path) = pending.pop() {
+                if path.is_dir() {
+                    for entry in fs::read_dir(path)? {
+                        pending.push(entry?.path());
+                    }
+                } else {
+                    files += 1;
+                }
+            }
+            if index == 1 {
+                anyhow::ensure!(files == 5000, "small-file fixture must contain 5000 files");
+            }
+            if index == 2 {
+                anyhow::ensure!(files > 1, "mixed fixture must contain multiple files");
+            }
+            eprintln!(
+                "{}",
+                serde_json::json!({ "bytes": summary.bytes, "files": files, "total_us": elapsed_us })
+            );
+            samples.push(elapsed_us);
+            // Cleanup and verification are deliberately outside the measured interval.
+        }
+        samples.sort_unstable();
+        eprintln!(
+            "{}",
+            serde_json::json!({ "samples": 5, "median_total_us": samples[2] })
+        );
+    }
+    Ok(())
+}

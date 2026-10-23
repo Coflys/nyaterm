@@ -20,10 +20,21 @@ pub(super) struct Files {
     pub(super) request_delay: HashMap<u8, std::time::Duration>,
     pub(super) modified: Option<u32>,
     pub(super) reads: Vec<(u64, usize)>,
+    pub(super) read_paths: HashSet<Vec<u8>>,
     pub(super) active_reads: usize,
     pub(super) max_active_reads: usize,
     pub(super) read_delay: std::time::Duration,
     pub(super) read_limit: Option<usize>,
+    pub(super) read_gate: Option<Arc<tokio::sync::Semaphore>>,
+    pub(super) read_started: Option<std::sync::mpsc::Sender<()>>,
+    pub(super) writes: Vec<usize>,
+    pub(super) active_writes: usize,
+    pub(super) max_active_writes: usize,
+    pub(super) write_gate: Option<Arc<tokio::sync::Semaphore>>,
+    pub(super) write_started: Option<std::sync::mpsc::Sender<()>>,
+    pub(super) server_limits: Option<[u64; 4]>,
+    pub(super) open_handles: usize,
+    pub(super) max_open_handles: usize,
     pub(super) omit_size: bool,
     pub(super) fail_read_at: Option<u64>,
     pub(super) fail_read_paths: HashSet<Vec<u8>>,
@@ -79,6 +90,12 @@ fn reply(
     if kind == 1 {
         let mut version = vec![2];
         version.extend_from_slice(&3_u32.to_be_bytes());
+        if files.server_limits.is_some() {
+            push_string(&mut version, b"limits@openssh.com");
+            push_string(&mut version, b"1");
+        }
+        push_string(&mut version, b"fsync@openssh.com");
+        push_string(&mut version, b"1");
         return version;
     }
     files.requests += 1;
@@ -101,11 +118,20 @@ fn reply(
             }
             packet.push(102);
             packet.extend_from_slice(&id.to_be_bytes());
-            let handle = format!("h{}", handles.len()).into_bytes();
+            let handle = format!("h{}", files.requests).into_bytes();
+            files.open_handles += 1;
+            files.max_open_handles = files.max_open_handles.max(files.open_handles);
             handles.insert(handle.clone(), path);
             push_string(&mut packet, &handle);
         }
-        4 | 9 => return status(id, 0),
+        4 => {
+            let handle = string(&mut input);
+            if handles.remove(&handle).is_some() {
+                files.open_handles -= 1;
+            }
+            return status(id, 0);
+        }
+        9 => return status(id, 0),
         5 => {
             let handle = string(&mut input);
             let path = handles[&handle].clone();
@@ -113,6 +139,7 @@ fn reply(
             input = &input[8..];
             let length = number(&mut input) as usize;
             files.reads.push((offset as u64, length));
+            files.read_paths.insert(path.clone());
             if std::mem::take(&mut files.transient_read_failure) {
                 return status(id, 4);
             }
@@ -137,6 +164,7 @@ fn reply(
             let offset = u64::from_be_bytes(input[..8].try_into().unwrap()) as usize;
             input = &input[8..];
             let bytes = string(&mut input);
+            files.writes.push(bytes.len());
             let content = files.contents.get_mut(&path).unwrap();
             content.resize(content.len().max(offset + bytes.len()), 0);
             content[offset..offset + bytes.len()].copy_from_slice(&bytes);
@@ -240,12 +268,32 @@ fn reply(
             files.contents.insert(target, content);
             return status(id, 0);
         }
+        200 => {
+            let extension = string(&mut input);
+            if extension == b"limits@openssh.com" {
+                packet.push(201);
+                packet.extend_from_slice(&id.to_be_bytes());
+                for value in files.server_limits.unwrap() {
+                    packet.extend_from_slice(&value.to_be_bytes());
+                }
+            } else {
+                return status(id, 0);
+            }
+        }
         _ => return status(id, 8),
     }
     packet
 }
 
 pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
+    service_with_config(encoding, Default::default(), None)
+}
+
+fn service_with_config(
+    encoding: &str,
+    client_config: russh_sftp::client::Config,
+    limits: Option<[u64; 4]>,
+) -> (SftpService, Arc<Mutex<Files>>) {
     let service = SftpService::new(SshSessionConfig {
         encoding: encoding.to_string(),
         sftp: SftpSettings {
@@ -256,6 +304,7 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
     });
     let files = Arc::new(Mutex::new(Files::default()));
     files.lock().unwrap().directories.insert(b"/".to_vec());
+    files.lock().unwrap().server_limits = limits;
     let peer_files = files.clone();
     let compatibility = service.compatibility.as_ref().unwrap();
     let session = compatibility
@@ -277,6 +326,12 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
                         &mut handles,
                     );
                     let is_read = packet[0] == 5;
+                    let is_write = packet[0] == 6;
+                    if is_write {
+                        let mut files = peer_files.lock().unwrap();
+                        files.active_writes += 1;
+                        files.max_active_writes = files.max_active_writes.max(files.active_writes);
+                    }
                     let delay = if is_read {
                         let mut files = peer_files.lock().unwrap();
                         files.active_reads += 1;
@@ -293,9 +348,28 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
                     };
                     let writer = writer.clone();
                     let files = peer_files.clone();
+                    let gate = if is_read {
+                        let files = files.lock().unwrap();
+                        if let Some(started) = &files.read_started {
+                            let _ = started.send(());
+                        }
+                        files.read_gate.clone()
+                    } else if is_write {
+                        let files = files.lock().unwrap();
+                        if let Some(started) = &files.write_started {
+                            let _ = started.send(());
+                        }
+                        files.write_gate.clone()
+                    } else {
+                        None
+                    };
                     // Responses have their own delay, rather than stalling the
                     // peer parser. This exposes real concurrent SFTP requests.
+                    let gated = gate.is_some();
                     let send = async move {
+                        if let Some(gate) = gate {
+                            let _ = gate.acquire().await.map(|permit| permit.forget());
+                        }
                         if !delay.is_zero() {
                             tokio::time::sleep(delay).await;
                         }
@@ -308,9 +382,12 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
                         if is_read {
                             files.lock().unwrap().active_reads -= 1;
                         }
+                        if is_write {
+                            files.lock().unwrap().active_writes -= 1;
+                        }
                         result
                     };
-                    if delay.is_zero() {
+                    if delay.is_zero() && !gated {
                         if send.await.is_err() {
                             break;
                         }
@@ -320,7 +397,7 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
                 }
             });
             Ok(OpenSftpSession {
-                sftp: Arc::new(SftpSession::new(client).await?),
+                sftp: Arc::new(SftpSession::new_with_config(client, client_config).await?),
                 connection: Arc::new(Mutex::new(Some(OpenSftpConnection::Multiplex))),
                 persistent: true,
             })
@@ -662,4 +739,367 @@ fn lossy_labels_keep_distinct_path_identity_and_invalid_new_names_send_no_reques
     std::fs::write(&source, b"data").unwrap();
     assert!(service.upload_file(&source, "/secret😀").is_err());
     assert_eq!(files.lock().unwrap().requests, before);
+}
+
+#[test]
+fn ordinary_and_directory_downloads_fill_the_configured_window_before_the_first_reply()
+-> anyhow::Result<()> {
+    use crate::{SftpPathTransferOptions, SftpTransferControl};
+    use std::time::Duration;
+    for (directory, depth, compatible, expected) in [
+        (false, None, false, 16),
+        (true, None, false, 16),
+        (false, Some(4), false, 4),
+        (true, Some(64), false, 64),
+        (false, Some(64), true, 1),
+        (true, Some(64), true, 1),
+    ] {
+        let (mut service, files) = service("UTF-8");
+        service.config.sftp.compatibility_mode = compatible;
+        service.config.sftp.pipeline_depth = depth;
+        let content = vec![7_u8; 80 * 63 * 1024];
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let (started, requests) = std::sync::mpsc::channel();
+        {
+            let mut peer = files.lock().unwrap();
+            peer.directories.insert(b"/folder".to_vec());
+            peer.contents
+                .insert(b"/folder/file".to_vec(), content.clone());
+            peer.read_gate = Some(gate.clone());
+            peer.read_started = Some(started);
+        }
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("download");
+        let control = SftpTransferControl::new();
+        let worker_control = control.clone();
+        let worker_target = target.clone();
+        let worker = std::thread::spawn(move || {
+            service.download_path_with_progress_and_path_options(
+                if directory { "/folder" } else { "/folder/file" },
+                &worker_target,
+                worker_control,
+                SftpPathTransferOptions::default(),
+                |_| {},
+            )
+        });
+        let admitted = (0..expected).all(|_| requests.recv_timeout(Duration::from_secs(2)).is_ok());
+        gate.add_permits(4096);
+        if !admitted {
+            control.cancel();
+        }
+        let result = worker.join().unwrap();
+        assert!(
+            admitted,
+            "download did not fill its {expected} request window"
+        );
+        result?;
+        let file = if directory {
+            target.join("file")
+        } else {
+            target
+        };
+        assert_eq!(std::fs::read(file)?, content);
+        assert_eq!(files.lock().unwrap().max_active_reads, expected);
+        assert_eq!(files.lock().unwrap().open_handles, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn uploads_use_full_write_packets_and_wait_for_the_configured_ack_window() -> anyhow::Result<()> {
+    use crate::{SftpTransferControl, SftpTransferOptions};
+    use std::time::Duration;
+    for (packet, depth, compatible, limits, expected) in [
+        (64, None, false, None, 16),
+        (256, None, false, None, 8),
+        (64, Some(4), false, None, 4),
+        (64, Some(64), false, Some([65536, 8192, 16384, 16]), 64),
+        (64, Some(64), true, None, 1),
+    ] {
+        let settings = SftpSettings {
+            pipeline_depth: depth,
+            compatibility_mode: compatible,
+            ..Default::default()
+        };
+        let options = SftpTransferOptions::default().with_buffer_size_bytes(packet * 1024);
+        let parameters = super::tuning::TransferParameters::new(&options, &settings);
+        let (mut service, files) = service_with_config("UTF-8", parameters.client_config(), limits);
+        service.config.sftp = settings;
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let (started, requests) = std::sync::mpsc::channel();
+        {
+            let mut peer = files.lock().unwrap();
+            peer.write_gate = Some(gate.clone());
+            peer.write_started = Some(started);
+        }
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let content = vec![19_u8; 80 * parameters.payload];
+        std::fs::write(&source, &content)?;
+        let control = SftpTransferControl::new();
+        let worker_control = control.clone();
+        let worker = std::thread::spawn(move || {
+            service.upload_file_with_progress_and_control_options(
+                source,
+                "/uploaded",
+                worker_control,
+                options,
+                |_| {},
+            )
+        });
+        let admitted = (0..expected).all(|_| requests.recv_timeout(Duration::from_secs(2)).is_ok());
+        gate.add_permits(16384);
+        if !admitted {
+            control.cancel();
+        }
+        let result = worker.join().unwrap();
+        assert!(admitted, "upload did not fill its {expected} ACK window");
+        result?;
+        let peer = files.lock().unwrap();
+        assert_eq!(peer.max_active_writes, expected);
+        assert_eq!(peer.contents[b"/uploaded".as_slice()], content);
+        let largest = *peer.writes.iter().max().unwrap();
+        assert_eq!(
+            largest,
+            if limits.is_some() {
+                16384
+            } else {
+                parameters.payload
+            }
+        );
+        // The only EXTENDED request permitted here is server-limit discovery.
+        assert_eq!(
+            peer.request_kinds
+                .iter()
+                .filter(|kind| **kind == 200)
+                .count(),
+            usize::from(limits.is_some())
+        );
+        assert_eq!(peer.active_writes, 0);
+        assert_eq!(peer.open_handles, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn downloads_preserve_short_reads_unknown_lengths_and_advertised_server_limits()
+-> anyhow::Result<()> {
+    use crate::{SftpTransferControl, SftpTransferOptions};
+    for unknown in [false, true] {
+        let options = SftpTransferOptions::default().with_buffer_size_bytes(256 * 1024);
+        let settings = SftpSettings {
+            pipeline_depth: Some(4),
+            ..Default::default()
+        };
+        let parameters = super::tuning::TransferParameters::new(&options, &settings);
+        let (mut service, files) = service_with_config(
+            "UTF-8",
+            parameters.client_config(),
+            Some([65536, 8192, 16384, 12]),
+        );
+        service.config.sftp = settings;
+        let content: Vec<_> = (0..300_111).map(|i| (i % 251) as u8).collect();
+        {
+            let mut peer = files.lock().unwrap();
+            peer.contents.insert(b"/file".to_vec(), content.clone());
+            peer.omit_size = unknown;
+            peer.read_limit = Some(3001);
+        }
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("target");
+        let result = service.download_file_with_progress_and_control_options(
+            "/file",
+            &target,
+            SftpTransferControl::new(),
+            options,
+            |_| {},
+        )?;
+        assert_eq!(result.bytes, content.len() as u64);
+        assert_eq!(std::fs::read(target)?, content);
+        let peer = files.lock().unwrap();
+        assert!(peer.reads.iter().all(|(_, length)| *length <= 8192));
+        assert_eq!(peer.open_handles, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn directory_workers_are_automatic_and_respect_server_handles() -> anyhow::Result<()> {
+    use crate::{SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions};
+    use std::time::Duration;
+    for (limits, expected) in [(None, 16), (Some([65536, 8192, 16384, 12]), 4)] {
+        let (mut service, files) = service_with_config("UTF-8", Default::default(), limits);
+        service.config.sftp.compatibility_mode = false;
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let (started, requests) = std::sync::mpsc::channel();
+        {
+            let mut peer = files.lock().unwrap();
+            peer.directories.insert(b"/folder".to_vec());
+            peer.directories.insert(b"/folder/empty".to_vec());
+            for i in 0..80 {
+                peer.contents
+                    .insert(format!("/folder/{i:03}").into_bytes(), vec![i]);
+            }
+            peer.contents
+                .insert(b"/folder/raw-\xff".to_vec(), b"raw".to_vec());
+            peer.read_gate = Some(gate.clone());
+            peer.read_started = Some(started);
+        }
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("target");
+        let worker_target = target.clone();
+        let control = SftpTransferControl::new();
+        let worker_control = control.clone();
+        let options = SftpPathTransferOptions::default()
+            .with_transfer_options(SftpTransferOptions::default().with_download_threads(1));
+        let worker = std::thread::spawn(move || {
+            service.download_path_with_progress_and_path_options(
+                "/folder",
+                worker_target,
+                worker_control,
+                options,
+                |_| {},
+            )
+        });
+        let admitted = (0..expected).all(|_| requests.recv_timeout(Duration::from_secs(2)).is_ok());
+        gate.add_permits(16384);
+        if !admitted {
+            control.cancel();
+        }
+        let result = worker.join().unwrap();
+        assert!(admitted, "directory did not admit {expected} workers");
+        result?;
+        assert!(target.join("empty").is_dir());
+        assert_eq!(std::fs::read_dir(&target)?.count(), 82);
+        for i in 0..80 {
+            assert_eq!(std::fs::read(target.join(format!("{i:03}")))?, vec![i]);
+        }
+        let peer = files.lock().unwrap();
+        assert_eq!(peer.max_active_reads, expected);
+        assert_eq!(peer.max_open_handles, expected);
+        assert_eq!(peer.open_handles, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn mixed_directory_keeps_two_large_file_lanes_and_small_file_workers() -> anyhow::Result<()> {
+    use crate::{SftpPathTransferOptions, SftpTransferControl};
+    use std::time::Duration;
+    let (mut service, files) = service("UTF-8");
+    service.config.sftp.compatibility_mode = false;
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let (started, requests) = std::sync::mpsc::channel();
+    {
+        let mut peer = files.lock().unwrap();
+        peer.directories.insert(b"/folder".to_vec());
+        for i in 0..3 {
+            peer.contents.insert(
+                format!("/folder/large{i}").into_bytes(),
+                vec![i; 10 * 63 * 1024],
+            );
+        }
+        for i in 0..40 {
+            peer.contents
+                .insert(format!("/folder/small{i:02}").into_bytes(), vec![i]);
+        }
+        peer.read_gate = Some(gate.clone());
+        peer.read_started = Some(started);
+    }
+    let root = tempfile::tempdir()?;
+    let target = root.path().join("target");
+    let worker_target = target.clone();
+    let control = SftpTransferControl::new();
+    let worker_control = control.clone();
+    let worker = std::thread::spawn(move || {
+        service.download_path_with_progress_and_path_options(
+            "/folder",
+            worker_target,
+            worker_control,
+            SftpPathTransferOptions::default(),
+            |_| {},
+        )
+    });
+    // 16 workers: two large files with ten ranges each, one awaiting a
+    // large-file lane, and thirteen one-range small files.
+    let admitted = (0..33).all(|_| requests.recv_timeout(Duration::from_secs(2)).is_ok());
+    let large_started = files
+        .lock()
+        .unwrap()
+        .read_paths
+        .iter()
+        .filter(|path| path.starts_with(b"/folder/large"))
+        .count();
+    gate.add_permits(4096);
+    if !admitted {
+        control.cancel();
+    }
+    let result = worker.join().unwrap();
+    assert!(admitted);
+    assert_eq!(large_started, 2);
+    result?;
+    assert_eq!(std::fs::read_dir(target)?.count(), 43);
+    assert_eq!(files.lock().unwrap().open_handles, 0);
+    Ok(())
+}
+
+#[test]
+fn failure_and_cancellation_publish_only_resumable_contiguous_prefixes() -> anyhow::Result<()> {
+    use crate::{SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions};
+    for cancelled in [false, true] {
+        for resume in [false, true] {
+            let (mut service, files) = service("UTF-8");
+            service.config.sftp.compatibility_mode = false;
+            let content = vec![31_u8; 40 * 63 * 1024];
+            {
+                let mut peer = files.lock().unwrap();
+                peer.contents.insert(b"/file".to_vec(), content.clone());
+                if !cancelled {
+                    peer.fail_read_at = Some(2 * 63 * 1024);
+                }
+            }
+            let root = tempfile::tempdir()?;
+            let target = root.path().join("target");
+            let options = SftpPathTransferOptions::default().with_transfer_options(
+                SftpTransferOptions::default().with_resume_broken_transfer(resume),
+            );
+            let control = SftpTransferControl::new();
+            let callback_control = control.clone();
+            assert!(
+                service
+                    .download_path_with_progress_and_path_options(
+                        "/file",
+                        &target,
+                        control,
+                        options.clone(),
+                        move |progress| {
+                            if cancelled && progress.bytes_transferred >= 63 * 1024 {
+                                callback_control.cancel();
+                            }
+                        }
+                    )
+                    .is_err()
+            );
+            assert_eq!(target.exists(), resume);
+            if resume {
+                let prefix = std::fs::read(&target)?;
+                assert!(!prefix.is_empty());
+                assert!(prefix.len() < content.len());
+                assert_eq!(prefix, content[..prefix.len()]);
+            }
+            assert_eq!(std::fs::read_dir(root.path())?.count(), usize::from(resume));
+            files.lock().unwrap().fail_read_at = None;
+            // Reuse the same owner: direct publication must have refreshed identity.
+            service.download_path_with_progress_and_path_options(
+                "/file",
+                &target,
+                SftpTransferControl::new(),
+                options,
+                |_| {},
+            )?;
+            assert_eq!(std::fs::read(&target)?, content);
+            assert_eq!(files.lock().unwrap().open_handles, 0);
+        }
+    }
+    Ok(())
 }
