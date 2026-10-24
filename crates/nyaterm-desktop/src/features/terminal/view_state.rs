@@ -100,6 +100,8 @@ impl TerminalFeatureState {
                     .session_scrollbar_track_bounds
                     .remove(&session_id);
                 let selection = if self.selection.session_id.as_deref() == Some(&session_id) {
+                    self.selection.text.invalidate();
+                    self.selection.source_history = None;
                     self.selection.session_id = None;
                     self.selection.click_anchor = None;
                     self.selection.dragging = false;
@@ -205,6 +207,8 @@ impl TerminalFeatureState {
             if let Some(selection) = entry.selection
                 && self.selection.selection.is_none()
             {
+                self.selection.text.invalidate();
+                self.selection.source_history = None;
                 self.selection.session_id = Some(entry.session_id.clone());
                 self.selection.click_anchor = None;
                 self.selection.selection = Some(selection);
@@ -366,6 +370,8 @@ impl TerminalFeatureState {
                 .insert(new_id.to_string(), residual);
         }
         if self.selection.session_id.as_deref() == Some(old_id) {
+            self.selection.text.invalidate();
+            self.selection.source_history = None;
             self.selection.session_id = Some(new_id.to_string());
         }
         if self.selection.selected_occurrence.session_id.as_deref() == Some(old_id) {

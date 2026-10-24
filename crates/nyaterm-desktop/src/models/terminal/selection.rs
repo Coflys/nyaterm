@@ -14,3 +14,11 @@ impl TerminalCellPos {
 }
 
 pub(crate) use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelection};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalSelectionTextError {
+    MissingSession,
+    StaleHistory,
+    InvalidRange,
+    WorkerUnavailable,
+}

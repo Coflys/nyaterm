@@ -26,6 +26,9 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
+        if self.terminal_has_selection_for_session(&session_id) {
+            self.ensure_terminal_selection_text(cx);
+        }
         let selection_session_id = self
             .terminal
             .selection
@@ -45,17 +48,25 @@ impl NyaTermApp {
         selected: String,
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
-        // Extraction runs on the frame worker. Even an immediate second right
-        // click should show the selection menu while that reply is pending.
-        let selection_pending = self.terminal.selection.all_buffer_text.is_none()
-            && self.terminal.selection.all_buffer_text_task.is_some()
-            && self.terminal.selection.session_id.as_deref() == Some(session_id.as_str())
-            && self
-                .terminal
-                .selection
-                .selection
-                .is_some_and(|selection| selection.all_buffer);
-        let has_selection = !selected.is_empty() || selection_pending;
+        let owns_selection = self.terminal_has_selection_for_session(&session_id);
+        let has_selection = !selected.is_empty() || owns_selection;
+        let text_unavailable = selected.is_empty();
+        let selection_pending = owns_selection
+            && matches!(
+                self.terminal.selection.text.status,
+                crate::features::terminal::state::TerminalSelectionTextStatus::Pending
+            );
+        let copy_request = selection_pending.then(|| {
+            (
+                self.terminal
+                    .selection
+                    .text
+                    .key
+                    .clone()
+                    .expect("pending selection key"),
+                self.terminal.selection.text.generation,
+            )
+        });
         let shortcut = |id: &str, fallback: &str| self.display_shortcut_for(id, fallback);
         let copy_sc = shortcut("terminal.copy", "Ctrl+Shift+C");
         let paste_sc = shortcut("terminal.paste", "Ctrl+Shift+V");
@@ -72,7 +83,12 @@ impl NyaTermApp {
                 NyaMenuItem::action(t!("terminalCtx.copy"))
                     .icon("icons/copy.svg")
                     .shortcut(copy_sc)
+                    .disabled(text_unavailable && !selection_pending)
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some((key, generation)) = copy_request.as_ref() {
+                            this.copy_terminal_selection_request(key, *generation, cx);
+                            return;
+                        }
                         this.copy_text_with_feedback(
                             "copy-terminal-selection",
                             selected_for_copy.clone(),
@@ -129,8 +145,11 @@ impl NyaTermApp {
                 );
             }
 
-            if selection_pending {
-                items = items.into_iter().map(|item| item.disabled(true)).collect();
+            if text_unavailable {
+                // Keep Copy enabled while pending; it binds to this request.
+                for item in items.iter_mut().skip(1) {
+                    *item = item.clone().disabled(true);
+                }
             }
 
             let selected_for_paste = selected.clone();
@@ -148,7 +167,7 @@ impl NyaTermApp {
                 NyaMenuItem::action(t!("terminalCtx.pasteSelectedText"))
                     .icon("icons/menu/paste-go.svg")
                     .shortcut(paste_sel_sc)
-                    .disabled(selection_pending)
+                    .disabled(text_unavailable)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_workspace_pane(paste_selected_session_id.clone(), cx);
                         this.paste_terminal_text(selected_for_paste.clone(), window, cx);
@@ -670,7 +689,7 @@ mod tests {
             app.select_all_terminal(cx);
             let pending = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
             assert!(labels(&pending).contains(&"Copy"));
-            assert!(item(&pending, "Copy").test_presentation().3);
+            assert!(!item(&pending, "Copy").test_presentation().3);
             app.terminal.view.frame_pipeline.flush_for_test();
         });
         cx.run_until_parked();
@@ -708,7 +727,7 @@ mod tests {
         });
         cx.run_until_parked();
         cx.update_entity(&app, |app, cx| {
-            assert!(app.terminal.selection.all_buffer_text.is_none());
+            assert!(app.selected_terminal_text().is_none());
             let items = app.terminal_context_menu_items_for_session("selected-pane".into(), cx);
             assert!(!labels(&items).contains(&"Copy"));
         });

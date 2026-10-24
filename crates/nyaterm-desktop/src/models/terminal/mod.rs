@@ -33,7 +33,11 @@ use super::RecordingWriteHandle;
 use crate::models::recording::ExecutionRecordingEvent;
 
 mod selection;
-pub(crate) use selection::{TerminalBufferCellPos, TerminalCellPos, TerminalSelection};
+#[cfg(test)]
+mod selection_text_tests;
+pub(crate) use selection::{
+    TerminalBufferCellPos, TerminalCellPos, TerminalSelection, TerminalSelectionTextError,
+};
 mod presentation;
 pub(crate) use presentation::{
     TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP, TERMINAL_OUTPUT_VISIBLE_BURST_OVERLOAD,
@@ -1829,6 +1833,23 @@ impl TerminalFramePipeline {
         response_rx
     }
 
+    pub(crate) fn request_selection_text(
+        &self,
+        session_id: String,
+        selection: TerminalSelection,
+        history: nyaterm_terminal::TerminalHistoryState,
+    ) -> oneshot::Receiver<Result<Option<String>, TerminalSelectionTextError>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let _ = self
+            .command_tx
+            .send(TerminalFrameCommand::RequestSelectionText {
+                session_id,
+                request: Box::new(TerminalSelectionTextRequest { selection, history }),
+                response_tx,
+            });
+        response_rx
+    }
+
     pub(crate) fn request_search(
         &self,
         session_id: impl Into<String>,
@@ -2041,6 +2062,11 @@ enum TerminalFrameCommand {
         session_id: String,
         response_tx: oneshot::Sender<Option<String>>,
     },
+    RequestSelectionText {
+        session_id: String,
+        request: Box<TerminalSelectionTextRequest>,
+        response_tx: oneshot::Sender<Result<Option<String>, TerminalSelectionTextError>>,
+    },
     RequestSearch {
         session_id: String,
         purpose: TerminalFrameSearchPurpose,
@@ -2057,6 +2083,12 @@ enum TerminalFrameCommand {
     Fence {
         complete_tx: std::sync::mpsc::SyncSender<()>,
     },
+}
+
+#[derive(Debug)]
+struct TerminalSelectionTextRequest {
+    selection: TerminalSelection,
+    history: nyaterm_terminal::TerminalHistoryState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4011,6 +4043,33 @@ fn run_terminal_frame_processor(
                         let event = session.search_event(session_id, purpose, key);
                         push_event(&event_queue, TerminalFrameEvent::Search(event));
                     }
+                }
+            }
+            TerminalFrameCommand::RequestSelectionText {
+                session_id,
+                request,
+                response_tx,
+            } => {
+                if !response_tx.is_canceled() {
+                    let TerminalSelectionTextRequest { selection, history } = *request;
+                    let text = sessions
+                        .get(&session_id)
+                        .ok_or(TerminalSelectionTextError::MissingSession)
+                        .and_then(|session| {
+                            if !selection.all_buffer
+                                && !session
+                                    .screen
+                                    .history_state()
+                                    .preserves_coordinates_from(history)
+                            {
+                                return Err(TerminalSelectionTextError::StaleHistory);
+                            }
+                            session
+                                .screen
+                                .text_for_selection(selection)
+                                .map_err(|_| TerminalSelectionTextError::InvalidRange)
+                        });
+                    let _ = response_tx.send(text);
                 }
             }
             TerminalFrameCommand::RequestAllText {
