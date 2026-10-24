@@ -137,6 +137,42 @@ def verify_windows_application_binary(data: bytes, artifact: str) -> None:
             f"{artifact} application executable is missing Windows icon resources: "
             + ", ".join(str(value) for value in sorted(missing))
         )
+    if 16 not in resource_ids:
+        raise RuntimeError(f"{artifact} application executable is missing Windows version resource (16)")
+
+
+def windows_version_info(path: Path) -> dict[str, object]:
+    # Pass the filename separately, never interpolate it into PowerShell.
+    return json.loads(subprocess.check_output([
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+        "$ErrorActionPreference = 'Stop'; "
+        "$v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:NYATERM_VERIFY_EXE); "
+        "$v | Select-Object ProductName,FileDescription,ProductVersion,FileVersion,"
+        "FileMajorPart,FileMinorPart,FileBuildPart,FilePrivatePart,"
+        "ProductMajorPart,ProductMinorPart,ProductBuildPart,ProductPrivatePart | ConvertTo-Json -Compress",
+    ], text=True, env={**os.environ, "NYATERM_VERIFY_EXE": str(path.resolve())}))
+
+
+def verify_windows_application_version(path: Path, version: str) -> None:
+    if sys.platform != "win32":
+        return
+    metadata = windows_version_info(path)
+    numeric = package_native.windows_numeric_version(version)
+    expected: dict[str, object] = {
+        "FileDescription": "NyaTerm",
+        "ProductName": "NyaTerm",
+        "FileVersion": numeric,
+        "ProductVersion": version,
+    }
+    for prefix in ("File", "Product"):
+        for part, value in zip(("Major", "Minor", "Build", "Private"), numeric.split(".")):
+            expected[f"{prefix}{part}Part"] = int(value)
+    for key, value in expected.items():
+        if metadata.get(key) != value:
+            raise RuntimeError(
+                f"{path.name} contains the wrong Windows application version metadata: "
+                f"{key}={metadata.get(key)!r}, expected {value!r}"
+            )
 
 
 def elf_machine(data: bytes) -> int:
@@ -274,6 +310,11 @@ def verify_windows_portable(path: Path, target: str, version: str) -> None:
             for relative in conpty_files
         }
         verify_windows_application_binary(binaries["NyaTerm.exe"], path.name)
+        if sys.platform == "win32":
+            with tempfile.TemporaryDirectory() as directory:
+                application = Path(directory) / "NyaTerm.exe"
+                application.write_bytes(binaries["NyaTerm.exe"])
+                verify_windows_application_version(application, version)
     expected_machine = {
         "x86_64-pc-windows-msvc": 0x8664,
         "aarch64-pc-windows-msvc": 0xAA64,
@@ -353,12 +394,7 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
     script = package_native.WORK_DIR / "nyaterm-installer.nsi"
     verify_windows_installer_script(script.read_text(encoding="utf-8"), version)
     if sys.platform == "win32":
-        # Pass the filename separately, never interpolate it into PowerShell.
-        metadata = json.loads(subprocess.check_output([
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-            "$v = (Get-Item -LiteralPath $env:NYATERM_VERIFY_INSTALLER).VersionInfo; "
-            "$v | Select-Object ProductName,FileDescription,ProductVersion,FileVersion | ConvertTo-Json -Compress",
-        ], text=True, env={**os.environ, "NYATERM_VERIFY_INSTALLER": str(path.resolve())}))
+        metadata = windows_version_info(path)
         expected_strings = {
             "ProductName": identity.display_name,
             "FileDescription": f"{identity.display_name} native GPUI terminal",
@@ -400,6 +436,11 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
         missing = required - names
         if missing:
             raise RuntimeError(f"{path.name} is missing installed files: {', '.join(sorted(missing))}")
+        applications = [candidate for candidate in files.values() if candidate.name == "NyaTerm.exe"]
+        if len(applications) != 1:
+            raise RuntimeError(f"{path.name} must contain exactly one NyaTerm.exe")
+        verify_windows_application_binary(applications[0].read_bytes(), path.name)
+        verify_windows_application_version(applications[0], version)
         conpty_required = [
             f"conpty/{relative.as_posix()}" for relative in package_native.conpty_files(target)
         ] + ["conpty/LICENSE.txt"]

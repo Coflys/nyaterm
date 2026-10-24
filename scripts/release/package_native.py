@@ -301,7 +301,12 @@ def archive_zip(source: Path, destination: Path) -> None:
 
 def windows_numeric_version(version: str) -> str:
     parsed = parse_version(version)
-    numeric = [int(parsed.group(key)) for key in ("major", "minor", "patch")] + [0]
+    # Keep in step with nyaterm-app/build.rs. Build metadata never contributes;
+    # a final numeric prerelease identifier distinguishes preview releases.
+    prerelease = parsed.group("pre")
+    revision = prerelease.rsplit(".", 1)[-1] if prerelease else ""
+    numeric = [int(parsed.group(key)) for key in ("major", "minor", "patch")]
+    numeric.append(int(revision) if revision.isascii() and revision.isdecimal() else 0)
     if any(part > 65535 for part in numeric):
         raise ValueError(f"Windows version component exceeds 65535: {version}")
     return ".".join(str(part) for part in numeric)

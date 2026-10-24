@@ -34,6 +34,13 @@ Those member manifests need no edits. Application version strings use
 `CARGO_PKG_VERSION`; native packaging reads the workspace version and generates
 platform version metadata and release manifests automatically.
 
+Windows application and installer numeric versions use four 16-bit components:
+`major.minor.patch.revision`. The revision is the final prerelease identifier if
+it is numeric, otherwise zero: `2.0.0-preview.9` becomes `2.0.0.9`, while `2.0.0`
+and `2.0.0-beta` become `2.0.0.0`. Build metadata is ignored for numeric versions.
+Components above 65535 fail the Windows build or packaging rather than truncate.
+The application's product version retains the full Cargo SemVer string.
+
 Other version values have separate meanings and remain unchanged:
 
 - `nyaterm-otp`, `nyaterm-plugin-api`, and plugin guest packages have independent

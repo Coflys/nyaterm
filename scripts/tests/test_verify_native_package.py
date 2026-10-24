@@ -67,13 +67,14 @@ def write_portable(
     missing_conpty: str | None = None,
     wrong_conpty_machine: bool = False,
     target: str = "x86_64-pc-windows-msvc",
+    application_resources: tuple[int, ...] = (3, 14, 16, 24),
 ) -> None:
     """Build a portable zip whose layout matches package_native's output."""
     root = "NyaTerm-portable"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             f"{root}/NyaTerm.exe",
-            fake_pe(machine, subsystem=2, resource_ids=(3, 14, 24)),
+            fake_pe(machine, subsystem=2, resource_ids=application_resources),
         )
         if helper_machine is not None:
             for name in verify_native_package.helper_filenames(
@@ -100,6 +101,7 @@ def verify_installer_fixture(
     *,
     missing_conpty: str | None = None,
     wrong_conpty_machine: bool = False,
+    application_resources: tuple[int, ...] = (3, 14, 16),
 ) -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -110,7 +112,7 @@ def verify_installer_fixture(
         def extract(command, **kwargs):
             output = Path(command[3][2:])
             entries = {
-                "NyaTerm.exe": fake_pe(0x8664),
+                "NyaTerm.exe": fake_pe(0x8664, subsystem=2, resource_ids=application_resources),
                 "Uninstall.exe": fake_pe(0x8664),
                 "LICENSE": b"license",
                 "VERSION": b"2.0.0\n",
@@ -142,6 +144,27 @@ def verify_installer_fixture(
 
 
 class VerifyNativePackageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Synthetic PE fixtures only contain directory headers. Test metadata
+        # comparisons separately; the Windows resource build test uses real PEs.
+        patcher = mock.patch.object(verify_native_package, "windows_version_info")
+        self.version_info = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.version_info.return_value = self.application_metadata("2.0.0")
+
+    @staticmethod
+    def application_metadata(version: str) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "FileDescription": "NyaTerm", "ProductName": "NyaTerm",
+            "FileVersion": package_native.windows_numeric_version(version),
+            "ProductVersion": version,
+        }
+        for prefix in ("File", "Product"):
+            for part, value in zip(("Major", "Minor", "Build", "Private"),
+                                   package_native.windows_numeric_version(version).split(".")):
+                metadata[f"{prefix}{part}Part"] = int(value)
+        return metadata
+
     def test_archive_paths_reject_parent_traversal_and_absolute_paths(self) -> None:
         for path in ("../secret", "dir/../../secret", "/absolute/file"):
             with self.subTest(path=path), self.assertRaises(RuntimeError):
@@ -155,6 +178,24 @@ class VerifyNativePackageTests(unittest.TestCase):
             verify_native_package.verify_windows_portable(
                 path, "x86_64-pc-windows-msvc", "2.0.0"
             )
+
+    def test_windows_portable_rejects_application_without_version_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portable.zip"
+            write_portable(path, 0x8664, helper_machine=0x8664, application_resources=(3, 14))
+            with self.assertRaisesRegex(RuntimeError, "version resource"):
+                verify_native_package.verify_windows_portable(path, "x86_64-pc-windows-msvc", "2.0.0")
+
+    def test_windows_portable_rejects_application_version_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portable.zip"
+            write_portable(path, 0x8664, helper_machine=0x8664)
+            self.version_info.return_value = self.application_metadata("2.0.1")
+            with (
+                mock.patch.object(verify_native_package.sys, "platform", "win32"),
+                self.assertRaisesRegex(RuntimeError, "FileVersion"),
+            ):
+                verify_native_package.verify_windows_portable(path, "x86_64-pc-windows-msvc", "2.0.0")
 
     def test_windows_arm64_portable_has_matching_conpty_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -219,6 +260,10 @@ class VerifyNativePackageTests(unittest.TestCase):
                 "x86_64-pc-windows-msvc", missing_conpty="x64/conpty.dll",
             )
 
+    def test_windows_installer_rejects_application_without_version_resource(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "version resource"):
+            verify_installer_fixture("x86_64-pc-windows-msvc", application_resources=(3, 14))
+
     def test_windows_installer_rejects_conpty_architecture_mismatch(self) -> None:
         for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
             with self.subTest(target=target), self.assertRaisesRegex(RuntimeError, "ConPTY PE machine"):
@@ -236,7 +281,7 @@ class VerifyNativePackageTests(unittest.TestCase):
                 )
 
     def test_windows_application_requires_gui_subsystem_and_icon_resources(self) -> None:
-        valid = fake_pe(0x8664, subsystem=2, resource_ids=(3, 14, 24))
+        valid = fake_pe(0x8664, subsystem=2, resource_ids=(3, 14, 16, 24))
         verify_native_package.verify_windows_application_binary(valid, "test.exe")
 
         with self.assertRaisesRegex(RuntimeError, "GUI subsystem"):
@@ -251,6 +296,25 @@ class VerifyNativePackageTests(unittest.TestCase):
                     fake_pe(0x8664, subsystem=2, resource_ids=resources),
                     "test.exe",
                 )
+
+    def test_windows_application_requires_version_resource_on_both_architectures(self) -> None:
+        for machine in (0x8664, 0xAA64):
+            with self.subTest(machine=machine), self.assertRaisesRegex(RuntimeError, "version resource"):
+                verify_native_package.verify_windows_application_binary(
+                    fake_pe(machine, subsystem=2, resource_ids=(3, 14)), "test.exe",
+                )
+
+    def test_windows_application_rejects_incorrect_version_strings_and_fixed_versions(self) -> None:
+        with mock.patch.object(verify_native_package.sys, "platform", "win32"):
+            for version in ("2.0.0", "2.0.0-preview.9"):
+                expected = self.application_metadata(version)
+                self.version_info.return_value = expected
+                verify_native_package.verify_windows_application_version(Path("test.exe"), version)
+                for key in expected:
+                    with self.subTest(version=version, field=key):
+                        self.version_info.return_value = {**expected, key: "wrong"}
+                        with self.assertRaisesRegex(RuntimeError, key):
+                            verify_native_package.verify_windows_application_version(Path("test.exe"), version)
 
     def test_macos_archive_validates_both_identities_and_rejects_mismatch(self) -> None:
         for version in ("2.0.0", "2.0.0-preview.1"):
