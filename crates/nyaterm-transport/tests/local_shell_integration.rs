@@ -165,3 +165,114 @@ fn git_bash_reports_cwd_through_conpty() {
         "Git Bash cwd must resolve to the actual Windows directory: cwd_count={cwd_count}, mapped_count={mapped_count}, output_bytes={output_bytes}, error_seen={error_seen}"
     );
 }
+
+#[test]
+#[ignore = "requires WSL with Bash; exercises active ConPTY teardown"]
+fn wsl_active_close_removes_host_files_and_terminates_foreground_processes() {
+    let manager = std::sync::Arc::new(SessionManager::new());
+    let session = manager
+        .create_local_session(LocalSessionConfig {
+            shell_path: Some("wsl.exe".into()),
+            shell_args: ["--exec", "bash", "--noprofile", "--norc", "-i"]
+                .map(str::to_string)
+                .to_vec(),
+            working_dir: Some("/tmp".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let prefix = format!("nyaterm-shell-{}-", session.id);
+    let startup_dir = std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .expect("session owns a host startup directory")
+        .path();
+    let guest_dir = std::process::Command::new("wsl.exe")
+        .args(["--exec", "wslpath", "-u"])
+        .arg(&startup_dir)
+        .output()
+        .unwrap();
+    assert!(guest_dir.status.success());
+    let guest_dir = String::from_utf8(guest_dir.stdout).unwrap();
+    let quoted_dir = format!("'{}'", guest_dir.trim().replace('\'', "'\\''"));
+    let mut terminal = TerminalCore::new(80, 24);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut started = false;
+    while Instant::now() < deadline
+        && !std::fs::metadata(startup_dir.join("foreground.pid")).is_ok_and(|file| file.len() > 0)
+    {
+        for event in manager.drain_events(64).unwrap().events {
+            match event {
+                SessionEvent::Output { data, .. } => {
+                    terminal.advance(&data);
+                    for reply in terminal.take_effects().pty_write {
+                        let _ = manager.write_raw(&session.id, &reply);
+                    }
+                }
+                SessionEvent::CwdChanged { .. } if !started => {
+                    let command = format!(
+                        "printf '%s' \"$$\" > {quoted_dir}/shell.pid; ( printf '%s' \"$BASHPID\" > {quoted_dir}/foreground.pid; exec sleep 120 )\r"
+                    );
+                    manager.write_raw(&session.id, command.as_bytes()).unwrap();
+                    started = true;
+                }
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        startup_dir.join("foreground.pid").is_file(),
+        "controlled foreground process must start"
+    );
+    let pids = ["shell.pid", "foreground.pid"]
+        .map(|file| std::fs::read_to_string(startup_dir.join(file)).unwrap());
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let closing_manager = std::sync::Arc::clone(&manager);
+    let closer = std::thread::spawn(move || {
+        tx.send(closing_manager.close(&session.id).is_ok()).unwrap();
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("WSL ConPTY close must finish promptly")
+    );
+    closer.join().unwrap();
+    assert!(
+        !startup_dir.exists(),
+        "WSL startup files must be removed by the host"
+    );
+    assert!(
+        !manager
+            .drain_events(64)
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::CleanupFailed { .. }))
+    );
+    for pid in pids {
+        assert!(!pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let gone = std::process::Command::new("wsl.exe")
+                .args([
+                    "--exec",
+                    "sh",
+                    "-c",
+                    "! kill -0 \"$1\" 2>/dev/null",
+                    "nyaterm-lifecycle",
+                    &pid,
+                ])
+                .status()
+                .unwrap()
+                .success();
+            if gone {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "WSL shell or foreground process survived ConPTY close"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}

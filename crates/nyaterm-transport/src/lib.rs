@@ -614,6 +614,7 @@ enum ManagedSession {
 pub struct LocalPtyTransport {
     info: SessionInfo,
     cwd_path_style: LocalShellPathStyle,
+    startup_files: Option<tempfile::TempDir>,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: QueuedTransportWriter,
     child: Box<dyn Child + Send + Sync>,
@@ -1116,7 +1117,7 @@ impl SessionManager {
             .map_err(SessionError::OpenPty)?;
 
         let prepared = local_shell_integration::LocalShellIntegration::prepare(&shell, &session_id);
-        let (launch, integration) = match prepared {
+        let (launch, mut integration) = match prepared {
             Some((launch, integration)) => (launch, Some(integration)),
             None => (
                 local_shell::ResolvedLocalShell {
@@ -1130,6 +1131,9 @@ impl SessionManager {
             .as_ref()
             .map(|integration| integration.path_style)
             .unwrap_or_else(|| LocalShellPathStyle::from_program(&shell.program));
+        let startup_files = integration
+            .as_mut()
+            .and_then(|integration| integration.startup_files.take());
         let mut command = launch.command(config.working_dir.as_deref());
         // Startup asynchronously warms the complete shell environment. Copy
         // values from the shared snapshot here without starting another shell.
@@ -1208,6 +1212,7 @@ impl SessionManager {
         let session = LocalPtyTransport {
             info: info.clone(),
             cwd_path_style,
+            startup_files,
             master: Some(pair.master),
             writer,
             child,
@@ -1924,7 +1929,20 @@ impl TerminalTransport for LocalPtyTransport {
         {
             self.report_cleanup_failure(CleanupOperation::ReaderJoin);
         }
-        kill_result.map_err(anyhow::Error::from)
+        // ConPTY teardown and joins must finish before deleting files that a
+        // shell may still have open (notably when closing during rc startup).
+        let startup_cleanup = self
+            .startup_files
+            .take()
+            .map(tempfile::TempDir::close)
+            .transpose();
+        if startup_cleanup.is_err() {
+            self.report_cleanup_failure(CleanupOperation::StartupFiles);
+        }
+        kill_result?;
+        startup_cleanup
+            .map(|_| ())
+            .map_err(|_| anyhow::anyhow!("could not remove local shell startup files"))
     }
 }
 

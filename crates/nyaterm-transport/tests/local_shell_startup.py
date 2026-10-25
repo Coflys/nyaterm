@@ -18,6 +18,8 @@ def check(shell, flags, files, wait_for_input=False, expect_cwd=True):
             target.write_text(contents)
             if name.startswith("bin/"):
                 target.chmod(0o700)
+        startup_dir = root / "startup"
+        startup_dir.mkdir(mode=0o700)
         pid, fd = os.forkpty()
         if pid == 0:
             os.chdir(root)
@@ -26,7 +28,7 @@ def check(shell, flags, files, wait_for_input=False, expect_cwd=True):
                     os.environ.pop(key)
             os.environ.update(HOME=str(root), TMPDIR=str(root), XDG_CONFIG_HOME=str(root / ".config"), TERM="xterm-256color")
             os.environ["PATH"] = str(root / "bin") + ":" + os.environ["PATH"]
-            os.execv("/bin/sh", ["sh", "-c", sys.argv[1], "nyaterm-test", shell, *flags])
+            os.execv("/bin/sh", ["sh", "-c", sys.argv[1], "nyaterm-test", str(startup_dir), "native", shell, *flags])
         data = b""
         sent = False
         exited = False
@@ -72,7 +74,7 @@ def check(shell, flags, files, wait_for_input=False, expect_cwd=True):
                 time.sleep(0.01)
             pid = None
             assert os.waitstatus_to_exitcode(status) == 0, f"{shell}: abnormal exit"
-            assert not list(root.glob("nyaterm-shell.*")), f"{shell}: startup files leaked after exit"
+            assert startup_dir.is_dir(), f"{shell}: shell must not delete host-owned startup files"
         finally:
             os.close(fd)
             if pid is not None:

@@ -9,12 +9,15 @@ use crate::ssh_shell_integration::{
     SshIntegrationOutput, SshShellIntegrationState, build_ssh_ready_marker,
 };
 
+#[cfg(all(test, windows))]
+mod lifecycle_tests;
 #[cfg(test)]
 mod tests;
 
 pub(super) struct LocalShellIntegration {
     state: SshShellIntegrationState,
     pub(super) path_style: LocalShellPathStyle,
+    pub(super) startup_files: Option<tempfile::TempDir>,
 }
 
 impl LocalShellIntegration {
@@ -22,16 +25,17 @@ impl LocalShellIntegration {
         shell: &ResolvedLocalShell,
         session_id: &str,
     ) -> Option<(ResolvedLocalShell, Self)> {
-        let launch = integrated_launch(shell)?;
+        let (launch, startup_files) = integrated_launch(shell, session_id)?;
         let path_style = if program_name(&shell.program) == "wsl" {
             LocalShellPathStyle::Wsl
         } else {
-            LocalShellPathStyle::from_program(&launch.args[3])
+            LocalShellPathStyle::from_program(&launch.program)
         };
         Some((
             launch,
             Self {
                 path_style,
+                startup_files: Some(startup_files),
                 // No ready marker or suppression is needed: the script is a startup
                 // argument, not echoed PTY input. Startup errors and prompts stay visible.
                 state: SshShellIntegrationState::new(
@@ -105,39 +109,63 @@ fn wsl_target(args: &[String]) -> Option<(Vec<String>, String, Vec<String>)> {
     Some((prefix, String::new(), Vec::new()))
 }
 
-fn integrated_launch(shell: &ResolvedLocalShell) -> Option<ResolvedLocalShell> {
+fn integrated_launch(
+    shell: &ResolvedLocalShell,
+    session_id: &str,
+) -> Option<(ResolvedLocalShell, tempfile::TempDir)> {
     let kind = program_name(&shell.program);
     if kind == "wsl" {
         let (mut args, target, target_args) = wsl_target(&shell.args)?;
+        let startup_files = startup_directory(session_id)?;
         args.extend([
             "--exec".into(),
             "/bin/sh".into(),
             "-c".into(),
             startup_script(),
             "nyaterm-local".into(),
+            startup_files.path().to_str()?.into(),
+            "wsl".into(),
             target,
         ]);
         args.extend(target_args);
-        return Some(ResolvedLocalShell {
-            program: shell.program.clone(),
-            args,
-        });
+        return Some((
+            ResolvedLocalShell {
+                program: shell.program.clone(),
+                args,
+            },
+            startup_files,
+        ));
     }
     if !matches!(kind.as_str(), "bash" | "zsh" | "fish") || !interactive_args(&kind, &shell.args) {
         return None;
     }
     let (bootstrap, target) = native_bootstrap(&shell.program)?;
+    let startup_files = startup_directory(session_id)?;
     let mut args = vec![
         "-c".into(),
         startup_script(),
         "nyaterm-local".into(),
+        startup_files.path().to_str()?.replace('\\', "/"),
+        "native".into(),
         target,
     ];
     args.extend(shell.args.clone());
-    Some(ResolvedLocalShell {
-        program: bootstrap,
-        args,
-    })
+    Some((
+        ResolvedLocalShell {
+            program: bootstrap,
+            args,
+        },
+        startup_files,
+    ))
+}
+
+fn startup_directory(session_id: &str) -> Option<tempfile::TempDir> {
+    // Created before spawning, so every failure and session teardown has a host
+    // owner even if TerminateProcess prevents the shell from running traps.
+    tempfile::Builder::new()
+        .prefix(&format!("nyaterm-shell-{session_id}-"))
+        .tempdir()
+        .ok()
 }
 
 fn native_bootstrap(program: &str) -> Option<(String, String)> {

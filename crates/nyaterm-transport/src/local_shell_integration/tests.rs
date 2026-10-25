@@ -35,6 +35,27 @@ fn commands_scripts_and_unknown_options_are_never_rewritten() {
 }
 
 #[test]
+fn startup_files_are_owned_before_spawn_and_removed_when_preparation_is_dropped() {
+    let (launch, integration) =
+        LocalShellIntegration::prepare(&shell("wsl.exe", &[]), "test").unwrap();
+    let directory = integration
+        .startup_files
+        .as_ref()
+        .unwrap()
+        .path()
+        .to_path_buf();
+    assert!(directory.is_dir());
+    assert!(
+        launch
+            .args
+            .iter()
+            .any(|arg| std::path::Path::new(arg) == directory)
+    );
+    drop(integration);
+    assert!(!directory.exists());
+}
+
+#[test]
 fn wsl_preserves_selectors_and_the_explicit_shell() {
     let args = shell(
         "wsl",

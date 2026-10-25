@@ -84,6 +84,18 @@ jobs:
         with:
           extra_packages: zsh fish
 
+      # Keep lifecycle regressions independent of unrelated workspace failures.
+      - name: Test Windows local shell lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source)
+          $env:NYATERM_TEST_POSIX_SHELL = Join-Path $gitRoot 'bin/bash.exe'
+          if (!(Test-Path -LiteralPath $env:NYATERM_TEST_POSIX_SHELL)) {
+            throw 'Git Bash is required for the ConPTY lifecycle regressions'
+          }
+          cargo test -p nyaterm-transport --lib local_shell_integration::lifecycle_tests --locked -- --ignored --test-threads=1
+
       # --no-fail-fast so one crate's failure stops masking every crate after it.
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
