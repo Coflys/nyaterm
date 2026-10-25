@@ -1,236 +1,174 @@
-//! Local shell integration: local PTYs receive the same prompt script SSH
-//! uploads, so POSIX shells under Windows (WSL, Git Bash) report OSC 7 working
-//! directories and OSC 133 command boundaries without rc-file setup.
+//! Local integration is installed through shell startup hooks, never PTY input.
+//! Unrecognized launch modes retain their original command and byte stream.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::path::{Path, PathBuf};
 
-use super::local_shell::ResolvedLocalShell;
-use super::ssh_shell_integration::{
-    PreparedSshShellIntegration, ShellIntegrationMode, ShellKind, SshIntegrationOutput,
-    SshShellIntegrationState, build_legacy_ssh_ready_marker, build_ssh_ready_marker,
-    prepare_shell_integration,
+use crate::file_browser::LocalShellPathStyle;
+use crate::local_shell::ResolvedLocalShell;
+use crate::ssh_shell_integration::{
+    SshIntegrationOutput, SshShellIntegrationState, build_ssh_ready_marker,
 };
-use crate::{TransportWriterCommand, WriterMailbox};
 
-/// Mirrors the SSH initial delay so the shell prompt is reading stdin before
-/// the script arrives.
-const LOCAL_INJECT_DELAY: Duration = Duration::from_millis(500);
+#[cfg(test)]
+mod tests;
 
-/// WSL cold boot (VM start, distro init) can take well over the SSH window;
-/// without the wider window the suppression expires first and the injected
-/// script echo becomes visible in the terminal.
-const LOCAL_INTEGRATION_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// ConPTY keeps a virtual screen and repaints with absolute cursor positions.
-/// The suppressed echo leaves rows behind in that screen that never reach the
-/// emulator, so reset the screen while suppression still hides it; otherwise
-/// later prompts are painted far below the last visible line.
-const LOCAL_SCREEN_RESET: &str = "printf '\\033[2J\\033[H'; ";
-
-const READY_MARKER_PRINTF: &str = "printf '\\033]7777;NyaTermReady:";
-
-#[derive(Clone)]
 pub(super) struct LocalShellIntegration {
-    state: Arc<Mutex<SshShellIntegrationState>>,
-    integration: PreparedSshShellIntegration,
+    state: SshShellIntegrationState,
+    pub(super) path_style: LocalShellPathStyle,
 }
 
 impl LocalShellIntegration {
-    pub(super) fn prepare(shell: &ResolvedLocalShell, session_id: &str) -> Option<Self> {
-        let kind = local_shell_kind(shell)?;
-        let ready_marker = build_ssh_ready_marker(session_id);
-        let legacy_ready_marker = build_legacy_ssh_ready_marker(&ready_marker);
-        let integration =
-            prepare_shell_integration(kind, &ready_marker, ShellIntegrationMode::Full)?;
-        let mut state = SshShellIntegrationState::new(
-            Some(integration.clone()),
-            ready_marker,
-            legacy_ready_marker,
-        );
-        state.set_integration_timeout(LOCAL_INTEGRATION_TIMEOUT);
-        state.enable_control_passthrough();
-        // A warm shell prints its first prompt before the injection lands; start
-        // suppressing at session creation so that prompt cannot leak.
-        state.begin_suppression();
-        Some(Self {
-            state: Arc::new(Mutex::new(state)),
-            integration,
-        })
+    pub(super) fn prepare(
+        shell: &ResolvedLocalShell,
+        session_id: &str,
+    ) -> Option<(ResolvedLocalShell, Self)> {
+        let launch = integrated_launch(shell)?;
+        let path_style = if program_name(&shell.program) == "wsl" {
+            LocalShellPathStyle::Wsl
+        } else {
+            LocalShellPathStyle::from_program(&launch.args[3])
+        };
+        Some((
+            launch,
+            Self {
+                path_style,
+                // No ready marker or suppression is needed: the script is a startup
+                // argument, not echoed PTY input. Startup errors and prompts stay visible.
+                state: SshShellIntegrationState::new(
+                    None,
+                    build_ssh_ready_marker(session_id),
+                    None,
+                ),
+            },
+        ))
     }
 
-    pub(super) fn filter(&self, bytes: &[u8]) -> SshIntegrationOutput {
-        self.lock().filter_output(bytes)
-    }
-
-    /// Detached worker: session teardown never waits for the injection delay.
-    pub(super) fn spawn_injector(&self, mailbox: WriterMailbox, session_id: &str) {
-        let integration = self.clone();
-        let worker_name = format!("transport-local-injection-{session_id}");
-        let _ = nyaterm_core::runtime::worker::spawn(worker_name, move || {
-            std::thread::sleep(LOCAL_INJECT_DELAY);
-            integration.inject_now(mailbox);
-        });
-    }
-
-    pub(super) fn inject_now(&self, mailbox: WriterMailbox) {
-        let script = String::from_utf8(self.integration.inline_script())
-            .expect("prepared shell integration script is UTF-8");
-        // PTY canonical input ends a line on CR (ICRNL), the same encoding Enter
-        // keystrokes use; bare LF bytes depend on console input translation.
-        let script = script.replace("\r\n", "\r").replace('\n', "\r");
-        let script = insert_screen_reset(script);
-        {
-            let mut state = self.lock();
-            state.take_pending_integration();
-            state.begin_suppression();
-        }
-        if let Err(error) = mailbox.send(TransportWriterCommand::Write(script.into_bytes())) {
-            tracing::warn!(%error, "local shell integration injection write failed");
-        }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, SshShellIntegrationState> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    pub(super) fn filter(&mut self, bytes: &[u8]) -> SshIntegrationOutput {
+        self.state.filter_output(bytes)
     }
 }
 
-fn insert_screen_reset(mut script: String) -> String {
-    if let Some(index) = script.rfind(READY_MARKER_PRINTF) {
-        script.insert_str(index, LOCAL_SCREEN_RESET);
-    }
-    script
-}
-
-/// Shells whose prompt scripts NyaTerm ships; `None` keeps today's behavior
-/// (raw output, no markers).
-fn local_shell_kind(shell: &ResolvedLocalShell) -> Option<ShellKind> {
-    let program = shell
-        .program
+fn program_name(program: &str) -> String {
+    let name = program
         .rsplit(['/', '\\'])
         .next()
-        .unwrap_or(&shell.program)
+        .unwrap_or(program)
         .to_ascii_lowercase();
-    let file_name = program.strip_suffix(".exe").unwrap_or(&program);
-    // The WSL launcher starts the distro default shell, normally bash.
-    if file_name == "wsl" {
-        return Some(ShellKind::Bash);
-    }
-    match ShellKind::from_name(file_name) {
-        kind @ (ShellKind::Bash | ShellKind::Zsh | ShellKind::Fish) => Some(kind),
-        ShellKind::PosixSh | ShellKind::Unknown => None,
-    }
+    name.strip_suffix(".exe").unwrap_or(&name).to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use base64::Engine as _;
+fn interactive_args(kind: &str, args: &[String]) -> bool {
+    // This deliberately accepts only known startup switches. Commands, scripts,
+    // option values, '--', and unfamiliar switches must not be rewritten.
+    args.iter().all(|arg| {
+        matches!(arg.as_str(), "--login" | "--interactive")
+            || (kind == "bash" && matches!(arg.as_str(), "--noprofile" | "--norc"))
+            || (kind == "fish" && arg == "--no-config")
+            || (arg.starts_with('-')
+                && arg.len() > 1
+                && arg[1..].chars().all(|c| matches!(c, 'i' | 'l')))
+    })
+}
 
-    use super::{
-        LOCAL_INTEGRATION_TIMEOUT, LocalShellIntegration, ResolvedLocalShell, ShellKind,
-        TransportWriterCommand, WriterMailbox, local_shell_kind,
-    };
-    use crate::ssh_shell_integration::SSH_INTEGRATION_TIMEOUT;
-
-    fn shell(program: &str) -> ResolvedLocalShell {
-        ResolvedLocalShell {
-            program: program.to_string(),
-            args: Vec::new(),
+fn wsl_target(args: &[String]) -> Option<(Vec<String>, String, Vec<String>)> {
+    let mut prefix = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if matches!(arg.as_str(), "--exec" | "-e" | "--") {
+            let program = args.get(index + 1)?;
+            let kind = program_name(program);
+            let rest = &args[index + 2..];
+            return (matches!(kind.as_str(), "bash" | "zsh" | "fish")
+                && interactive_args(&kind, rest))
+            .then(|| (prefix, program.clone(), rest.to_vec()));
+        }
+        if matches!(
+            arg.as_str(),
+            "--distribution" | "-d" | "--user" | "-u" | "--cd"
+        ) {
+            prefix.push(arg.clone());
+            prefix.push(args.get(index + 1)?.clone());
+            index += 2;
+        } else if ["--distribution=", "--user=", "--cd="]
+            .iter()
+            .any(|name| arg.starts_with(name) && arg.len() > name.len())
+        {
+            prefix.push(arg.clone());
+            index += 1;
+        } else {
+            return None;
         }
     }
+    // The guest bootstrap discovers the selected user's login shell. Never
+    // infer Bash from the Windows launcher name or the host environment.
+    Some((prefix, String::new(), Vec::new()))
+}
 
-    #[test]
-    fn injectable_shell_detection_covers_launchers_and_posix_paths() {
-        assert_eq!(local_shell_kind(&shell("wsl.exe")), Some(ShellKind::Bash));
-        assert_eq!(
-            local_shell_kind(&shell(r"C:\Program Files\WSL\wsl.exe")),
-            Some(ShellKind::Bash)
-        );
-        assert_eq!(local_shell_kind(&shell("bash.exe")), Some(ShellKind::Bash));
-        assert_eq!(
-            local_shell_kind(&shell("/usr/bin/zsh")),
-            Some(ShellKind::Zsh)
-        );
-        assert_eq!(local_shell_kind(&shell("fish.exe")), Some(ShellKind::Fish));
-        assert_eq!(local_shell_kind(&shell("powershell.exe")), None);
-        assert_eq!(local_shell_kind(&shell("pwsh")), None);
-        assert_eq!(local_shell_kind(&shell("cmd.exe")), None);
-        assert_eq!(local_shell_kind(&shell("/bin/sh")), None);
+fn integrated_launch(shell: &ResolvedLocalShell) -> Option<ResolvedLocalShell> {
+    let kind = program_name(&shell.program);
+    if kind == "wsl" {
+        let (mut args, target, target_args) = wsl_target(&shell.args)?;
+        args.extend([
+            "--exec".into(),
+            "/bin/sh".into(),
+            "-c".into(),
+            startup_script(),
+            "nyaterm-local".into(),
+            target,
+        ]);
+        args.extend(target_args);
+        return Some(ResolvedLocalShell {
+            program: shell.program.clone(),
+            args,
+        });
     }
-
-    #[test]
-    fn injection_suppresses_startup_noise_until_the_ready_marker_reports_cwd() {
-        let integration = LocalShellIntegration::prepare(&shell("wsl.exe"), "session-1").unwrap();
-
-        let output = integration.filter(b"before\r\n");
-        assert!(output.visible.is_empty());
-
-        let mailbox = WriterMailbox::default();
-        integration.inject_now(mailbox.clone());
-        let (command, _permit) = mailbox.receive(None).unwrap().unwrap();
-        let TransportWriterCommand::Write(script) = command else {
-            panic!("injection writes a shell script");
-        };
-        let script = String::from_utf8(script).unwrap();
-        assert!(script.contains("NyaTermReady:session-1"));
-        assert!(script.contains("file://"));
-        assert!(!script.contains('\n'));
-
-        let output = integration.filter(b"shell startup noise");
-        assert!(output.visible.is_empty());
-
-        let output = integration.filter(b"prompt\x1b]7777;NyaTermReady:session-1\x07> ");
-        assert_eq!(output.visible, b"> ");
-
-        let output = integration.filter(b"\x1b]7;file://host/mnt/d/Codes\x07dir>");
-        assert_eq!(output.cwd_paths, ["/mnt/d/Codes"]);
-        assert_eq!(output.visible, b"dir>");
-
-        let encoded = base64::engine::general_purpose::STANDARD.encode("ls -la");
-        let output =
-            integration.filter(format!("\x1b]7777;NyaTermCommand:{encoded}\x07").as_bytes());
-        assert_eq!(output.accepted_commands, ["ls -la"]);
+    if !matches!(kind.as_str(), "bash" | "zsh" | "fish") || !interactive_args(&kind, &shell.args) {
+        return None;
     }
+    let (bootstrap, target) = native_bootstrap(&shell.program)?;
+    let mut args = vec![
+        "-c".into(),
+        startup_script(),
+        "nyaterm-local".into(),
+        target,
+    ];
+    args.extend(shell.args.clone());
+    Some(ResolvedLocalShell {
+        program: bootstrap,
+        args,
+    })
+}
 
-    #[test]
-    fn uninjectable_shells_keep_raw_local_output() {
-        assert!(LocalShellIntegration::prepare(&shell("cmd.exe"), "session-2").is_none());
-        assert!(LocalShellIntegration::prepare(&shell("powershell.exe"), "session-2").is_none());
+fn native_bootstrap(program: &str) -> Option<(String, String)> {
+    if !cfg!(windows) {
+        return Some(("/bin/sh".into(), program.into()));
     }
+    // Use the same POSIX installation, never a different sh found on PATH.
+    // In particular WindowsApps' legacy bash.exe launcher has no sibling sh.
+    let path = Path::new(program);
+    let executable = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH")?).find_map(|directory| {
+            let candidate = directory.join(program);
+            let candidate = if candidate.extension().is_none() {
+                candidate.with_extension("exe")
+            } else {
+                candidate
+            };
+            candidate.is_file().then_some(candidate)
+        })?
+    };
+    let bootstrap: PathBuf = executable.parent()?.join("sh.exe");
+    bootstrap.is_file().then(|| {
+        (
+            bootstrap.to_string_lossy().into_owned(),
+            executable.to_string_lossy().replace('\\', "/"),
+        )
+    })
+}
 
-    #[test]
-    fn suppression_forwards_terminal_queries_to_the_emulator() {
-        let integration = LocalShellIntegration::prepare(&shell("wsl.exe"), "session-4").unwrap();
-
-        let output = integration.filter(b"\x1b[6nstartup noise");
-        assert_eq!(output.visible, b"\x1b[6n");
-        assert!(output.cwd_paths.is_empty());
-    }
-
-    #[test]
-    fn injection_resets_the_conpty_screen_before_the_ready_marker() {
-        let integration = LocalShellIntegration::prepare(&shell("wsl.exe"), "session-6").unwrap();
-
-        let mailbox = WriterMailbox::default();
-        integration.inject_now(mailbox.clone());
-        let (command, _permit) = mailbox.receive(None).unwrap().unwrap();
-        let TransportWriterCommand::Write(script) = command else {
-            panic!("injection writes a shell script");
-        };
-        let script = String::from_utf8(script).unwrap();
-
-        let reset = script.find("\\033[2J").expect("screen reset");
-        let ready = script
-            .rfind("NyaTermReady:session-6")
-            .expect("ready marker");
-        assert!(reset < ready);
-    }
-
-    #[test]
-    fn local_suppression_outlives_wsl_cold_boot() {
-        let integration = LocalShellIntegration::prepare(&shell("wsl.exe"), "session-3").unwrap();
-        let timeout = integration.lock().integration_timeout();
-        assert_eq!(timeout, LOCAL_INTEGRATION_TIMEOUT);
-        assert!(timeout > SSH_INTEGRATION_TIMEOUT);
-    }
+fn startup_script() -> String {
+    include_str!("local_shell_integration/startup.sh").replace("\r\n", "\n")
 }

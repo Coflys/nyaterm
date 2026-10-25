@@ -3,7 +3,7 @@
 
 use gpui::Context;
 use nyaterm_transport::{
-    FileBrowserBackendKind, SftpCwdFollowMode, file_browser_path_eq,
+    FileBrowserBackendKind, LocalShellPathStyle, SftpCwdFollowMode, file_browser_path_eq,
     local_shell_cwd_to_browser_path,
 };
 use rust_i18n::t;
@@ -33,10 +33,14 @@ pub(super) fn cwd_paths_equal(backend: FileBrowserBackendKind, left: &str, right
 
 /// WSL, Git Bash, and drive-letter OSC 7 payloads report POSIX paths the
 /// Windows local browser cannot list; only a Windows host may translate them.
-fn translate_local_browser_cwd(backend: Option<FileBrowserBackendKind>, cwd: String) -> String {
+fn translate_local_browser_cwd(
+    backend: FileBrowserBackendKind,
+    style: LocalShellPathStyle,
+    cwd: String,
+) -> String {
     match backend {
-        Some(FileBrowserBackendKind::Local) if cfg!(target_os = "windows") => {
-            local_shell_cwd_to_browser_path(&cwd).unwrap_or(cwd)
+        FileBrowserBackendKind::Local if cfg!(target_os = "windows") => {
+            local_shell_cwd_to_browser_path(style, &cwd).unwrap_or(cwd)
         }
         _ => cwd,
     }
@@ -58,7 +62,6 @@ impl NyaTermApp {
         let backend = self
             .session
             .file_browser_backend_support_for_session(session_id);
-        let cwd = translate_local_browser_cwd(backend, cwd);
         let equivalent = backend
             .zip(self.session.cwd(session_id))
             .is_some_and(|(backend, previous)| cwd_paths_equal(backend, previous, &cwd));
@@ -122,10 +125,27 @@ impl NyaTermApp {
             matches!(&metadata.launch_config, SessionLaunchConfig::Ssh(config)
                 if config.sftp.cwd_follow_mode == SftpCwdFollowMode::Off)
         });
+        let style = self
+            .session
+            .manager()
+            .local_shell_path_style(&session_id)
+            .or_else(|| {
+                self.session.metadata(&session_id).and_then(|metadata| {
+                    match &metadata.launch_config {
+                        SessionLaunchConfig::Local(config) => config
+                            .shell_path
+                            .as_deref()
+                            .map(LocalShellPathStyle::from_program),
+                        _ => None,
+                    }
+                })
+            })
+            .unwrap_or_default();
         let cwd = self
             .session
             .cwd(&session_id)
             .map(str::trim)
+            .map(|cwd| translate_local_browser_cwd(backend, style, cwd.to_string()))
             .filter(|cwd| {
                 !follow_disabled
                     && !cwd.is_empty()
@@ -133,8 +153,7 @@ impl NyaTermApp {
                         FileBrowserBackendKind::Remote => cwd.starts_with('/'),
                         FileBrowserBackendKind::Local => std::path::Path::new(cwd).is_absolute(),
                     }
-            })
-            .map(str::to_string);
+            });
         let Some(cwd) = cwd else {
             if reason == TransferCwdSyncReason::Explicit {
                 self.transfer.set_browser_status(if follow_disabled {

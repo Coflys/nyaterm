@@ -95,7 +95,7 @@ pub use environment::{
     normalize_environment_variable_name,
 };
 pub use file_browser::{
-    FileBrowserBackendKind, FileBrowserCapabilities, FileBrowserService,
+    FileBrowserBackendKind, FileBrowserCapabilities, FileBrowserService, LocalShellPathStyle,
     file_browser_copy_destination_invalid, file_browser_identity, file_browser_join,
     file_browser_name, file_browser_parent, file_browser_path_eq, file_browser_path_is_root,
     file_browser_root, local_shell_cwd_to_browser_path, valid_file_browser_child_name,
@@ -613,6 +613,7 @@ enum ManagedSession {
 
 pub struct LocalPtyTransport {
     info: SessionInfo,
+    cwd_path_style: LocalShellPathStyle,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: QueuedTransportWriter,
     child: Box<dyn Child + Send + Sync>,
@@ -1074,6 +1075,15 @@ impl SessionManager {
         Arc::clone(&self.shell_environment)
     }
 
+    /// Namespace of the resolved launcher, including Windows Terminal aliases.
+    pub fn local_shell_path_style(&self, session_id: &str) -> Option<LocalShellPathStyle> {
+        let sessions = self.sessions.lock().ok()?;
+        match sessions.get(session_id)? {
+            ManagedSession::Local(session) => Some(session.cwd_path_style),
+            _ => None,
+        }
+    }
+
     pub fn create_local_session(
         &self,
         config: LocalSessionConfig,
@@ -1105,7 +1115,22 @@ impl SessionManager {
             ))
             .map_err(SessionError::OpenPty)?;
 
-        let mut command = shell.command(config.working_dir.as_deref());
+        let prepared = local_shell_integration::LocalShellIntegration::prepare(&shell, &session_id);
+        let (launch, integration) = match prepared {
+            Some((launch, integration)) => (launch, Some(integration)),
+            None => (
+                local_shell::ResolvedLocalShell {
+                    program: shell.program.clone(),
+                    args: shell.args.clone(),
+                },
+                None,
+            ),
+        };
+        let cwd_path_style = integration
+            .as_ref()
+            .map(|integration| integration.path_style)
+            .unwrap_or_else(|| LocalShellPathStyle::from_program(&shell.program));
+        let mut command = launch.command(config.working_dir.as_deref());
         // Startup asynchronously warms the complete shell environment. Copy
         // values from the shared snapshot here without starting another shell.
         // If a terminal is created before warm-up finishes, retain portable-pty's
@@ -1162,13 +1187,11 @@ impl SessionManager {
                 return Err(SessionError::Worker(error));
             }
         };
-        let integration =
-            local_shell_integration::LocalShellIntegration::prepare(&shell, &session_id);
         let reader_thread = match spawn_reader_thread(
             session_id.clone(),
             reader,
             self.event_queue.clone(),
-            integration.clone(),
+            integration,
         ) {
             Ok(reader) => reader,
             Err(error) => {
@@ -1182,11 +1205,9 @@ impl SessionManager {
                 return Err(SessionError::Worker(error));
             }
         };
-        if let Some(integration) = integration.as_ref() {
-            integration.spawn_injector(writer.command_tx.clone(), &session_id);
-        }
         let session = LocalPtyTransport {
             info: info.clone(),
+            cwd_path_style,
             master: Some(pair.master),
             writer,
             child,
@@ -2074,7 +2095,7 @@ fn spawn_reader_thread(
     session_id: String,
     mut reader: Box<dyn Read + Send>,
     event_queue: SessionEventQueue,
-    integration: Option<local_shell_integration::LocalShellIntegration>,
+    mut integration: Option<local_shell_integration::LocalShellIntegration>,
 ) -> std::io::Result<JoinHandle<()>> {
     nyaterm_core::runtime::worker::spawn(format!("transport-reader-{session_id}"), move || {
         let mut buffer = [0_u8; 8192];
@@ -2088,7 +2109,7 @@ fn spawn_reader_thread(
                     break;
                 }
                 Ok(read) => {
-                    let output = match &integration {
+                    let output = match &mut integration {
                         Some(integration) => integration.filter(&buffer[..read]),
                         None => SshIntegrationOutput {
                             visible: buffer[..read].to_vec(),
