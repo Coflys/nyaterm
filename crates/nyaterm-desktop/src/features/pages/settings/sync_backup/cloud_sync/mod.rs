@@ -396,7 +396,7 @@ impl SettingsPanel {
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.syncProviderConfig")),
-                Some(t!("settings.syncProviderConfigDesc")),
+                None,
                 div()
                     .flex()
                     .flex_col()
@@ -463,7 +463,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.syncProvider"),
-                        Some(SharedString::from(t!("settings.syncProviderDesc"))),
+                        None,
                         self.cloud_sync_provider_select(&active_cloud_provider, form_enabled, cx),
                     ))
                     .child(settings_form_row(
@@ -495,7 +495,7 @@ impl SettingsPanel {
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.autoSyncStrategy")),
-                Some(t!("settings.autoSyncStrategyDesc")),
+                None,
                 div()
                     .flex()
                     .flex_col()
@@ -503,7 +503,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.autoCheckOnStartup"),
-                        Some(SharedString::from(t!("settings.autoCheckOnStartupDesc"))),
+                        None,
                         settings_switch_with_enabled(
                             palette,
                             "cloud-auto-check",
@@ -671,7 +671,7 @@ impl SettingsPanel {
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.syncConflictSection")),
-                Some(t!("settings.syncConflictSectionDesc")),
+                None,
                 if let Some(conflict) = cloud_conflict {
                     self.cloud_sync_conflict_banner(conflict, cx)
                         .into_any_element()

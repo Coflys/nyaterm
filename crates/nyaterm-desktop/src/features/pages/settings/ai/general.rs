@@ -1,8 +1,8 @@
 use super::super::{settings_form_row, settings_switch};
 use super::{ai_card, ai_field};
 use crate::features::pages::settings::panel::SettingsPanel;
-use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
-use nyaterm_ui::NyaSelectOption;
+use gpui::{Context, IntoElement, div, prelude::*, px, rgb, svg};
+use nyaterm_ui::{NyaSelectOption, NyaTooltip};
 use rust_i18n::t;
 
 impl SettingsPanel {
@@ -225,15 +225,28 @@ impl SettingsPanel {
                 palette,
                 t!("ai.smartAutoExecuteMaxRisk"),
                 Some(t!("ai.smartAutoExecuteMaxRiskDesc").into()),
-                risk,
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().child(risk))
+                    .child(
+                        div()
+                            .id("ai-smart-risk-help")
+                            .flex()
+                            .items_center()
+                            .child(
+                                svg()
+                                    .size(px(14.))
+                                    .path("icons/menu/info.svg")
+                                    .text_color(rgb(palette.text_dimmed)),
+                            )
+                            .tooltip(|window, cx| {
+                                NyaTooltip::new(t!("ai.smartAutoExecuteRiskHelp")).build(window, cx)
+                            }),
+                    ),
             ))
             .child(params)
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(t!("ai.agentMaxStepsDesc")),
-            )
             .child(
                 div()
                     .text_size(px(12.))

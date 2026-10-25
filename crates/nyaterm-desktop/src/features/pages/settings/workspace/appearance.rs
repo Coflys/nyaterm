@@ -196,9 +196,7 @@ impl SettingsPanel {
                         .child(appearance_settings_field(
                             palette,
                             t!("settings.backgroundImageFit"),
-                            Some(SharedString::from(
-                                t!("settings.backgroundImageFitDesc"),
-                            )),
+                            None,
                             self.appearance_background_fit_select(has_image, cx),
                         ))
                         .child(self.appearance_opacity_slider(AppearanceOpacity::Image, has_image, cx))
@@ -319,15 +317,13 @@ impl SettingsPanel {
                 .child(appearance_settings_field(
                     palette,
                     t!("settings.terminalFontWeight"),
-                    Some(SharedString::from(t!("settings.terminalFontWeightDesc"))),
+                    None,
                     self.appearance_font_weight_select(false, cx),
                 ))
                 .child(appearance_settings_field(
                     palette,
                     t!("settings.terminalFontWeightBold"),
-                    Some(SharedString::from(t!(
-                        "settings.terminalFontWeightBoldDesc"
-                    ))),
+                    None,
                     self.appearance_font_weight_select(true, cx),
                 ));
         } else {

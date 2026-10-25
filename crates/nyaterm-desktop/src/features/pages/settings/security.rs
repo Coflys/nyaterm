@@ -45,9 +45,7 @@ impl SettingsPanel {
         let master_input_desc = t!("settings.masterPasswordDesc");
         let session_security_label = t!("settings.sessionSecurity");
         let startup_lock_label = t!("settings.enableStartupLock");
-        let startup_lock_desc = t!("settings.enableStartupLockDesc");
         let idle_lock_switch_label = t!("settings.enableIdleLock");
-        let idle_lock_switch_desc = t!("settings.enableIdleLockDesc");
         let idle_lock_label = t!("settings.idleLockMinutes");
         let idle_lock_desc = t!("settings.idleLockMinutesDesc");
         let _minutes_label = t!("common.minutes");
@@ -117,7 +115,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         startup_lock_label,
-                        Some(SharedString::from(startup_lock_desc)),
+                        None,
                         settings_switch(
                             palette,
                             "settings-startup-lock-enabled",
@@ -130,7 +128,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         idle_lock_switch_label,
-                        Some(SharedString::from(idle_lock_switch_desc)),
+                        None,
                         settings_switch(
                             palette,
                             "settings-idle-lock-enabled",
