@@ -17,7 +17,9 @@ use crate::models::{CloudSyncConflictState, CloudSyncInputField, SettingsTab};
 use crate::theme::ThemePalette;
 use crate::widgets::small_button;
 
-use super::super::{settings_form_row, settings_form_section, settings_switch_with_enabled};
+use super::super::{
+    settings_form_row, settings_form_section, settings_input_control, settings_switch_with_enabled,
+};
 
 mod providers;
 impl SettingsPanel {
@@ -65,13 +67,8 @@ impl SettingsPanel {
             label,
             false,
         );
-        // A settings row's control slot is content-sized, and a box with nothing
-        // typed in it has no content — so the width comes from here.
-        div()
-            .w(px(260.))
-            .flex()
+        settings_input_control(input)
             .opacity(if enabled { 1.0 } else { 0.45 })
-            .child(div().min_w_0().flex_1().child(input))
             .into_any_element()
     }
 

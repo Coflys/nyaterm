@@ -7,7 +7,8 @@ use crate::features::pages::settings::panel::SettingsPanel;
 use nyaterm_ui::NyaTooltip;
 
 use super::{
-    settings_form_row, settings_form_section, settings_switch, settings_switch_with_enabled,
+    settings_form_row, settings_form_section, settings_input_control, settings_switch,
+    settings_switch_with_enabled,
 };
 
 impl SettingsPanel {
@@ -101,13 +102,8 @@ impl SettingsPanel {
                         palette,
                         master_input_label,
                         Some(SharedString::from(master_input_desc)),
-                        div()
-                            // The row's control slot is content-sized, and a box
-                            // with nothing typed in it has no content.
-                            .w(px(260.))
-                            .flex()
-                            .opacity(if master_password_enabled { 1.0 } else { 0.45 })
-                            .child(div().min_w_0().flex_1().child(master_password_input)),
+                        settings_input_control(master_password_input)
+                            .opacity(if master_password_enabled { 1.0 } else { 0.45 }),
                     )),
             ))
             .child(settings_form_section(

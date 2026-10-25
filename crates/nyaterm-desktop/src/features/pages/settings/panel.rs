@@ -768,7 +768,6 @@ impl SettingsPanel {
         div()
             .id(id)
             .w_full()
-            .max_w(px(360.))
             .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
             .child(NyaSelect::new(&select))
     }
@@ -796,7 +795,6 @@ impl SettingsPanel {
         div()
             .id(id)
             .w_full()
-            .max_w(px(360.))
             .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
             .child(select_element)
     }
@@ -813,10 +811,13 @@ impl SettingsPanel {
         I: Into<SharedString>,
         S: Into<String>,
     {
-        div()
-            .w(px(260.))
-            .max_w_full()
-            .child(self.form_select_control(id, options, Some(selected_value.into()), disabled, cx))
+        super::settings_input_control(self.form_select_control(
+            id,
+            options,
+            Some(selected_value.into()),
+            disabled,
+            cx,
+        ))
     }
 
     pub(in crate::features::pages::settings) fn settings_select_field<I, L, S>(
