@@ -509,6 +509,7 @@ pub(crate) struct ActionLinkMenuState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ActionLinkTooltipState {
+    pub(crate) session_id: String,
     pub(crate) x: Pixels,
     pub(crate) y: Pixels,
     pub(crate) kind_label: String,
@@ -516,7 +517,7 @@ pub(crate) struct ActionLinkTooltipState {
     pub(crate) default_action_label: String,
     pub(crate) default_action_preview: String,
     pub(crate) has_more_actions: bool,
-    /// Identity key for hover stability (kind|value|start|end).
+    /// Identity key for hover stability (session|kind|value|start|end).
     pub(crate) match_key: String,
 }
 
