@@ -872,3 +872,45 @@ fn tree_mode_follows_cwd_and_seeds_the_target_directory_listing() {
         });
     });
 }
+
+#[cfg(windows)]
+#[test]
+fn posix_local_shell_cwds_are_translated_for_the_windows_file_browser() {
+    with_browser(|app, cx, _root| {
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                let SessionLaunchConfig::Local(config) =
+                    &mut app.session.metadata_mut(SESSION).unwrap().launch_config
+                else {
+                    panic!("local session");
+                };
+                config.shell_path = Some("wsl.exe".into());
+            })
+        });
+        report(app, cx, "/mnt/d/Codes/RustProjects".into());
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).session.cwd(SESSION),
+                Some("/mnt/d/Codes/RustProjects")
+            );
+        });
+        let id = latest_request(app, cx);
+        finish(app, cx, &id, Ok("nyaterm"));
+        assert_directory(app, cx, r"D:\Codes\RustProjects", "nyaterm");
+
+        let before = request_count(app, cx);
+        report(app, cx, "/d/Projects".into());
+        assert_eq!(request_count(app, cx), before);
+        cx.update(|_, cx| {
+            assert_eq!(app.read(cx).session.cwd(SESSION), Some("/d/Projects"));
+        });
+        report(app, cx, "/home/debian/notes".into());
+        assert_eq!(request_count(app, cx), before);
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).session.cwd(SESSION),
+                Some("/home/debian/notes")
+            );
+        });
+    });
+}

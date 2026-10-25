@@ -1812,6 +1812,45 @@ fn ssh_ready_marker_helpers_strip_current_and_legacy_markers() {
 }
 
 #[test]
+fn local_reader_thread_preserves_startup_output_and_routes_cwd_events() {
+    let (_, integration) = crate::local_shell_integration::LocalShellIntegration::prepare(
+        &crate::local_shell::ResolvedLocalShell {
+            program: "wsl.exe".to_string(),
+            args: Vec::new(),
+        },
+        "session-1",
+    )
+    .expect("wsl.exe receives the prompt script");
+
+    let mut payload = b"startup noise".to_vec();
+    payload.extend_from_slice(b"\x1b]7777;NyaTermReady:session-1\x07prompt> ");
+    payload.extend_from_slice(b"\x1b]7;file://host/mnt/d/Codes\x07");
+
+    let queue = SessionEventQueue::new();
+    let handle = super::spawn_reader_thread(
+        "session-1".to_string(),
+        Box::new(std::io::Cursor::new(payload)),
+        queue.clone(),
+        Some(integration),
+    )
+    .expect("reader thread spawns");
+    handle.join().expect("reader thread reaches EOF");
+
+    let drain = queue.drain_with_output_budget(8, Some(4096));
+    assert_eq!(drain.events.len(), 3);
+    assert!(matches!(
+        &drain.events[0],
+        SessionEvent::CwdChanged { session_id, cwd }
+            if session_id == "session-1" && cwd == "/mnt/d/Codes"
+    ));
+    assert!(matches!(
+        &drain.events[1],
+        SessionEvent::Output { data, .. } if data.as_slice() == b"startup noiseprompt> "
+    ));
+    assert!(matches!(&drain.events[2], SessionEvent::Exited { .. }));
+}
+
+#[test]
 fn session_event_queue_drains_metadata_even_with_zero_output_budget() {
     let queue = SessionEventQueue::new();
     queue.push(SessionEvent::CwdChanged {

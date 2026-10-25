@@ -476,6 +476,80 @@ pub fn file_browser_path_eq(kind: FileBrowserBackendKind, left: &str, right: &st
     file_browser_identity(kind, left) == file_browser_identity(kind, right)
 }
 
+/// The path namespace of the actual local launcher, not the host platform.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LocalShellPathStyle {
+    #[default]
+    Native,
+    Wsl,
+    Msys,
+}
+
+impl LocalShellPathStyle {
+    pub fn from_program(program: &str) -> Self {
+        let program = program.replace('\\', "/").to_ascii_lowercase();
+        let name = program.rsplit('/').next().unwrap_or(&program);
+        if matches!(name, "wsl" | "wsl.exe") {
+            Self::Wsl
+        } else if program
+            .split('/')
+            .any(|part| matches!(part, "git" | "msys64" | "msys32" | "msys2"))
+        {
+            Self::Msys
+        } else {
+            Self::Native
+        }
+    }
+}
+
+/// Map only paths belonging to the launcher's namespace. Call on Windows hosts
+/// at the file-browser boundary; retain the original cwd in session state.
+pub fn local_shell_cwd_to_browser_path(style: LocalShellPathStyle, path: &str) -> Option<String> {
+    match style {
+        LocalShellPathStyle::Wsl => {
+            let drive_path = path.strip_prefix("/mnt/")?;
+            if drive_path.as_bytes().get(1) == Some(&b':') {
+                return None;
+            }
+            windows_path_for_drive(drive_path)
+        }
+        LocalShellPathStyle::Msys => windows_path_for_drive(path.strip_prefix('/')?),
+        LocalShellPathStyle::Native => {
+            let rest = path.strip_prefix('/')?;
+            (rest.as_bytes().get(1) == Some(&b':')).then_some(())?;
+            windows_path_for_drive(rest)
+        }
+    }
+}
+
+fn windows_path_for_drive(path: &str) -> Option<String> {
+    let mut chars = path.chars();
+    let drive = chars.next()?;
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut remainder = chars.as_str();
+    if let Some(tail) = remainder.strip_prefix(':') {
+        remainder = tail;
+        if !remainder.is_empty() && !remainder.starts_with('/') {
+            return None;
+        }
+    } else if !remainder.is_empty() && !remainder.starts_with('/') {
+        return None;
+    }
+    let mut mapped = String::with_capacity(path.len() + 2);
+    mapped.push(drive.to_ascii_uppercase());
+    mapped.push_str(":\\");
+    mapped.push_str(
+        remainder
+            .strip_prefix('/')
+            .unwrap_or(remainder)
+            .replace('/', "\\")
+            .as_str(),
+    );
+    Some(mapped)
+}
+
 pub fn file_browser_path_is_root(kind: FileBrowserBackendKind, path: &str) -> bool {
     file_browser_path_eq(kind, path, &file_browser_root(kind, path))
 }
@@ -555,10 +629,48 @@ mod tests {
     #[cfg(windows)]
     use super::file_browser_identity;
     use super::{
-        FileBrowserBackendKind, file_browser_copy_destination_invalid, file_browser_join,
-        file_browser_name, file_browser_parent, file_browser_path_is_root, file_browser_root,
-        valid_file_browser_child_name,
+        FileBrowserBackendKind, LocalShellPathStyle, file_browser_copy_destination_invalid,
+        file_browser_join, file_browser_name, file_browser_parent, file_browser_path_is_root,
+        file_browser_root, local_shell_cwd_to_browser_path, valid_file_browser_child_name,
     };
+
+    #[test]
+    fn local_shell_namespaces_do_not_alias_linux_directories_to_windows_drives() {
+        for path in ["/d", "/d/Projects", "/d:/Projects", "/mnt/d:/Projects"] {
+            assert_eq!(
+                local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, path),
+                None
+            );
+        }
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/mnt/d/Projects"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Native, "/d/Projects"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/d:relative"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/d"),
+            Some(r"D:\".into())
+        );
+        assert_eq!(
+            LocalShellPathStyle::from_program(r"C:\Windows\System32\wsl.exe"),
+            LocalShellPathStyle::Wsl
+        );
+        assert_eq!(
+            LocalShellPathStyle::from_program(r"C:\Program Files\Git\bin\bash.exe"),
+            LocalShellPathStyle::Msys
+        );
+        assert_eq!(
+            LocalShellPathStyle::from_program(r"C:\cygwin64\bin\bash.exe"),
+            LocalShellPathStyle::Native
+        );
+    }
 
     #[test]
     fn remote_paths_keep_posix_semantics() {
@@ -680,6 +792,73 @@ mod tests {
             r"C:\other\file",
             true
         ));
+    }
+
+    #[test]
+    fn local_shell_cwd_translation_covers_wsl_drive_and_msys_forms() {
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, "/mnt/d/Codes/RustProjects"),
+            Some(r"D:\Codes\RustProjects".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, "/mnt/c"),
+            Some(r"C:\".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, "/mnt/d/"),
+            Some(r"D:\".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/d:/Projects"),
+            Some(r"D:\Projects".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/d/Projects"),
+            Some(r"D:\Projects".to_string())
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/D/Codes"),
+            Some(r"D:\Codes".to_string())
+        );
+    }
+
+    #[test]
+    fn local_shell_cwd_translation_leaves_unrelated_paths_untouched() {
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, "/mnt/backup/data"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, "/mnt/"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Wsl, "/mnt/1/x"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/home/debian"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "/Debian/mnt/d/x"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, r"D:\Codes"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(LocalShellPathStyle::Msys, "relative/path"),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path(
+                LocalShellPathStyle::Msys,
+                "//wsl.localhost/Debian/home"
+            ),
+            None
+        );
     }
 }
 
