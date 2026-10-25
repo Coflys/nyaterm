@@ -533,8 +533,13 @@ impl SettingsPanel {
                             .text_color(rgb(if selected {
                                 palette.primary
                             } else {
-                                palette.text_muted
+                                palette.text
                             }))
+                            .font_weight(if selected {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
                             .on_click(cx.listener({
                                 let id = model_id.clone();
                                 move |panel, _, _, cx| {
