@@ -164,6 +164,8 @@ jobs:
           scripts.tests.test_verify_native_package
           scripts.tests.test_generate_release_metadata
           scripts.tests.test_bump_version
+          scripts.tests.test_release_provenance
+          scripts.tests.test_release_workflow
           scripts.tests.test_check_architecture
 
   workflows:
