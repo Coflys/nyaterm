@@ -66,6 +66,12 @@ class ReleaseProvenanceTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.verify()
 
+    def test_msi_is_bound_to_provenance_and_cannot_be_replaced(self) -> None:
+        msi = self.dist / "NyaTerm_2.0.0_windows_x64.msi"
+        msi.write_bytes(b"changed MSI")
+        with self.assertRaisesRegex(ValueError, "provenance mismatch"):
+            self.verify()
+
 
 if __name__ == "__main__":
     unittest.main()

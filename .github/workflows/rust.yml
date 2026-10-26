@@ -161,6 +161,7 @@ jobs:
           python -m unittest
           scripts.tests.test_check_release_assets
           scripts.tests.test_package_native
+          scripts.tests.test_windows_msi
           scripts.tests.test_verify_native_package
           scripts.tests.test_generate_release_metadata
           scripts.tests.test_bump_version

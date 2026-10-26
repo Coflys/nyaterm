@@ -456,6 +456,14 @@ class VerifyNativePackageTests(unittest.TestCase):
                     Path(directory), "x86_64-unknown-linux-gnu", "2.0.0"
                 )
 
+    def test_stable_windows_verification_requires_msi_before_running_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("NyaTerm_2.0.0_windows_x64-setup.exe", "NyaTerm_2.0.0_windows_x64_portable.zip"):
+                (root / name).write_bytes(b"fixture")
+            with self.assertRaisesRegex(RuntimeError, "missing release artifacts: NyaTerm_2.0.0_windows_x64.msi"):
+                verify_native_package.verify_release(root, "x86_64-pc-windows-msvc", "2.0.0")
+
     def test_binary_header_helpers_reject_invalid_formats(self) -> None:
         with self.assertRaises(RuntimeError):
             verify_native_package.pe_machine(b"not-pe")

@@ -129,7 +129,7 @@ jobs:
               raise SystemExit(f"release version {version} does not match Cargo workspace version {workspace}")
           PY
           prerelease='false'
-          [[ "${version}" == *-* ]] && prerelease='true'
+          [[ "${version%%+*}" == *-* ]] && prerelease='true'
           {
             echo "version=${version}"
             echo "tag=${tag}"
@@ -265,6 +265,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/ci/install-nsis.ps1
+      - name: Install .NET for WiX
+        if: runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install WiX
+        if: runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'
+        shell: pwsh
+        run: ./scripts/ci/install-wix.ps1
+      - name: Test MSI packaging contracts
+        if: runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'
+        run: python -m unittest scripts.tests.test_windows_msi -v
       - name: Prepare bundled ConPTY
         if: runner.os == 'Windows'
         run: python scripts/release/prepare_conpty.py
@@ -420,6 +432,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VERSION: ${{ needs.preflight.outputs.version }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
           TAURI_UPDATER_PUBLIC_KEY_B64: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyQUYxQTA2NTYyQTNEOTkKUldTWlBTcFdCaHF2Z29pS0pEdE13U3ZUMVZVTlpGVmQ0YlU2cWlORkdNWU1BY005MU01YjFiU2IK
         run: |
           set -euo pipefail
@@ -441,6 +454,12 @@ jobs:
             "dist-release/NyaTerm_${VERSION}_windows_arm64_portable.zip"
             "dist-release/NyaTerm_${VERSION}_windows_x64_portable.zip"
           )
+          if [[ "${PRERELEASE}" == 'false' ]]; then
+            files+=(
+              "dist-release/NyaTerm_${VERSION}_windows_arm64.msi"
+              "dist-release/NyaTerm_${VERSION}_windows_x64.msi"
+            )
+          fi
           for file in "${files[@]}"; do
             npx --yes @tauri-apps/cli@2.10.0 signer sign --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" "${file}"
           done
@@ -585,6 +604,7 @@ jobs:
               SHA256SUMS) content_type='text/plain; charset=utf-8' ;;
               *.dmg) content_type='application/x-apple-diskimage' ;;
               *.exe) content_type='application/vnd.microsoft.portable-executable' ;;
+              *.msi) content_type='application/x-msi' ;;
               *.deb) content_type='application/vnd.debian.binary-package' ;;
               *.rpm) content_type='application/x-rpm' ;;
               *.tar.gz) content_type='application/gzip' ;;

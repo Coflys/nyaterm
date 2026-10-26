@@ -51,6 +51,7 @@ def staged_package(target: str):
             mock.patch.object(package_native, "helper_binary_paths", return_value=helpers),
             mock.patch.object(package_native, "require_tool", side_effect=lambda name: name),
             mock.patch.object(package_native, "find_makensis", return_value="makensis"),
+            mock.patch.object(package_native.windows_msi, "find_wix", return_value="wix"),
             mock.patch.object(package_native, "run", side_effect=run),
             mock.patch.object(package_native, "linux_deb_dependencies", return_value="libc6"),
         ):
@@ -65,6 +66,7 @@ class PackageNativeTests(unittest.TestCase):
         with staged_package("x86_64-pc-windows-msvc") as (root, binary, info):
             with (
                 mock.patch.object(package_native, "find_makensis", return_value=shutil.which("makensis")),
+                mock.patch.object(package_native, "create_windows_msi"),
                 mock.patch.object(
                     package_native,
                     "run",
@@ -219,10 +221,12 @@ class PackageNativeTests(unittest.TestCase):
             "aarch64-pc-windows-msvc": {
                 "NyaTerm_2.0.0_windows_arm64_portable.zip",
                 "NyaTerm_2.0.0_windows_arm64-setup.exe",
+                "NyaTerm_2.0.0_windows_arm64.msi",
             },
             "x86_64-pc-windows-msvc": {
                 "NyaTerm_2.0.0_windows_x64_portable.zip",
                 "NyaTerm_2.0.0_windows_x64-setup.exe",
+                "NyaTerm_2.0.0_windows_x64.msi",
             },
         }
         for target, names in expected.items():

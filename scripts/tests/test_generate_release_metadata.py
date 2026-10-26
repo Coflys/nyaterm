@@ -21,7 +21,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
             (directory / name).write_bytes(f"payload:{name}".encode())
         updater_names = {
             template.format(version=version)
-            for template in generate_release_metadata.UPDATER_ARTIFACTS.values()
+            for template in generate_release_metadata.updater_artifacts(version).values()
         }
         for name in updater_names:
             (directory / f"{name}.sig").write_text(
@@ -41,8 +41,13 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 pub_date="2026-08-31T00:00:00Z",
             )
 
-            self.assertEqual(len(downloads["platforms"]), 8)
-            self.assertEqual(len(updater["platforms"]), 10)
+            self.assertEqual(len(downloads["platforms"]), 10)
+            self.assertEqual(len(updater["platforms"]), 12)
+            for architecture in ("x86_64", "aarch64"):
+                key = f"windows-{architecture}-msi"
+                self.assertTrue(downloads["platforms"][key]["url"].endswith(".msi"))
+                self.assertEqual(downloads["platforms"][key]["url"], updater["platforms"][key]["url"])
+                self.assertTrue(updater["platforms"][key]["signature"].startswith("signature-for-"))
             self.assertIn("windows-x86_64-portable", updater["platforms"])
             self.assertEqual(
                 downloads["platforms"]["darwin-aarch64"]["url"],
@@ -137,8 +142,30 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 pub_date="2026-08-31T00:00:00Z",
             )
             for manifest in (downloads, updater):
+                self.assertFalse(any(key.endswith("-msi") for key in manifest["platforms"]))
                 for platform in manifest["platforms"].values():
                     self.assertIn(f"/releases/v{version}/", platform["url"])
+            self.assertEqual(len(downloads["platforms"]), 8)
+            self.assertEqual(len(updater["platforms"]), 10)
+
+    def test_stable_requires_both_msi_files_and_their_signatures(self) -> None:
+        for suffix, message in ((".msi", "missing release artifacts"),
+                                (".msi.sig", "missing updater signature")):
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                self.make_release(directory)
+                (directory / f"NyaTerm_2.0.0_windows_arm64{suffix}").unlink()
+                with self.subTest(suffix=suffix), self.assertRaisesRegex(RuntimeError, message):
+                    generate_release_metadata.generate(
+                        directory, version="2.0.0", tag="v2.0.0",
+                        base_url="https://downloads.nyaterm.app", notes="", pub_date="2026-10-26T00:00:00Z",
+                    )
+
+    def test_build_metadata_hyphens_do_not_select_preview(self) -> None:
+        version = "2.0.0+build-with-hyphen"
+        self.assertEqual(len(generate_release_metadata.download_artifacts(version)), 10)
+        self.assertEqual(len(generate_release_metadata.updater_artifacts(version)), 12)
+        self.assertEqual(generate_release_metadata.channel_manifest_destinations(version)["latest.json"], "latest.json")
 
     def test_rejects_noncanonical_release_base_urls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -184,8 +211,8 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
             expected_urls = {
                 template.format(version="2.0.0")
                 for template in (
-                    list(generate_release_metadata.DOWNLOAD_ARTIFACTS.values())
-                    + list(generate_release_metadata.UPDATER_ARTIFACTS.values())
+                    list(generate_release_metadata.download_artifacts("2.0.0").values())
+                    + list(generate_release_metadata.updater_artifacts("2.0.0").values())
                 )
             }
             self.assertEqual(len(urls), len(expected_urls))

@@ -44,7 +44,7 @@ def verify(
         version=version,
         tag=tag,
         base_url=base_url,
-        artifacts=generate_release_metadata.UPDATER_ARTIFACTS,
+        artifacts=generate_release_metadata.updater_artifacts(version),
         integrity_field="signature",
     )
     urls.update(
@@ -53,7 +53,7 @@ def verify(
             version=version,
             tag=tag,
             base_url=base_url,
-            artifacts=generate_release_metadata.DOWNLOAD_ARTIFACTS,
+            artifacts=generate_release_metadata.download_artifacts(version),
             integrity_field="sha256",
         )
     )

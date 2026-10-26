@@ -17,6 +17,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import package_native
+import windows_msi
 
 
 MIN_ARTIFACT_SIZE = 1024
@@ -455,6 +456,129 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
         )
 
 
+def verify_windows_msi_database(metadata: dict, target: str, version: str) -> dict[str, str]:
+    """Validate the compiled database, returning installed paths -> cabinet file IDs."""
+    numeric = package_native.windows_msi_version(version)
+    architecture = package_native.target_info(target).arch
+    tables = metadata["tables"]
+    properties = {row["Property"]: row["Value"] for row in tables["Property"]}
+    expected = {
+        "UpgradeCode": "{" + windows_msi.UPGRADE_CODE + "}",
+        "ProductCode": "{" + windows_msi.product_code(numeric, architecture) + "}",
+        "ProductName": "NyaTerm", "Manufacturer": "kang", "ProductVersion": numeric,
+        "ALLUSERS": "1", "ARPNOMODIFY": "1", "ARPPRODUCTICON": "NyaTermIcon",
+    }
+    for key, value in expected.items():
+        if properties.get(key) != value:
+            raise RuntimeError(f"MSI contains the wrong {key}: expected {value}")
+    if properties.get("MSIINSTALLPERUSER") or metadata["template"].split(";", 1)[0].lower() != architecture:
+        raise RuntimeError("MSI contains the wrong architecture or installation scope")
+
+    directories = {row["Directory"]: row for row in tables["Directory"]}
+    for directory, parent in (("INSTALLDIR", "ProgramFiles64Folder"),
+                              ("ApplicationProgramsFolder", "ProgramMenuFolder")):
+        row = directories.get(directory, {})
+        if row.get("Directory_Parent") != parent or row.get("DefaultDir", "").split("|")[-1] != "NyaTerm":
+            raise RuntimeError(f"MSI contains the wrong {directory} directory")
+
+    def installed_directory(directory: str, visited: frozenset[str] = frozenset()) -> str:
+        if directory == "INSTALLDIR":
+            return ""
+        if directory in visited or directory not in directories:
+            raise RuntimeError("MSI contains an invalid directory tree")
+        row = directories[directory]
+        name = row["DefaultDir"].split(":", 1)[0].split("|")[-1]
+        if name in ("", ".", "..") or any(char in name for char in "/\\:"):
+            raise RuntimeError("MSI contains an unsafe directory")
+        parent = installed_directory(row["Directory_Parent"], visited | {directory})
+        return f"{parent}/{name}".lstrip("/")
+
+    components = {row["Component"]: row for row in tables["Component"]}
+    files: dict[str, str] = {}
+    for row in tables["File"]:
+        component = components[row["Component_"]]
+        name = row["FileName"].split("|")[-1]
+        if name in ("", ".", "..") or any(char in name for char in "/\\:"):
+            raise RuntimeError("MSI contains an unsafe file name")
+        relative = (installed_directory(component["Directory_"]) + "/" + name).lstrip("/")
+        expected_guid = "{" + windows_msi.guid(f"component:{architecture}:{relative}") + "}"
+        if (component["ComponentId"] != expected_guid or component["Attributes"] != "256"
+                or component["KeyPath"] != row["File"]):
+            raise RuntimeError(f"MSI contains an invalid component identity for {relative}")
+        if relative in files:
+            raise RuntimeError(f"MSI contains a duplicate installed path: {relative}")
+        files[relative] = row["File"]
+    required = {"NyaTerm.exe", "LICENSE", "VERSION", "icon.ico", *helper_filenames(target),
+                "conpty/LICENSE.txt", *(f"conpty/{p.as_posix()}" for p in package_native.conpty_files(target))}
+    if set(files) != required or len(components) != len(files):
+        raise RuntimeError(f"MSI installed file set mismatch: missing {sorted(required - files.keys())}, "
+                           f"unexpected {sorted(files.keys() - required)}")
+
+    upgrades = {row["ActionProperty"]: row for row in tables["Upgrade"]}
+    upgrade_ranges = {
+        "WIX_UPGRADE_DETECTED": ("", numeric, "1"),
+        "WIX_DOWNGRADE_DETECTED": (numeric, "", "2"),
+        "NYATERM_SAME_VERSION_DETECTED": (numeric, numeric, "770"),
+    }
+    if len(tables["Upgrade"]) != len(upgrade_ranges) or set(upgrades) != set(upgrade_ranges):
+        raise RuntimeError("MSI has an invalid major upgrade policy")
+    for key, limits in upgrade_ranges.items():
+        row = upgrades[key]
+        if (row["UpgradeCode"] != expected["UpgradeCode"] or
+                (row["VersionMin"], row["VersionMax"], row["Attributes"]) != limits):
+            raise RuntimeError("MSI has an invalid major upgrade version range")
+    conditions = {row["Condition"] for row in tables["LaunchCondition"]}
+    if not {"NOT WIX_DOWNGRADE_DETECTED", "Installed OR NOT NYATERM_SAME_VERSION_DETECTED"} <= conditions:
+        raise RuntimeError("MSI must block downgrades and same-version upgrades")
+    sequence = {row["Action"]: int(row["Sequence"]) for row in tables["InstallExecuteSequence"]}
+    required_actions = ("FindRelatedProducts", "LaunchConditions", "InstallInitialize",
+                        "RemoveExistingProducts", "ProcessComponents", "InstallFiles", "InstallFinalize")
+    if (not set(required_actions) <= sequence.keys() or
+            [sequence[a] for a in required_actions] != sorted(sequence[a] for a in required_actions) or
+            sequence["RemoveExistingProducts"] != sequence["InstallInitialize"] + 1):
+        raise RuntimeError("MSI must remove old products immediately after InstallInitialize")
+    if tables["CustomAction"]:
+        raise RuntimeError("MSI must not run custom actions")
+    if any(row["FileName"] or row["DirProperty"] != "ApplicationProgramsFolder"
+           or row["InstallMode"] != "2" for row in tables["RemoveFile"]):
+        raise RuntimeError("MSI must not delete user data")
+    shortcuts = {(row["Directory_"], row["Name"].split("|")[-1], row["Target"])
+                 for row in tables["Shortcut"]}
+    if shortcuts != {(directory, "NyaTerm", f"[#{files['NyaTerm.exe']}]")
+                     for directory in ("DesktopFolder", "ApplicationProgramsFolder")}:
+        raise RuntimeError("MSI contains invalid shortcuts")
+    registry = {(row["Root"], row["Key"], row["Name"], row["Value"]) for row in tables["Registry"]}
+    protocol = r"Software\Classes\nyaterm"
+    if registry != {("2", protocol, "", "URL:NyaTerm Protocol"), ("2", protocol, "URL Protocol", ""),
+                    ("2", protocol + r"\DefaultIcon", "", "[INSTALLDIR]NyaTerm.exe,0"),
+                    ("2", protocol + r"\shell\open\command", "", '"[INSTALLDIR]NyaTerm.exe" "%1"')}:
+        raise RuntimeError("MSI contains invalid protocol registration")
+    return files
+
+
+def verify_windows_msi(path: Path, target: str, version: str) -> None:
+    files = verify_windows_msi_database(windows_msi.read_database(path), target, version)
+    with tempfile.TemporaryDirectory(prefix="nyaterm-msi-") as directory:
+        root = Path(directory)
+        subprocess.run([windows_msi.find_wix(), "msi", "decompile", "-x", str(root / "payload"),
+                        "-o", str(root / "package.wxs"), str(path.resolve())], check=True)
+        payload = {relative: root / "payload" / "File" / file_id for relative, file_id in files.items()}
+        if any(not file.is_file() for file in payload.values()):
+            raise RuntimeError("MSI is missing embedded payload files")
+        if payload["VERSION"].read_text(encoding="utf-8").strip() != version:
+            raise RuntimeError("MSI contains the wrong installed version")
+        machine = {"x64": 0x8664, "arm64": 0xAA64}[package_native.target_info(target).arch]
+        for name in ("NyaTerm.exe", *helper_filenames(target)):
+            if pe_machine(payload[name].read_bytes()) != machine:
+                raise RuntimeError(f"MSI contains the wrong PE machine for {name}")
+        verify_windows_application_binary(payload["NyaTerm.exe"].read_bytes(), path.name)
+        verify_windows_application_version(payload["NyaTerm.exe"], version)
+        verify_conpty_machines(
+            {relative: pe_machine(payload[f"conpty/{relative.as_posix()}"].read_bytes())
+             for relative in package_native.conpty_files(target)}, path.name,
+        )
+
+
 def verify_macos_archive(path: Path, target: str, version: str) -> None:
     identity = package_native.release_identity(version)
     bundle = identity.macos_bundle_name
@@ -704,6 +828,8 @@ def verify_release(
     if info.os_name == "windows":
         verify_windows_portable(dist / f"{prefix}_portable.zip", target, version)
         verify_windows_installer(dist / f"{prefix}-setup.exe", target, version)
+        if package_native.includes_windows_msi(artifact_version):
+            verify_windows_msi(dist / f"{prefix}.msi", target, version)
     elif info.os_name == "macos":
         verify_macos_archive(dist / f"{prefix}.app.tar.gz", target, version)
         verify_dmg(dist / f"{prefix}.dmg", version)

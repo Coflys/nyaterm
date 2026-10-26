@@ -37,6 +37,22 @@ UPDATER_ARTIFACTS = {
     "windows-aarch64-portable": "NyaTerm_{version}_windows_arm64_portable.zip",
 }
 
+MSI_ARTIFACTS = {
+    "windows-x86_64-msi": "NyaTerm_{version}_windows_x64.msi",
+    "windows-aarch64-msi": "NyaTerm_{version}_windows_arm64.msi",
+}
+
+
+def download_artifacts(version: str) -> dict[str, str]:
+    msi = MSI_ARTIFACTS if package_native.includes_windows_msi(version) else {}
+    return {**DOWNLOAD_ARTIFACTS, **msi}
+
+
+def updater_artifacts(version: str) -> dict[str, str]:
+    msi = MSI_ARTIFACTS if package_native.includes_windows_msi(version) else {}
+    return {**UPDATER_ARTIFACTS, **msi}
+
+
 CHANNEL_MANIFEST_NAMES = ("latest.json", "downloads.json")
 
 
@@ -115,7 +131,7 @@ def validate_release_manifest(
 
 def channel_manifest_destinations(version: str) -> dict[str, str]:
     version = package_native.validate_version(version)
-    prefix = "channels/preview/" if "-" in version else ""
+    prefix = "channels/preview/" if package_native.parse_version(version).group("pre") else ""
     return {name: f"{prefix}{name}" for name in CHANNEL_MANIFEST_NAMES}
 
 
@@ -145,7 +161,7 @@ def generate(
     (directory / "SHA256SUMS").write_text(checksum_text, encoding="utf-8")
 
     downloads: dict[str, dict[str, str]] = {}
-    for platform, template in DOWNLOAD_ARTIFACTS.items():
+    for platform, template in download_artifacts(version).items():
         filename = template.format(version=version)
         downloads[platform] = {
             "url": artifact_url(base_url, tag, filename),
@@ -154,7 +170,7 @@ def generate(
 
     updater: dict[str, dict[str, str]] = {}
     signature_cache: dict[str, str] = {}
-    for platform, template in UPDATER_ARTIFACTS.items():
+    for platform, template in updater_artifacts(version).items():
         filename = template.format(version=version)
         if filename not in signature_cache:
             signature_path = directory / f"{filename}.sig"

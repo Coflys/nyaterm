@@ -34,7 +34,7 @@ def main() -> None:
     args = parser.parse_args()
     for name in sorted({
         template.format(version=args.version)
-        for template in generate_release_metadata.UPDATER_ARTIFACTS.values()
+        for template in generate_release_metadata.updater_artifacts(args.version).values()
     }):
         verify_file(args.dist / name, args.public_key)
 

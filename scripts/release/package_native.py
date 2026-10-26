@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import prepare_conpty
+import windows_msi
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -212,7 +213,25 @@ def artifact_names(target: str, version: str) -> set[str]:
         return {f"{prefix}.dmg", f"{prefix}.app.tar.gz"}
     if info.os_name == "linux":
         return {f"{prefix}.AppImage", f"{prefix}.deb", f"{prefix}.rpm"}
-    return {f"{prefix}_portable.zip", f"{prefix}-setup.exe"}
+    names = {f"{prefix}_portable.zip", f"{prefix}-setup.exe"}
+    if includes_windows_msi(version):
+        names.add(f"{prefix}.msi")
+    return names
+
+
+def includes_windows_msi(artifact_version: str) -> bool:
+    label = validate_artifact_version(artifact_version)
+    return label != "main-snapshot" and parse_version(label).group("pre") is None
+
+
+def windows_msi_version(version: str) -> str:
+    parsed = parse_version(version)
+    if parsed.group("pre") is not None:
+        raise ValueError("MSI is only supported for Stable releases")
+    numeric = [int(parsed.group(key)) for key in ("major", "minor", "patch")]
+    if any(part > limit for part, limit in zip(numeric, (255, 255, 65535))):
+        raise ValueError(f"MSI version exceeds Windows Installer limits: {version}")
+    return ".".join(str(part) for part in numeric)
 
 
 def cargo_target_dir() -> Path:
@@ -331,6 +350,8 @@ def create_windows_packages(
     binary: Path, info: TargetInfo, version: str, artifact_version: str
 ) -> None:
     identity = release_identity(version)
+    if includes_windows_msi(artifact_version):
+        windows_msi_version(version)
     portable_root = WORK_DIR / "NyaTerm-portable"
     portable_root.mkdir()
     shutil.copy2(binary, portable_root / "NyaTerm.exe")
@@ -459,6 +480,19 @@ def create_windows_packages(
         encoding="utf-8",
     )
     run([find_makensis(), str(script)])
+    if includes_windows_msi(artifact_version):
+        create_windows_msi(installer_root, info, version, artifact_version)
+
+
+def create_windows_msi(
+    installer_root: Path, info: TargetInfo, version: str, artifact_version: str
+) -> None:
+    numeric = windows_msi_version(version)
+    source = WORK_DIR / "nyaterm-installer.wxs"
+    windows_msi.write_source(installer_root, source, numeric, info.arch)
+    output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}.msi"
+    run([windows_msi.find_wix(), "build", "-arch", info.arch,
+         "-pdbtype", "none", "-o", str(output), str(source)])
 
 
 def create_macos_packages(
@@ -797,6 +831,8 @@ def main() -> None:
     artifact_version = validate_artifact_version(
         os.environ.get("NYATERM_ARTIFACT_VERSION", version)
     )
+    if info.os_name == "windows" and includes_windows_msi(artifact_version):
+        windows_msi_version(version)
     reset_output()
     print(f"==> Packaging {APP_NAME} {version} for {info.target}", flush=True)
     binary = build_application(info.target)

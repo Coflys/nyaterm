@@ -30,6 +30,21 @@ def gate(job: str, values: dict[str, object]) -> bool:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_stable_windows_packages_install_pinned_wix_and_sign_msi(self) -> None:
+        package = jobs()["package"]
+        install = re.search(r"      - name: Install WiX\n(.*?)(?=      - name:)", package, re.S).group(1)
+        self.assertIn("runner.os == 'Windows' && needs.preflight.outputs.prerelease == 'false'", install)
+        self.assertIn("./scripts/ci/install-wix.ps1", install)
+        preparation = jobs()["prepare_release"]
+        self.assertIn('if [[ "${PRERELEASE}" == \'false\' ]]; then', preparation)
+        for architecture in ("x64", "arm64"):
+            self.assertIn(f'"dist-release/NyaTerm_${{VERSION}}_windows_{architecture}.msi"', preparation)
+        self.assertIn("*.msi) content_type='application/x-msi'", jobs()["r2"])
+        installer = WORKFLOW.parents[2] / "scripts/ci/install-wix.ps1"
+        self.assertIn("$version = '6.0.2'", installer.read_text(encoding="utf-8"))
+        snapshot = WORKFLOW.with_name("main-snapshot.yml").read_text(encoding="utf-8")
+        self.assertNotIn("install-wix", snapshot)
+
     def test_rehearsal_never_enables_publication(self) -> None:
         blocks = jobs()
         for publish, verify, package, reuse, expected in (
