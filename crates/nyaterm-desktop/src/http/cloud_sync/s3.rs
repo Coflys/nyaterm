@@ -110,6 +110,7 @@ impl CloudSyncRemote for NativeS3Remote {
     fn read_if_exists(&self, path: &str) -> Result<Option<Vec<u8>>, CloudSyncError> {
         let response = self.send(S3HttpMethod::Get, path, None)?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -119,24 +120,29 @@ impl CloudSyncRemote for NativeS3Remote {
                 .map(|bytes| Some(bytes.to_vec()))
                 .map_err(map_s3_http_error);
         }
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "S3 GET failed ({status}): {}",
-            body.trim()
-        )))
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "S3",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn write(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
         let response = self.send(S3HttpMethod::Put, path, Some(bytes.to_vec()))?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status.is_success() {
             return Ok(());
         }
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "S3 PUT failed ({status}): {}",
-            body.trim()
-        )))
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "S3",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
@@ -145,11 +151,14 @@ impl CloudSyncRemote for NativeS3Remote {
             return Ok(());
         }
         let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "S3 DELETE failed ({status}): {}",
-            body.trim()
-        )))
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "S3",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
@@ -160,12 +169,15 @@ impl CloudSyncRemote for NativeS3Remote {
         loop {
             let response = self.send_list(&prefix, continuation.as_deref())?;
             let status = response.status();
+            let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
             let body = response.text().map_err(map_s3_http_error)?;
             if !status.is_success() {
-                return Err(CloudSyncError::Remote(format!(
-                    "S3 LIST failed ({status}): {}",
-                    body.trim()
-                )));
+                return Err(super::helpers::http_failure(
+                    "S3",
+                    "request",
+                    status.as_u16(),
+                    _retry_after_seconds,
+                ));
             }
             let page = parse_s3_list_page(&body)?;
             files.extend(page.keys.into_iter().map(|key| {
@@ -212,9 +224,7 @@ pub(super) fn parse_s3_list_page(body: &str) -> Result<S3ListPage, CloudSyncErro
             Ok(Event::Text(text)) => {
                 let value = text
                     .decode()
-                    .map_err(|error| {
-                        CloudSyncError::Remote(format!("invalid S3 LIST response: {error}"))
-                    })?
+                    .map_err(|_| CloudSyncError::Remote("invalid S3 LIST response".into()))?
                     .into_owned();
                 match field.as_deref() {
                     Some(b"Key") => keys.push(value),
@@ -225,10 +235,8 @@ pub(super) fn parse_s3_list_page(body: &str) -> Result<S3ListPage, CloudSyncErro
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
-            Err(error) => {
-                return Err(CloudSyncError::Remote(format!(
-                    "invalid S3 LIST response: {error}"
-                )));
+            Err(_) => {
+                return Err(CloudSyncError::Remote("invalid S3 LIST response".into()));
             }
         }
     }

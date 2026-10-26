@@ -17,3 +17,11 @@ pub use webdav::NativeWebdavRemote;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) type CloudTokenSink = std::sync::Arc<
+    dyn Fn(
+            nyaterm_core::cloud_sync::credentials::CloudCredentialUpdate,
+        ) -> Result<(), nyaterm_core::CloudSyncError>
+        + Send
+        + Sync,
+>;

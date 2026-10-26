@@ -20,6 +20,20 @@ pub(super) struct RemoteHeads {
 }
 
 impl RemoteHeads {
+    pub(super) fn maximal(&self) -> Vec<RemoteSyncPointer> {
+        self.heads
+            .iter()
+            .filter(|head| !self.heads.iter().any(|other| dominates(other, head)))
+            .cloned()
+            .collect()
+    }
+
+    pub(super) fn observed_revisions(&self) -> Vec<String> {
+        let mut revisions: Vec<_> = self.maximal().into_iter().map(|p| p.revision_id).collect();
+        revisions.sort();
+        revisions
+    }
+
     pub fn require_single(
         &self,
         options: &LocalCloudSyncOptions,

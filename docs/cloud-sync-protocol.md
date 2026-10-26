@@ -140,3 +140,56 @@ staged/committed snapshot GC protection, compatibility-write failures, cancellat
 readback delays, and redb file/memory codec compatibility. Native provider behavior
 still depends on each service honoring successful object writes and eventually
 consistent listing semantics; no real cloud credentials are used by unit tests.
+
+
+## Credentials, diagnostics and scheduling
+
+HTTP failures expose only a controlled provider/operation, status and error
+classification. Request URLs, query parameters, authorization headers and raw
+response bodies never become user-visible or logged diagnostics. Capacity
+classification retains the public `gist_capacity` code. Numeric and HTTP-date
+`Retry-After` values extend retry backoff; authentication failures without a
+rate-limit hint pause background work until settings change.
+
+Google Drive, OneDrive and Aliyun Drive persist refreshed access tokens and any
+returned refresh token through the serialized store before another authenticated
+request. Missing refresh tokens retain the previous value. The update compares
+client identity and both previous tokens, updates only credentials, and uses the
+existing encrypted storage/unknown-field merge. Stale updates are rejected and
+save failures stop the operation. Subsequent sync failure or cancellation does
+not roll back a completed credential save. Settings drafts rebase unedited token
+fields; explicit credential edits retain ordinary conflict checks.
+
+All providers, including GitHub Gist, share startup checks (when enabled),
+15-minute checks, focus checks throttled to 120 seconds, change debounce, safe
+pull deferral and failure backoff. Active sessions and unsaved drafts continue to
+block automatic application. One process coordinator records actual transfers,
+conflicts, failures and successful recovery before notifying windows. Busy,
+disabled, debounce and unchanged checks do not add history. Identical
+classification/trigger/revision failures are deduplicated for 15 minutes; history
+I/O failure does not alter the sync outcome.
+
+## Conflict previews and device labels
+
+Snapshot metadata may include `device_name` inside the encrypted payload. The
+UUID remains the device identity. Older snapshots omit the field and display a
+short UUID. Renaming takes effect on the next actual publication and does not
+change the entity content hash or trigger a name-only upload. Snapshot schema
+version, encryption envelope, payload/content hash definitions, tables and keys
+are unchanged.
+
+A conflict preview lists every maximal concurrent revision, device, timestamp,
+readability and counts relative to the local content. Known collections use
+stable record IDs; settings show categories and unknown entities only a change
+marker. Previews never return record names, secret values, notes or command text.
+Exactly one readable branch is selected automatically; multiple readable branches
+require an explicit choice. Choosing local resolves only the displayed observed
+branches, and choosing cloud pins the selected immutable revision.
+
+Resolution requests carry the observed maximal revision set and preview local
+content hash. They revalidate at execution and before publication. Changed
+branches, missing/unreadable selected snapshots and changed local content refresh
+the preview instead of selecting a substitute. A new commit arriving after the
+publication check remains concurrent and is reported on the next check. Existing
+master-password guards, checked local apply, session restrictions, safety backup
+and causal resolution commits remain in force. There is no field-level merge.

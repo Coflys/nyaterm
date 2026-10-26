@@ -193,3 +193,113 @@ fn authentication_failure_pauses_sync_until_settings_change() {
     assert_eq!(sync.failures, 0);
     assert_eq!(sync.pending, Some(AutoSyncTrigger::Settings));
 }
+
+#[test]
+fn cloud_sync_http_authentication_pauses_and_rate_limits_respect_retry_after() {
+    let error = CloudSyncError::Http {
+        provider: "test".into(),
+        operation: "read".into(),
+        status: 401,
+        retry_after_seconds: None,
+    };
+    assert!(permanent_auto_sync_error(&error));
+    let mut coordinator = AutoSyncCoordinator::new(0);
+    let before = Instant::now();
+    coordinator.complete(
+        AutoSyncTrigger::Periodic,
+        &Err(CloudSyncError::Http {
+            provider: "test".into(),
+            operation: "read".into(),
+            status: 429,
+            retry_after_seconds: Some(1800),
+        }),
+        None,
+    );
+    assert!(!coordinator.paused);
+    assert!(coordinator.next_due.duration_since(before) >= Duration::from_secs(1800));
+}
+
+#[test]
+fn cloud_sync_automatic_history_deduplicates_failures_and_records_recovery_once() {
+    let mut sync = AutoSyncCoordinator::new(0);
+    let error = || {
+        Err(CloudSyncError::Http {
+            provider: "test".into(),
+            operation: "read".into(),
+            status: 503,
+            retry_after_seconds: None,
+        })
+    };
+    sync.started_at = Some(Instant::now());
+    let entry = sync
+        .history_entry(AutoSyncTrigger::Retry, &error())
+        .unwrap();
+    assert_eq!(entry.message, "server");
+    assert!(entry.duration_ms.is_some());
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Retry, &error())
+            .is_none()
+    );
+    let success = Ok(AutoSyncResult::UpToDate(Box::default()));
+    assert_eq!(
+        sync.history_entry(AutoSyncTrigger::Retry, &success)
+            .unwrap()
+            .status,
+        "success"
+    );
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Periodic, &success)
+            .is_none()
+    );
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Change, &Ok(AutoSyncResult::Busy))
+            .is_none()
+    );
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Startup, &Ok(AutoSyncResult::Disabled))
+            .is_none()
+    );
+}
+
+#[test]
+fn cloud_sync_rate_limit_deadline_survives_local_changes_focus_and_periodic_ticks() {
+    let mut sync = AutoSyncCoordinator::new(0);
+    sync.complete(
+        AutoSyncTrigger::Periodic,
+        &Err(CloudSyncError::Http {
+            provider: "GitHub Gist".into(),
+            operation: "read".into(),
+            status: 403,
+            retry_after_seconds: Some(1800),
+        }),
+        None,
+    );
+    assert!(!sync.paused);
+    let deadline = sync.retry_not_before.unwrap();
+    sync.record_sync_mutation(1);
+    sync.focused();
+    assert!(
+        sync.next_job(deadline - Duration::from_secs(1), 1, || panic!(
+            "rate limited"
+        ))
+        .is_none()
+    );
+    assert!(sync.next_job(deadline, 1, || true).is_some());
+}
+
+#[test]
+fn cloud_sync_successful_check_records_recovery_even_when_pull_is_deferred() {
+    let mut sync = AutoSyncCoordinator::new(0);
+    sync.had_error = true;
+    let result = Ok(AutoSyncResult::RemoteAvailable {
+        retry_when_safe: true,
+        revision: Some("remote-revision".into()),
+    });
+    let entry = sync.history_entry(AutoSyncTrigger::Retry, &result).unwrap();
+    assert_eq!(entry.status, "success");
+    assert_eq!(entry.revision.as_deref(), Some("remote-revision"));
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Retry, &result)
+            .is_none()
+    );
+}

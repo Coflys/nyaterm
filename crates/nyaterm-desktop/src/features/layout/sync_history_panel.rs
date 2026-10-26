@@ -55,6 +55,24 @@ impl NyaTermApp {
         let history = self.cloud_sync.history().to_vec();
         let expanded = self.cloud_sync.history_expanded().clone();
         let conflict = self.cloud_sync.conflict().cloned();
+        let branch_view = conflict.as_ref().map(|conflict| {
+            let options =
+                crate::features::view_widgets::cloud_sync_conflict::branch_options(conflict);
+            let select = self.select_entity(
+                "cloud-conflict-branch",
+                options,
+                conflict.selected_revision.clone(),
+                self.cloud_sync.job_running(),
+                cx,
+            );
+            crate::features::view_widgets::cloud_sync_conflict::branch_details(
+                conflict,
+                div()
+                    .w_full()
+                    .h(px(nyaterm_ui::NYA_FORM_CONTROL_HEIGHT_PX))
+                    .child(nyaterm_ui::NyaSelect::new(&select)),
+            )
+        });
         let sync_action_enabled = enabled && !self.cloud_sync.job_running();
 
         let mut rows = div().flex().flex_col();
@@ -249,6 +267,8 @@ impl NyaTermApp {
                     ),
             )
             .when_some(conflict, |this, conflict| {
+                let can_resolve = conflict.preview.local_content_hash.is_some();
+                let can_pull = can_resolve && conflict.selected_revision.is_some();
                 let preview = conflict.preview;
                 let remote_inconsistent = preview.kind == CloudConflictKind::RemoteInconsistent;
                 let overwrite_blocked = preview.overwrite_blocked;
@@ -262,6 +282,7 @@ impl NyaTermApp {
                         .border_1()
                         .border_color(rgb(palette.warning))
                         .bg(rgb(palette.input))
+                        .when_some(branch_view, |card, view| card.child(div().p_3().child(view)))
                         .child(
                             div()
                                 .px_3()
@@ -358,7 +379,7 @@ impl NyaTermApp {
                                 .pb_3()
                                 .flex()
                                 .gap_2()
-                                .child(if remote_inconsistent && has_recovery_candidate {
+                                .child(if remote_inconsistent && has_recovery_candidate && !can_pull {
                                     small_button(
                                         palette,
                                         "sync-panel-recover-current",
@@ -375,13 +396,13 @@ impl NyaTermApp {
                                         }),
                                     )
                                     .into_any_element()
-                                } else if remote_inconsistent {
+                                } else if remote_inconsistent && !can_pull {
                                     // Nothing on the remote can be recovered:
                                     // pulling would download the same unreadable
                                     // payload, so only the explicit overwrite is
                                     // offered.
                                     div().into_any_element()
-                                } else {
+                                } else if can_pull {
                                     small_button(
                                         palette,
                                         "sync-panel-force-pull",
@@ -398,8 +419,8 @@ impl NyaTermApp {
                                         }),
                                     )
                                     .into_any_element()
-                                })
-                                .when(!overwrite_blocked, |this| {
+                                } else { div().text_xs().child(t!("settings.syncChooseBranch")).into_any_element() })
+                                .when(!overwrite_blocked && can_resolve, |this| {
                                     this.child(dialog_action_button(
                                         palette,
                                         "sync-panel-force-push",
@@ -676,6 +697,12 @@ mod tests {
             let mut settings = app.cloud_sync.settings().clone();
             settings.provider = "webdav".to_string();
             settings.webdav.endpoint = endpoint;
+            let persisted_settings = settings.clone();
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::CloudSync, move |store| {
+                    store.save_cloud_sync_settings(persisted_settings)
+                })
+                .expect("persist the provider configuration used by the test");
             app.cloud_sync
                 .replace_settings(settings, Default::default());
         });
@@ -790,5 +817,80 @@ mod tests {
                 "push must produce an encrypted remote snapshot"
             );
         }
+    }
+    #[test]
+    fn cloud_sync_sidebar_branch_selection_uses_keyboard_and_restores_trigger_focus() {
+        use nyaterm_core::cloud_sync::conflict::CloudConflictBranch;
+        use nyaterm_core::{CloudConflictPreview, CloudSyncError};
+        let test_dir = TestConfigDir::new("nyaterm-cloud-sync-branch-keyboard");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = test_app(&mut cx, test_dir.path());
+        let mut preview: CloudConflictPreview = serde_json::from_value(serde_json::json!({
+            "detected_at_ms": 1, "provider": "test", "local_payload_hash": "local",
+            "remote_payload_hash": "remote", "remote_revision": "r0", "remote_created_at_ms": 1,
+            "remote_device_id": "device", "message": "conflict", "local_content_hash": "local-content"
+        })).unwrap();
+        preview.branches = (0..16)
+            .map(|n| CloudConflictBranch {
+                revision: format!("r{n}"),
+                device_id: format!("device-{n}"),
+                device_name: None,
+                created_at_ms: 1,
+                readable: n != 15,
+                differences: Vec::new(),
+            })
+            .collect();
+        preview.observed_revisions = preview
+            .branches
+            .iter()
+            .map(|b| b.revision.clone())
+            .collect();
+        cx.update_entity(&app, |app, cx| {
+            app.apply_auto_cloud_sync_result(&Err(CloudSyncError::Conflict(Box::new(preview))), cx);
+        });
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| SidebarHost { app: host_app });
+            nya_root(host, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        draw(cx);
+        let viewport = cx
+            .debug_bounds("cloud-sync-branch-scroll")
+            .expect("branch list is rendered");
+        assert!(viewport.size.height <= px(260.));
+        cx.update(|window, cx| {
+            assert!(
+                app.read(cx)
+                    .cloud_sync
+                    .conflict()
+                    .unwrap()
+                    .selected_revision
+                    .is_none()
+            );
+            app.update(cx, |app, cx| {
+                assert!(app.focus_select("cloud-conflict-branch", window, cx));
+            });
+        });
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+        cx.simulate_keystrokes("down down down down");
+        draw(cx);
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+        cx.update(|window, cx| {
+            let app = app.read(cx);
+            let selected = app
+                .cloud_sync
+                .conflict()
+                .unwrap()
+                .selected_revision
+                .as_deref()
+                .expect("keyboard selection commits");
+            assert_ne!(selected, "r0");
+            assert_ne!(selected, "r15", "unreadable branches cannot be chosen");
+            assert!(app.select_is_focused("cloud-conflict-branch", window, cx));
+        });
     }
 }

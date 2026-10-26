@@ -492,6 +492,7 @@ impl std::fmt::Debug for SnapshotPasswordPromptState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloudSyncConflictState {
+    pub(crate) selected_revision: Option<String>,
     pub(crate) preview: nyaterm_core::CloudConflictPreview,
     pub(crate) provider_action: bool,
 }

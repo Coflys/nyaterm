@@ -1467,6 +1467,12 @@ mod tests {
             settings.provider = "webdav".to_string();
             settings.webdav.endpoint = endpoint;
             settings.enabled = true;
+            let persisted_settings = settings.clone();
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::CloudSync, move |store| {
+                    store.save_cloud_sync_settings(persisted_settings)
+                })
+                .expect("persist the provider configuration used by the test");
             app.cloud_sync
                 .replace_settings(settings, Default::default());
             app.sync_component_theme(cx);
@@ -1569,6 +1575,12 @@ mod tests {
             settings.provider = "webdav".to_string();
             settings.webdav.endpoint = endpoint;
             settings.enabled = true;
+            let persisted_settings = settings.clone();
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::CloudSync, move |store| {
+                    store.save_cloud_sync_settings(persisted_settings)
+                })
+                .expect("persist the provider configuration used by the test");
             app.cloud_sync
                 .replace_settings(settings, Default::default());
             app.sync_component_theme(cx);

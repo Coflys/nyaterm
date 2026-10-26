@@ -693,6 +693,13 @@ impl NyaTermApp {
     ) {
         use crate::app_shell::SharedStateDomain;
 
+        if let Some(mut draft) = self.shell.settings_draft_snapshot().cloned() {
+            self.cloud_sync.rebase_credential_rotation(
+                &mut draft.cloud_sync_settings,
+                &snapshot.cloud_sync_settings,
+            );
+            self.shell.set_settings_draft_snapshot(draft);
+        }
         let has_clean_settings_draft =
             self.shell.has_settings_draft() && !self.settings_draft_dirty();
         let settings_blocked = self.settings_draft_dirty()

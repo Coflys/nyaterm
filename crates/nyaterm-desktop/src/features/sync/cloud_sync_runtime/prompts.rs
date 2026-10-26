@@ -78,6 +78,9 @@ impl NyaTermApp {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
+        if !self.cloud_sync.prepare_resolution(false) {
+            return;
+        }
         let kind = if provider_action {
             SnapshotPasswordPromptKind::CloudProviderForcePush
         } else {
@@ -101,6 +104,9 @@ impl NyaTermApp {
             self.cloud_sync
                 .set_status(t!("settings.syncCloseActiveSessionBeforeForcePull"));
             cx.notify();
+            return;
+        }
+        if !self.cloud_sync.prepare_resolution(true) {
             return;
         }
         let kind = if provider_action {

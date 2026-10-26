@@ -37,7 +37,8 @@ struct AccessTokenResponse {
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
-    error_description: Option<String>,
+    #[serde(rename = "error_description")]
+    _error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,21 +129,9 @@ fn run_device_flow(
                 send_event(tx, job_id, GithubGistAuthEvent::Polling { slow_down: true });
                 continue;
             }
-            Some("expired_token") => {
-                return Err(payload
-                    .error_description
-                    .unwrap_or_else(|| "GitHub device authorization expired".to_string()));
-            }
-            Some("access_denied") => {
-                return Err(payload
-                    .error_description
-                    .unwrap_or_else(|| "GitHub device authorization was denied".to_string()));
-            }
-            Some(error) => {
-                return Err(payload
-                    .error_description
-                    .unwrap_or_else(|| format!("GitHub OAuth error: {error}")));
-            }
+            Some("expired_token") => return Err("GitHub device authorization expired".into()),
+            Some("access_denied") => return Err("GitHub device authorization was denied".into()),
+            Some(_) => return Err("GitHub authorization failed".into()),
             None => {}
         }
 
@@ -257,15 +246,15 @@ fn decode_json<T: serde::de::DeserializeOwned>(
     let status = response.status();
     let body = response.text().map_err(map_http_error)?;
     if !status.is_success() {
-        return Err(format!("{operation} failed ({status}): {}", body.trim()));
+        return Err(format!("{operation} failed ({status})"));
     }
-    serde_json::from_str(&body).map_err(|error| format!("{operation} response is invalid: {error}"))
+    serde_json::from_str(&body).map_err(|_| format!("{operation} response is invalid"))
 }
 
 fn response_error(response: Response, operation: &str) -> String {
     let status = response.status();
-    let body = response.text().unwrap_or_default();
-    format!("{operation} failed ({status}): {}", body.trim())
+    let _body = response.text().unwrap_or_default();
+    format!("{operation} failed ({status})")
 }
 
 fn github_client() -> Result<Client, String> {
@@ -285,9 +274,9 @@ fn github_client_id() -> Result<&'static str, String> {
 
 fn map_http_error(error: zed_reqwest::Error) -> String {
     if error.is_timeout() {
-        format!("GitHub device flow operation timed out: {error}")
+        "GitHub device flow operation timed out".to_string()
     } else {
-        format!("GitHub device flow request failed: {error}")
+        "GitHub device flow request failed".to_string()
     }
 }
 

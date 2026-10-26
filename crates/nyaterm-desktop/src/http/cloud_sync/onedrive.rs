@@ -1,3 +1,4 @@
+use nyaterm_core::cloud_sync::credentials::{CloudCredentialUpdate, DriveProvider};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -18,26 +19,40 @@ const MICROSOFT_OAUTH_TOKEN_URL: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 
 pub struct NativeOneDriveRemote {
+    pub(super) token_sink: super::CloudTokenSink,
     pub(super) client: zed_reqwest::blocking::Client,
     pub(super) root: String,
     pub(super) access_token: Mutex<nyaterm_core::SecretString>,
-    pub(super) refresh_token: Option<nyaterm_core::SecretString>,
+    pub(super) refresh_token: Mutex<nyaterm_core::SecretString>,
     pub(super) client_id: Option<String>,
     pub(super) client_secret: Option<nyaterm_core::SecretString>,
 }
 
 impl NativeOneDriveRemote {
     pub fn new(settings: &OAuthDriveSyncSettings) -> Result<Self, CloudSyncError> {
+        Self::new_with_token_sink(
+            settings,
+            std::sync::Arc::new(|_| Err(CloudSyncError::CredentialPersistence)),
+        )
+    }
+
+    pub(crate) fn new_with_token_sink(
+        settings: &OAuthDriveSyncSettings,
+        token_sink: super::CloudTokenSink,
+    ) -> Result<Self, CloudSyncError> {
         let client = zed_reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("NyaTerm")
             .build()
             .map_err(map_onedrive_http_error)?;
         let remote = Self {
+            token_sink,
             client,
             root: trim_remote_path(&settings.root),
             access_token: Mutex::new(trim_optional_secret(settings.access_token.as_deref()).into()),
-            refresh_token: trim_optional(settings.refresh_token.as_deref()).map(Into::into),
+            refresh_token: Mutex::new(
+                trim_optional_secret(settings.refresh_token.as_deref()).into(),
+            ),
             client_id: trim_optional(settings.client_id.as_deref()),
             client_secret: trim_optional(settings.client_secret.as_deref()).map(Into::into),
         };
@@ -64,9 +79,11 @@ impl NativeOneDriveRemote {
     }
 
     fn can_refresh_access_token(&self) -> bool {
-        self.refresh_token
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
+        !self
+            .refresh_token
+            .lock()
+            .expect("refresh token lock")
+            .is_empty()
             && self
                 .client_id
                 .as_deref()
@@ -74,13 +91,16 @@ impl NativeOneDriveRemote {
     }
 
     fn refresh_access_token(&self) -> Result<(), CloudSyncError> {
+        let expected_access_token =
+            Some(self.access_token.lock().expect("access token lock").clone());
         let refresh_token = self
             .refresh_token
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                CloudSyncError::Remote("OneDrive refresh token is required".to_string())
-            })?;
+            .lock()
+            .expect("refresh token lock")
+            .clone();
+        if refresh_token.is_empty() {
+            return Err(CloudSyncError::Remote("refresh token is required".into()));
+        }
         let client_id = self
             .client_id
             .as_deref()
@@ -88,7 +108,7 @@ impl NativeOneDriveRemote {
             .ok_or_else(|| CloudSyncError::Remote("OneDrive client ID is required".to_string()))?;
         let mut fields = vec![
             ("client_id", client_id),
-            ("refresh_token", refresh_token),
+            ("refresh_token", refresh_token.expose_secret()),
             ("grant_type", "refresh_token"),
         ];
         if let Some(client_secret) = self
@@ -106,14 +126,17 @@ impl NativeOneDriveRemote {
             .send()
             .map_err(map_onedrive_http_error)?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         let body = response.text().map_err(map_onedrive_http_error)?;
         if !status.is_success() {
-            return Err(CloudSyncError::Remote(format!(
-                "OneDrive token refresh failed ({status}): {}",
-                body.trim()
-            )));
+            return Err(super::helpers::oauth_failure(
+                "OneDrive",
+                status.as_u16(),
+                &body,
+                _retry_after_seconds,
+            ));
         }
-        let value: serde_json::Value = serde_json::from_str(&body)?;
+        let value: serde_json::Value = super::helpers::safe_json(&body, "OneDrive")?;
         let access_token = value
             .get("access_token")
             .and_then(serde_json::Value::as_str)
@@ -124,10 +147,27 @@ impl NativeOneDriveRemote {
                     "OneDrive token refresh response did not include access_token".to_string(),
                 )
             })?;
-        *self
-            .access_token
-            .lock()
-            .expect("onedrive access token lock") = access_token.to_string().into();
+        let rotated = value
+            .get("refresh_token")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(nyaterm_core::SecretString::from);
+        let access_token: nyaterm_core::SecretString = access_token.into();
+        super::helpers::install_refreshed_tokens(
+            &self.access_token,
+            &self.refresh_token,
+            &self.token_sink,
+            CloudCredentialUpdate {
+                provider: DriveProvider::OneDrive,
+                client_id: self.client_id.clone(),
+                client_secret: self.client_secret.clone(),
+                expected_access_token,
+                expected_refresh_token: Some(refresh_token),
+                access_token: access_token.clone(),
+                refresh_token: rotated.clone(),
+            },
+        )?;
         Ok(())
     }
 
@@ -196,17 +236,20 @@ impl NativeOneDriveRemote {
                 .query(&[("select", "id,name,folder,file")])
         })?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
             return Ok(false);
         }
         let body = response.text().map_err(map_onedrive_http_error)?;
         if !status.is_success() {
-            return Err(CloudSyncError::Remote(format!(
-                "OneDrive item lookup failed ({status}): {}",
-                body.trim()
-            )));
+            return Err(super::helpers::http_failure(
+                "OneDrive",
+                "request",
+                status.as_u16(),
+                _retry_after_seconds,
+            ));
         }
-        let value: serde_json::Value = serde_json::from_str(&body)?;
+        let value: serde_json::Value = super::helpers::safe_json(&body, "OneDrive")?;
         if value.get("folder").is_some() {
             return Ok(true);
         }
@@ -230,17 +273,20 @@ impl NativeOneDriveRemote {
                 .json(&body)
         })?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::CONFLICT {
             return Ok(());
         }
         if status.is_success() {
             return Ok(());
         }
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "OneDrive create folder failed ({status}): {}",
-            body.trim()
-        )))
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "OneDrive",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn ensure_folder_segments(&self, child_path: &str) -> Result<(), CloudSyncError> {
@@ -278,6 +324,7 @@ impl CloudSyncRemote for NativeOneDriveRemote {
                 .header(AUTHORIZATION, format!("Bearer {token}"))
         })?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -287,11 +334,13 @@ impl CloudSyncRemote for NativeOneDriveRemote {
                 .map(|bytes| Some(bytes.to_vec()))
                 .map_err(map_onedrive_http_error);
         }
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "OneDrive media download failed ({status}): {}",
-            body.trim()
-        )))
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "OneDrive",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn write(&self, path: &str, bytes: &[u8]) -> Result<(), CloudSyncError> {
@@ -313,14 +362,17 @@ impl CloudSyncRemote for NativeOneDriveRemote {
                 .body(bytes.to_vec())
         })?;
         let status = response.status();
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status.is_success() {
             return Ok(());
         }
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "OneDrive media upload failed ({status}): {}",
-            body.trim()
-        )))
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "OneDrive",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
@@ -334,11 +386,14 @@ impl CloudSyncRemote for NativeOneDriveRemote {
             return Ok(());
         }
         let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Err(CloudSyncError::Remote(format!(
-            "OneDrive file delete failed ({status}): {}",
-            body.trim()
-        )))
+        let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
+        let _body = response.text().unwrap_or_default();
+        Err(super::helpers::http_failure(
+            "OneDrive",
+            "request",
+            status.as_u16(),
+            _retry_after_seconds,
+        ))
     }
 
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
@@ -358,15 +413,18 @@ impl CloudSyncRemote for NativeOneDriveRemote {
                 }
             })?;
             let status = response.status();
+            let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
             let body = response.text().map_err(map_onedrive_http_error)?;
             if status == StatusCode::NOT_FOUND {
                 return Ok(Vec::new());
             }
             if !status.is_success() {
-                return Err(CloudSyncError::Remote(format!(
-                    "OneDrive file list failed ({status}): {}",
-                    body.trim()
-                )));
+                return Err(super::helpers::http_failure(
+                    "OneDrive",
+                    "request",
+                    status.as_u16(),
+                    _retry_after_seconds,
+                ));
             }
             let page = parse_onedrive_list_page(&body)?;
             names.extend(page.names);
@@ -393,7 +451,7 @@ pub(super) struct OneDriveListPage {
 }
 
 pub(super) fn parse_onedrive_list_page(body: &str) -> Result<OneDriveListPage, CloudSyncError> {
-    let value: serde_json::Value = serde_json::from_str(body)?;
+    let value: serde_json::Value = super::helpers::safe_json(body, "OneDrive")?;
     let names = value
         .get("value")
         .and_then(serde_json::Value::as_array)
@@ -415,12 +473,5 @@ pub(super) fn onedrive_item_path(base_root: &str, child: &str) -> String {
 }
 
 fn map_onedrive_http_error(error: zed_reqwest::Error) -> CloudSyncError {
-    if error.is_timeout() {
-        CloudSyncError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            format!("OneDrive operation timed out: {error}"),
-        ))
-    } else {
-        CloudSyncError::Remote(format!("OneDrive request failed: {error}"))
-    }
+    super::helpers::safe_http_error("OneDrive", error)
 }

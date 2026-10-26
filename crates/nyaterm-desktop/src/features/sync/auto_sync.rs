@@ -28,12 +28,29 @@ pub(crate) enum AutoSyncTrigger {
     Retry,
 }
 
+impl AutoSyncTrigger {
+    pub(crate) fn history_name(self) -> &'static str {
+        match self {
+            Self::Startup => "auto_startup",
+            Self::Periodic => "auto_periodic",
+            Self::Focus => "auto_focus",
+            Self::Settings => "auto_settings",
+            Self::Change => "auto_change",
+            Self::DeferredPull => "auto_deferred_pull",
+            Self::Retry => "auto_retry",
+        }
+    }
+}
+
 pub(crate) enum AutoSyncResult {
     Disabled,
     Skipped,
     Debouncing(Duration),
     Busy,
-    RemoteAvailable { retry_when_safe: bool },
+    RemoteAvailable {
+        retry_when_safe: bool,
+        revision: Option<String>,
+    },
     UpToDate(Box<CloudSyncState>),
     Synced(Box<CloudSyncResult>),
 }
@@ -62,34 +79,12 @@ pub(crate) fn run_auto_sync(
             ))
         })
         .map_err(|error| CloudSyncError::LocalStore(error.category().to_string()))?;
-    if !settings.enabled {
-        return Ok(AutoSyncResult::Disabled);
-    }
-    if settings.provider == "github_gist"
-        && matches!(
-            trigger,
-            AutoSyncTrigger::Startup
-                | AutoSyncTrigger::Periodic
-                | AutoSyncTrigger::Focus
-                | AutoSyncTrigger::DeferredPull
-        )
-    {
-        return Ok(AutoSyncResult::Skipped);
-    }
-    if trigger == AutoSyncTrigger::Startup && !settings.auto_check_on_startup {
-        return Ok(AutoSyncResult::Skipped);
-    }
-    if trigger == AutoSyncTrigger::Change {
-        if !settings.auto_push_on_change {
-            return Ok(AutoSyncResult::Skipped);
-        }
-        let debounce = Duration::from_secs(settings.sync_debounce_seconds.clamp(1, 3_600));
-        if change_elapsed < debounce {
-            return Ok(AutoSyncResult::Debouncing(debounce - change_elapsed));
-        }
+    if let Some(skipped) = auto_sync_skip(&settings, trigger, change_elapsed) {
+        return Ok(skipped);
     }
     let password = password.ok_or(nyaterm_core::PortableSnapshotError::MissingMasterPassword)?;
     let options = LocalCloudSyncOptions {
+        device_name: Some(settings.device_name.clone()),
         config_dir: runtime.config_dir().to_path_buf(),
         portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
         remote_dir: runtime.config_dir().join("cloud-sync-local"),
@@ -100,6 +95,7 @@ pub(crate) fn run_auto_sync(
         enabled: true,
     };
     let checked = check_provider_snapshot(store, &settings, &options, &state, &controls.sync)?;
+    let revision = checked.pointer.as_ref().map(|p| p.revision_id.clone());
     match checked.decision {
         CloudRemoteCheckDecision::LocalChanged if settings.auto_push_on_change => {
             let result = push_checked_provider_snapshot(
@@ -124,6 +120,7 @@ pub(crate) fn run_auto_sync(
                 Err(CloudSyncError::AutoPullDeferred) => {
                     return Ok(AutoSyncResult::RemoteAvailable {
                         retry_when_safe: true,
+                        revision: revision.clone(),
                     });
                 }
                 result => result?,
@@ -133,9 +130,11 @@ pub(crate) fn run_auto_sync(
         }
         CloudRemoteCheckDecision::AutoPull => Ok(AutoSyncResult::RemoteAvailable {
             retry_when_safe: true,
+            revision: revision.clone(),
         }),
         CloudRemoteCheckDecision::RemoteAvailable => Ok(AutoSyncResult::RemoteAvailable {
             retry_when_safe: false,
+            revision,
         }),
         CloudRemoteCheckDecision::Conflict => unreachable!("conflict returned by remote check"),
         CloudRemoteCheckDecision::UpToDate | CloudRemoteCheckDecision::LocalChanged => {
@@ -150,6 +149,29 @@ pub(crate) fn run_auto_sync(
             Ok(AutoSyncResult::UpToDate(Box::new(checked)))
         }
     }
+}
+
+fn auto_sync_skip(
+    settings: &CloudSyncSettings,
+    trigger: AutoSyncTrigger,
+    change_elapsed: Duration,
+) -> Option<AutoSyncResult> {
+    if !settings.enabled {
+        return Some(AutoSyncResult::Disabled);
+    }
+    if trigger == AutoSyncTrigger::Startup && !settings.auto_check_on_startup {
+        return Some(AutoSyncResult::Skipped);
+    }
+    if trigger == AutoSyncTrigger::Change {
+        if !settings.auto_push_on_change {
+            return Some(AutoSyncResult::Skipped);
+        }
+        let debounce = Duration::from_secs(settings.sync_debounce_seconds.clamp(1, 3_600));
+        if change_elapsed < debounce {
+            return Some(AutoSyncResult::Debouncing(debounce - change_elapsed));
+        }
+    }
+    None
 }
 
 fn cleanup_if_due(
@@ -244,5 +266,54 @@ impl NyaTermApp {
         }
         self.request_settings_panel_refresh(cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AutoSyncResult, AutoSyncTrigger, auto_sync_skip};
+    use nyaterm_core::CloudSyncSettings;
+    use std::time::Duration;
+
+    #[test]
+    fn github_gist_uses_every_background_trigger_and_the_same_switches_and_debounce() {
+        let mut settings = CloudSyncSettings {
+            enabled: true,
+            provider: "github_gist".into(),
+            auto_check_on_startup: true,
+            auto_push_on_change: true,
+            sync_debounce_seconds: 10,
+            ..CloudSyncSettings::default()
+        };
+        for trigger in [
+            AutoSyncTrigger::Startup,
+            AutoSyncTrigger::Periodic,
+            AutoSyncTrigger::Focus,
+            AutoSyncTrigger::Settings,
+            AutoSyncTrigger::Change,
+            AutoSyncTrigger::DeferredPull,
+            AutoSyncTrigger::Retry,
+        ] {
+            assert!(auto_sync_skip(&settings, trigger, Duration::from_secs(11)).is_none());
+        }
+        assert!(
+            matches!(auto_sync_skip(&settings, AutoSyncTrigger::Change, Duration::from_secs(4)), Some(AutoSyncResult::Debouncing(delay)) if delay == Duration::from_secs(6))
+        );
+        settings.auto_check_on_startup = false;
+        assert!(matches!(
+            auto_sync_skip(&settings, AutoSyncTrigger::Startup, Duration::ZERO),
+            Some(AutoSyncResult::Skipped)
+        ));
+        assert!(auto_sync_skip(&settings, AutoSyncTrigger::Periodic, Duration::ZERO).is_none());
+        settings.auto_push_on_change = false;
+        assert!(matches!(
+            auto_sync_skip(&settings, AutoSyncTrigger::Change, Duration::ZERO),
+            Some(AutoSyncResult::Skipped)
+        ));
+        settings.enabled = false;
+        assert!(matches!(
+            auto_sync_skip(&settings, AutoSyncTrigger::Focus, Duration::ZERO),
+            Some(AutoSyncResult::Disabled)
+        ));
     }
 }

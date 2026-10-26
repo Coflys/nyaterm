@@ -79,7 +79,24 @@ impl SettingsPanel {
     ) -> impl IntoElement {
         let palette = self.theme_palette();
         let provider_action = conflict.provider_action;
-        let preview = conflict.preview;
+        let selected_revision = conflict.selected_revision.clone();
+        let preview = conflict.preview.clone();
+        let can_resolve = preview.local_content_hash.is_some();
+        let can_pull = can_resolve && selected_revision.is_some();
+        let options = crate::features::view_widgets::cloud_sync_conflict::branch_options(&conflict);
+        let branch_select = self
+            .select_control(
+                "cloud-conflict-branch",
+                options,
+                selected_revision.clone(),
+                self.cloud_sync.job_running(),
+                cx,
+            )
+            .into_any_element();
+        let branches = crate::features::view_widgets::cloud_sync_conflict::branch_details(
+            &conflict,
+            branch_select,
+        );
         let remote_inconsistent = preview.kind == CloudConflictKind::RemoteInconsistent;
         let overwrite_blocked = preview.overwrite_blocked;
         let has_recovery_candidate = preview.recovery_revision.is_some();
@@ -111,6 +128,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap_3()
+            .child(branches)
             .child(
                 div()
                     .flex()
@@ -169,33 +187,44 @@ impl SettingsPanel {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .child(if remote_inconsistent && has_recovery_candidate {
-                        small_button(
-                            palette,
-                            "cloud-conflict-recover-current",
-                            t!("settings.useCurrentRemoteSnapshot"),
-                            cx.listener(move |this, _, window, cx| {
-                                this.prompt_cloud_sync_recover_current(provider_action, window, cx);
-                            }),
-                        )
-                        .into_any_element()
-                    } else if remote_inconsistent {
-                        // Nothing on the remote can be recovered: pulling would
-                        // download the same unreadable payload, so the explicit
-                        // overwrite below is the only action offered.
-                        div().into_any_element()
-                    } else {
-                        small_button(
-                            palette,
-                            "cloud-conflict-force-pull",
-                            t!("settings.downloadRemoteVersion"),
-                            cx.listener(move |this, _, window, cx| {
-                                this.prompt_cloud_sync_force_pull(provider_action, window, cx);
-                            }),
-                        )
-                        .into_any_element()
-                    })
-                    .when(!overwrite_blocked, |this| {
+                    .child(
+                        if remote_inconsistent && has_recovery_candidate && !can_pull {
+                            small_button(
+                                palette,
+                                "cloud-conflict-recover-current",
+                                t!("settings.useCurrentRemoteSnapshot"),
+                                cx.listener(move |this, _, window, cx| {
+                                    this.prompt_cloud_sync_recover_current(
+                                        provider_action,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element()
+                        } else if remote_inconsistent && !can_pull {
+                            // Nothing on the remote can be recovered: pulling would
+                            // download the same unreadable payload, so the explicit
+                            // overwrite below is the only action offered.
+                            div().into_any_element()
+                        } else if can_pull {
+                            small_button(
+                                palette,
+                                "cloud-conflict-force-pull",
+                                t!("settings.downloadRemoteVersion"),
+                                cx.listener(move |this, _, window, cx| {
+                                    this.prompt_cloud_sync_force_pull(provider_action, window, cx);
+                                }),
+                            )
+                            .into_any_element()
+                        } else {
+                            div()
+                                .text_xs()
+                                .child(t!("settings.syncChooseBranch"))
+                                .into_any_element()
+                        },
+                    )
+                    .when(!overwrite_blocked && can_resolve, |this| {
                         this.child(dialog_action_button(
                             palette,
                             "cloud-conflict-force-push",

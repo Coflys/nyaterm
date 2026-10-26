@@ -6,7 +6,9 @@ use thiserror::Error;
 
 use crate::{PortableSnapshotError, RawPortableSnapshot};
 
+pub mod conflict;
 pub mod control;
+pub mod credentials;
 mod gc;
 mod heads;
 mod history;
@@ -52,6 +54,23 @@ pub const REMOTE_SYNC_POINTER_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum CloudSyncError {
+    #[error("{provider} {operation} failed (HTTP {status})")]
+    Http {
+        provider: String,
+        operation: String,
+        status: u16,
+        retry_after_seconds: Option<u64>,
+    },
+    #[error("{provider} {operation} authentication failed (HTTP {status})")]
+    Authentication {
+        provider: String,
+        operation: String,
+        status: u16,
+    },
+    #[error("cloud credentials changed during token refresh; retry with the current account")]
+    CredentialsChanged,
+    #[error("refreshed cloud credentials could not be saved")]
+    CredentialPersistence,
     #[error("cloud sync was cancelled before commit")]
     Cancelled,
     #[error(
@@ -222,6 +241,46 @@ impl CloudSyncError {
 }
 
 impl CloudSyncError {
+    pub fn classification(&self) -> &'static str {
+        match self {
+            Self::Authentication { .. } => "authentication",
+            Self::Http {
+                status: 403 | 429,
+                retry_after_seconds: Some(_),
+                ..
+            } => "rate_limited",
+            Self::Http {
+                status: 401 | 403, ..
+            } => "authentication",
+            Self::Http { status: 429, .. } => "rate_limited",
+            Self::Http {
+                status: 500..=599, ..
+            } => "server",
+            Self::Http { .. } => "http",
+            Self::Conflict(_) => "conflict",
+            Self::CredentialsChanged => "credentials_changed",
+            Self::CredentialPersistence => "credential_persistence",
+            Self::Cancelled => "cancelled",
+            Self::GistCapacity => "gist_capacity",
+            Self::LocalChangedDuringSync => "local_changed",
+            Self::StaleRemoteRevision => "stale_remote",
+            Self::Io(_) => "io",
+            Self::LocalStore(_) => "store",
+            Self::PortableSnapshot(_) => "snapshot",
+            _ => "sync",
+        }
+    }
+
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::Http {
+                retry_after_seconds: Some(seconds),
+                ..
+            } => Some(std::time::Duration::from_secs(*seconds)),
+            _ => None,
+        }
+    }
+
     pub fn code(&self) -> Option<&'static str> {
         matches!(self, Self::GistCapacity).then_some(GIST_CAPACITY_ERROR_CODE)
     }
@@ -307,6 +366,12 @@ pub enum CloudConflictKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudConflictPreview {
+    #[serde(default)]
+    pub branches: Vec<conflict::CloudConflictBranch>,
+    #[serde(default)]
+    pub observed_revisions: Vec<String>,
+    #[serde(default)]
+    pub local_content_hash: Option<String>,
     pub detected_at_ms: u64,
     pub provider: String,
     #[serde(default)]
@@ -621,7 +686,12 @@ pub fn push_snapshot_with_remote_controlled(
     force: bool,
     control: &control::CloudSyncOperationControl,
 ) -> Result<CloudSyncResult, CloudSyncError> {
-    push_snapshot_prepared(local_store, options, remote, state, force, control, None)
+    conflict::with_details(
+        push_snapshot_prepared(local_store, options, remote, state, force, control, None),
+        &control.local_store(local_store),
+        &control.remote(remote),
+        options,
+    )
 }
 
 fn push_snapshot_prepared(
@@ -753,6 +823,7 @@ fn push_snapshot_prepared(
         return Err(CloudSyncError::RemoteNewer);
     }
 
+    snapshot.meta.device_name = options.device_name.clone();
     snapshot.meta.sync_clock =
         Some(heads.next_clock(state.last_synced_clock.as_ref(), &options.device_id)?);
     let uploaded =
@@ -843,17 +914,22 @@ pub fn pull_snapshot_with_remote_controlled(
     before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
     control: &control::CloudSyncOperationControl,
 ) -> Result<CloudSyncResult, CloudSyncError> {
-    pull_snapshot_prepared(
-        local_store,
+    conflict::with_details(
+        pull_snapshot_prepared(
+            local_store,
+            options,
+            remote,
+            state,
+            force,
+            PullExecution {
+                before_apply,
+                control,
+            },
+            None,
+        ),
+        &control.local_store(local_store),
+        &control.remote(remote),
         options,
-        remote,
-        state,
-        force,
-        PullExecution {
-            before_apply,
-            control,
-        },
-        None,
     )
 }
 
@@ -1000,6 +1076,7 @@ fn pull_snapshot_prepared(
         snapshot.meta.revision_id = uuid_v4();
         snapshot.meta.created_at_ms = current_time_ms();
         snapshot.meta.device_id = options.device_id.clone();
+        snapshot.meta.device_name = options.device_name.clone();
         snapshot.meta.sync_clock =
             Some(heads.next_clock(state.last_synced_clock.as_ref(), &options.device_id)?);
         snapshot.recalculate_hash()?;
@@ -1149,14 +1226,19 @@ impl CloudSyncCheck {
         remote: &dyn CloudSyncRemote,
         control: &control::CloudSyncOperationControl,
     ) -> Result<CloudSyncResult, CloudSyncError> {
-        push_snapshot_prepared(
-            store,
+        conflict::with_details(
+            push_snapshot_prepared(
+                store,
+                options,
+                remote,
+                &self.state,
+                false,
+                control,
+                Some(self.prepared),
+            ),
+            &control.local_store(store),
+            &control.remote(remote),
             options,
-            remote,
-            &self.state,
-            false,
-            control,
-            Some(self.prepared),
         )
     }
 
@@ -1168,22 +1250,42 @@ impl CloudSyncCheck {
         before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
         control: &control::CloudSyncOperationControl,
     ) -> Result<CloudSyncResult, CloudSyncError> {
-        pull_snapshot_prepared(
-            store,
+        conflict::with_details(
+            pull_snapshot_prepared(
+                store,
+                options,
+                remote,
+                &self.state,
+                false,
+                PullExecution {
+                    before_apply,
+                    control,
+                },
+                Some(self.prepared),
+            ),
+            &control.local_store(store),
+            &control.remote(remote),
             options,
-            remote,
-            &self.state,
-            false,
-            PullExecution {
-                before_apply,
-                control,
-            },
-            Some(self.prepared),
         )
     }
 }
 
 pub fn check_snapshot_with_remote_state(
+    local_store: &dyn CloudLocalStore,
+    options: &LocalCloudSyncOptions,
+    remote: &dyn CloudSyncRemote,
+    state: &CloudSyncState,
+    allow_auto_pull: bool,
+) -> Result<CloudSyncCheck, CloudSyncError> {
+    conflict::with_details(
+        check_snapshot_inner(local_store, options, remote, state, allow_auto_pull),
+        local_store,
+        remote,
+        options,
+    )
+}
+
+fn check_snapshot_inner(
     local_store: &dyn CloudLocalStore,
     options: &LocalCloudSyncOptions,
     remote: &dyn CloudSyncRemote,
@@ -1343,6 +1445,9 @@ fn conflict_preview(
     remote: &RemoteSyncPointer,
 ) -> CloudConflictPreview {
     CloudConflictPreview {
+        branches: Vec::new(),
+        observed_revisions: Vec::new(),
+        local_content_hash: None,
         detected_at_ms: current_time_ms(),
         provider: provider.to_string(),
         kind: CloudConflictKind::ContentConflict,
@@ -1380,6 +1485,9 @@ fn remote_inconsistent_preview(
         message.push_str(&unreadable.reason);
     }
     CloudConflictPreview {
+        branches: Vec::new(),
+        observed_revisions: Vec::new(),
+        local_content_hash: None,
         detected_at_ms: current_time_ms(),
         provider: provider.to_string(),
         kind: CloudConflictKind::RemoteInconsistent,

@@ -87,6 +87,7 @@ impl NyaTermApp {
                         this.shell.set_status(this.cloud_sync.status().to_string());
                     }
                 }
+                this.queue_cloud_sync_credentials_refresh(cx);
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
@@ -107,6 +108,11 @@ impl NyaTermApp {
         if !self.begin_cloud_sync_job(cx) {
             return;
         }
+        let resolution = if force {
+            self.cloud_sync.take_resolution()
+        } else {
+            None
+        };
         let options = self.local_cloud_sync_options(master_password);
         let cleanup_options = options.clone();
         let local_store = self.store_blocking_client();
@@ -123,7 +129,21 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-local-push", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                if force && resolution.is_none() {
+                    return Err(CloudSyncError::LocalChangedDuringSync);
+                }
                 let state = load_current_cloud_sync_state(&local_store)?;
+                if let Some(request) = &resolution {
+                    return nyaterm_core::cloud_sync::conflict::resolve_with_remote(
+                        &local_store,
+                        &options,
+                        &LocalDirectoryRemote::new(options.remote_dir.clone()),
+                        &state,
+                        request,
+                        &|| Ok(()),
+                        &operation_control,
+                    );
+                }
                 cloud_sync::push_snapshot_with_remote_controlled(
                     &local_store,
                     &options,
@@ -199,6 +219,7 @@ impl NyaTermApp {
                         this.queue_cloud_sync_history_refresh(Some(history), cx);
                     }
                 }
+                this.queue_cloud_sync_credentials_refresh(cx);
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
@@ -225,6 +246,11 @@ impl NyaTermApp {
         if !self.begin_cloud_sync_job(cx) {
             return;
         }
+        let resolution = if force {
+            self.cloud_sync.take_resolution()
+        } else {
+            None
+        };
         let options = self.local_cloud_sync_options(master_password);
         let cleanup_options = options.clone();
         let local_store = self.store_blocking_client();
@@ -241,7 +267,21 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-local-pull", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                if force && resolution.is_none() {
+                    return Err(CloudSyncError::LocalChangedDuringSync);
+                }
                 let state = load_current_cloud_sync_state(&local_store)?;
+                if let Some(request) = &resolution {
+                    return nyaterm_core::cloud_sync::conflict::resolve_with_remote(
+                        &local_store,
+                        &options,
+                        &LocalDirectoryRemote::new(options.remote_dir.clone()),
+                        &state,
+                        request,
+                        &|| Ok(()),
+                        &operation_control,
+                    );
+                }
                 cloud_sync::pull_snapshot_with_remote_controlled(
                     &local_store,
                     &options,
@@ -319,6 +359,7 @@ impl NyaTermApp {
                         this.queue_cloud_sync_history_refresh(Some(history), cx);
                     }
                 }
+                this.queue_cloud_sync_credentials_refresh(cx);
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
@@ -339,6 +380,11 @@ impl NyaTermApp {
         if !self.begin_cloud_sync_job(cx) {
             return;
         }
+        let resolution = if force {
+            self.cloud_sync.take_resolution()
+        } else {
+            None
+        };
         let options = self.local_cloud_sync_options(master_password);
         let cleanup_options = options.clone();
         let settings = self.cloud_sync.settings().clone();
@@ -360,7 +406,20 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-provider-push", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                if force && resolution.is_none() {
+                    return Err(CloudSyncError::LocalChangedDuringSync);
+                }
                 let state = load_current_cloud_sync_state(&local_store)?;
+                if let Some(request) = &resolution {
+                    return super::super::cloud_sync_provider::resolve_provider_conflict(
+                        &local_store,
+                        &settings,
+                        &options,
+                        &state,
+                        request,
+                        &operation_control,
+                    );
+                }
                 push_provider_snapshot(
                     &local_store,
                     &settings,
@@ -436,6 +495,7 @@ impl NyaTermApp {
                         this.queue_cloud_sync_history_refresh(Some(history), cx);
                     }
                 }
+                this.queue_cloud_sync_credentials_refresh(cx);
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
@@ -462,6 +522,11 @@ impl NyaTermApp {
         if !self.begin_cloud_sync_job(cx) {
             return;
         }
+        let resolution = if force {
+            self.cloud_sync.take_resolution()
+        } else {
+            None
+        };
         let options = self.local_cloud_sync_options(master_password);
         let cleanup_options = options.clone();
         let settings = self.cloud_sync.settings().clone();
@@ -483,7 +548,20 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-provider-pull", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                if force && resolution.is_none() {
+                    return Err(CloudSyncError::LocalChangedDuringSync);
+                }
                 let state = load_current_cloud_sync_state(&local_store)?;
+                if let Some(request) = &resolution {
+                    return super::super::cloud_sync_provider::resolve_provider_conflict(
+                        &local_store,
+                        &settings,
+                        &options,
+                        &state,
+                        request,
+                        &operation_control,
+                    );
+                }
                 pull_provider_snapshot(
                     &local_store,
                     &settings,
@@ -560,6 +638,7 @@ impl NyaTermApp {
                         this.queue_cloud_sync_history_refresh(Some(history), cx);
                     }
                 }
+                this.queue_cloud_sync_credentials_refresh(cx);
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
@@ -573,6 +652,7 @@ impl NyaTermApp {
         master_password: nyaterm_core::SecretString,
     ) -> LocalCloudSyncOptions {
         LocalCloudSyncOptions {
+            device_name: Some(self.cloud_sync.settings().device_name.clone()),
             config_dir: self.runtime.config_dir().to_path_buf(),
             portable_key_path: self.runtime.portable_key_path().map(ToOwned::to_owned),
             remote_dir: self.runtime.config_dir().join("cloud-sync-local"),
@@ -691,6 +771,7 @@ impl NyaTermApp {
                         this.shell.set_status(this.cloud_sync.status().to_string());
                     }
                 }
+                this.queue_cloud_sync_credentials_refresh(cx);
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
             });
@@ -718,7 +799,7 @@ impl NyaTermApp {
         true
     }
 
-    pub(in crate::features) fn queue_cloud_sync_history_refresh(
+    pub(crate) fn queue_cloud_sync_history_refresh(
         &mut self,
         entry: Option<CloudSyncHistoryEntry>,
         cx: &mut Context<Self>,
@@ -738,9 +819,7 @@ impl NyaTermApp {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(history) => this.cloud_sync.replace_history(history),
-                    Err(error) => this
-                        .cloud_sync
-                        .set_status(t!("settings.syncHistoryRefreshFailed", detail = error)),
+                    Err(_) => tracing::warn!("cloud sync history refresh failed"),
                 }
                 this.request_settings_panel_refresh(cx);
                 cx.notify();
