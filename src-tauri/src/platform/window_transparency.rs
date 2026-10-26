@@ -35,6 +35,13 @@ pub fn should_apply_acrylic_blur(mode: WindowTransparency, acrylic_blur: bool) -
     mode == WindowTransparency::Transparent && acrylic_blur
 }
 
+#[cfg(any(windows, test))]
+fn should_skip_native_backdrop(
+    version: Option<crate::platform::windows_version::WindowsVersion>,
+) -> bool {
+    matches!(version, Some(version) if version.major == 6 && version.minor == 1)
+}
+
 #[cfg(windows)]
 fn legacy_acrylic_activation_color() -> window_vibrancy::Color {
     // The visible dimming is controlled by frontend CSS opacity. The native API
@@ -96,6 +103,13 @@ fn set_window_composition_attribute() -> Option<SetWindowCompositionAttribute> {
 pub fn apply_to_window(window: &WebviewWindow, mode: WindowTransparency, acrylic_blur: bool) {
     #[cfg(windows)]
     {
+        // Windows 7 does not support these native backdrop effects. Applying
+        // or clearing them can interfere with repainting its opaque windows.
+        if should_skip_native_backdrop(crate::platform::windows_version::current_windows_version())
+        {
+            return;
+        }
+
         use window_vibrancy::{clear_acrylic, clear_mica};
         // Always clear stale native backdrops first so toggling the material
         // switch or returning to an opaque window does not stack effects.
@@ -216,6 +230,24 @@ mod tests {
             false
         ));
         assert!(!should_apply_acrylic_blur(WindowTransparency::Opaque, true));
+    }
+
+    #[test]
+    fn native_backdrop_is_skipped_only_on_windows_7() {
+        use crate::platform::windows_version::WindowsVersion;
+
+        let version = |major, minor, build| WindowsVersion {
+            major,
+            minor,
+            build,
+            workstation: true,
+        };
+
+        assert!(should_skip_native_backdrop(Some(version(6, 1, 7601))));
+        assert!(!should_skip_native_backdrop(Some(version(6, 2, 9200))));
+        assert!(!should_skip_native_backdrop(Some(version(10, 0, 19045))));
+        assert!(!should_skip_native_backdrop(Some(version(10, 0, 26100))));
+        assert!(!should_skip_native_backdrop(None));
     }
 
     #[test]
