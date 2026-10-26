@@ -302,6 +302,7 @@ class PackageNativeTests(unittest.TestCase):
                 mock.patch.object(
                     package_native, "find_makensis", return_value="makensis"
                 ),
+                mock.patch.object(package_native.windows_msi, "find_wix", return_value="wix"),
             ):
                 package_native.WORK_DIR.mkdir(parents=True)
                 package_native.DIST_DIR.mkdir(parents=True)
