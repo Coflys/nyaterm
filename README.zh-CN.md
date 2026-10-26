@@ -286,9 +286,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 | macOS | `.dmg` |
 | Linux | `.deb` / `.AppImage` / `.rpm` |
 
-Windows 便携版解压后运行 `NyaTerm.exe` 即可。GPUI 版本的 **Help → 检查更新** 只检查 GitHub Releases 并打开发布页面，不会自动替换程序文件。更新前请关闭 NyaTerm，替换完整的便携目录并保留 `data/`。
+Windows 便携版解压后运行 `NyaTerm.exe`，数据保存在旁边的 `data/`。GPUI 的 **Help → 检查更新** 使用签名更新清单，支持适用安装方式的下载和安装；Homebrew、deb/rpm 用户通过包管理器更新。
 
-以前安装的 Tauri 安装版可以通过原有签名更新器迁移一次到 GPUI 安装版。旧 Tauri 便携更新器无法携带 GPUI 必需的 RDP/VNC helper，因此必须手动迁移：下载完整的 GPUI 便携 ZIP，再把原 `data/` 目录复制进去。
+**从 1.x 迁移：Windows 便携版和旧 MSI 必须手动升级。** 先退出并备份完整数据及密钥；便携版完整覆盖程序文件并保留 `data/`，MSI 备份后卸载旧版再安装 NSIS。不能只复制主程序，也不承诺所有旧安装方式都能自动升级。详见 [2.0 迁移指南](https://nyaterm.app/docs/getting-started/migration-v2)。
 
 ### macOS
 

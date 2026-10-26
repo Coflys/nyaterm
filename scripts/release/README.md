@@ -54,3 +54,27 @@ Commit the version changes before creating the matching `v<version>` release
 tag. The release workflow requires the tag/input version to match the Cargo
 workspace version. The script can create a local commit with `--commit`; tags,
 pushes, and release publishing remain separate steps.
+
+## Signed rehearsal and GPUI cutover
+
+See [GPUI_CUTOVER.md](GPUI_CUTOVER.md) for frozen sources, migration acceptance,
+PowerShell commands, release gates and distribution recovery.
+
+`Release` accepts `verify_release` (default `false`) in both dispatch and reusable
+workflow calls. Set it to `true` with `upload_release=false` to build all targets,
+verify package provenance, sign updater payloads, and generate/verify the
+manifests without publishing. The `release-candidate` Actions artifact retains
+packages, manifests, hashes, release notes and per-target source records for 30
+days. This is distinct from OS code signing/notarization.
+
+`source_ref` is resolved once to a full SHA. Reusing `source_run_id` requires a
+successful run from this repository's Release workflow, matching source/version
+records and package hashes. Runs without provenance must be rebuilt. Reuse is
+allowed for signed rehearsals as well as publication; build-only mode does not
+accept it. Keep the dispatch ref and source checkout at the same reviewed
+candidate when recording evidence.
+
+Release notes use `scripts/release/notes/<version>.md` when present, otherwise a
+local Git history summary. The 2.0.0 notes include the required manual portable
+and MSI migration instructions. Check in version-specific notes before the
+candidate is frozen.

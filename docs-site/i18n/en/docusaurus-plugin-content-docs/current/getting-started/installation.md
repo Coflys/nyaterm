@@ -28,11 +28,9 @@ Visit the [Releases](https://github.com/nyakang/nyaterm/releases) page and downl
 | macOS | `.dmg` / `.app.tar.gz` |
 | Linux | `.deb` / `.AppImage` / `.rpm` |
 
-For the Windows portable edition, extract the zip and run `NyaTerm.exe`; configuration lives in the adjacent `data/` directory.
+For the Windows portable edition, extract the ZIP and run `NyaTerm.exe`; data lives in the adjacent `data/` directory. GPUI **Help → Check Updates** uses signed manifests and supports downloading and installing updates for supported installation types. Homebrew and deb/rpm installations use their package manager.
 
-**Help → Check Updates** only checks GitHub Releases and opens the Releases page — it does not download or replace program files. To update a portable build, close NyaTerm, replace the program files manually, and keep `data/`.
-
-An installed Tauri release can use its existing signed updater once to migrate to the GPUI installer. The old Tauri portable updater only accepts one application executable and cannot carry the RDP/VNC helper processes required by GPUI. Download the complete GPUI portable zip, copy the old `data/` directory into the new directory, and do not replace only `NyaTerm.exe`.
+**Migrating from 1.x: Windows portable and old MSI installations require manual upgrades.** Quit and back up all data and keys first. Replace the complete portable program payload while preserving `data/`; for MSI, back up, uninstall the old version, and install NSIS. Replacing only the main executable is insufficient, and automatic migration is not promised for all legacy installers. See the [2.0 migration guide](./migration-v2).
 
 ### macOS
 
