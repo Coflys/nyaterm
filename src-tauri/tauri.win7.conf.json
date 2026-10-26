@@ -1,4 +1,18 @@
 {
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NyaTerm",
+        "width": 1280,
+        "height": 800,
+        "transparent": false,
+        "visible": false,
+        "decorations": false,
+        "create": false
+      }
+    ]
+  },
   "bundle": {
     "resources": [],
     "targets": ["nsis"],
