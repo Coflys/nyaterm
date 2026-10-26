@@ -1,0 +1,11 @@
+[workspace]
+members = ["diagnostic-command", "text-tools", "lifecycle-fixture"]
+resolver = "3"
+
+[workspace.dependencies]
+nyaterm-plugin-api = { path = "../../../crates/nyaterm-plugin-api" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

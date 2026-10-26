@@ -1,0 +1,2632 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
+
+use gpui::{
+    App, Bounds, ContentMask, Element, ElementId, Font, FontFallbacks, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style,
+    TextRun, Window, fill, font, outline, point, px, relative, rgb, rgba, size,
+};
+use nyaterm_core::ResolvedKeywordHighlightRule;
+use nyaterm_terminal::selection::{
+    TerminalBufferCellPos, TerminalCellSide, TerminalSelection, TerminalSelectionEndpoint,
+    expand_selection_range,
+};
+use nyaterm_terminal::{
+    ShellInputLineKind, TerminalLineId, TerminalSnapshot, terminal_cell_count,
+    terminal_char_cell_width, terminal_is_zero_width_mark,
+};
+
+use crate::contrast::{
+    TerminalContrastCache, TerminalContrastOverlays, apply_contrast, contrast_excluded,
+    normalize_ratio,
+};
+use crate::glyphs::{
+    CellGlyph, CellGlyphPaintPlan, is_cell_glyph, push_cell_background, push_cell_glyphs,
+};
+use crate::keywords::{
+    TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey,
+    terminal_keyword_row_reuse_key, terminal_keyword_row_reuse_keys, terminal_keyword_rules_key,
+};
+use crate::paint::{
+    apply_search_ranges, line_strike_color, push_col_range_bg, terminal_cell_text_at_col,
+    terminal_highlight_spans_compiled, terminal_highlight_spans_with_keyword_ranges_and_options,
+    terminal_keyword_exclusion_ranges, terminal_run_font,
+};
+use crate::terminal_font_features;
+use crate::types::{TerminalHighlightSpan, TerminalPaintGeometry};
+
+fn terminal_geometry_diagnostics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("NYATERM_TERMINAL_GEOMETRY_DIAGNOSTICS").is_some_and(|value| value == "1")
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalBufferMatch {
+    pub line_index: usize,
+    /// Half-open character column range on the matched line.
+    pub start_col: usize,
+    pub end_col: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalSearchFlags {
+    pub case_sensitive: bool,
+    pub regex: bool,
+    pub whole_word: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct TerminalLineDecorations {
+    pub selected_occurrence_ranges: Vec<(usize, usize)>,
+    pub search_ranges: Vec<(usize, usize)>,
+    pub active_search_ranges: Vec<(usize, usize)>,
+    pub link_ranges: Vec<(usize, usize)>,
+}
+
+/// Dynamic absolute-buffer selection with half-cell endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TerminalGridSelection {
+    pub anchor_line: usize,
+    pub anchor_col: usize,
+    pub head_line: usize,
+    pub head_col: usize,
+    pub anchor_side: TerminalCellSide,
+    pub head_side: TerminalCellSide,
+    pub all_buffer: bool,
+}
+
+impl TerminalGridSelection {
+    /// Compatibility constructor: inclusive cells, with identical cells empty.
+    pub fn new(
+        anchor_line: usize,
+        anchor_col: usize,
+        head_line: usize,
+        head_col: usize,
+        all_buffer: bool,
+    ) -> Self {
+        let anchor = TerminalBufferCellPos::new(anchor_line, anchor_col);
+        let head = TerminalBufferCellPos::new(head_line, head_col);
+        let mut selection = if anchor == head {
+            TerminalSelection::with_anchor(anchor)
+        } else {
+            TerminalSelection::from_range(anchor, head)
+        };
+        selection.all_buffer = all_buffer;
+        Self::from_selection(selection)
+    }
+
+    pub fn from_selection(selection: TerminalSelection) -> Self {
+        Self {
+            anchor_line: selection.anchor.position.line,
+            anchor_col: selection.anchor.position.col,
+            head_line: selection.head.position.line,
+            head_col: selection.head.position.col,
+            anchor_side: selection.anchor.side,
+            head_side: selection.head.side,
+            all_buffer: selection.all_buffer,
+        }
+    }
+
+    fn cols_for_absolute_line(self, line: usize) -> Option<(usize, usize)> {
+        TerminalSelection {
+            anchor: TerminalSelectionEndpoint::new(
+                TerminalBufferCellPos::new(self.anchor_line, self.anchor_col),
+                self.anchor_side,
+            ),
+            head: TerminalSelectionEndpoint::new(
+                TerminalBufferCellPos::new(self.head_line, self.head_col),
+                self.head_side,
+            ),
+            all_buffer: self.all_buffer,
+        }
+        .cols_for_absolute_line(line)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedTerminalPaintRow {
+    line: Arc<ShapedLine>,
+    background_ranges: Vec<TerminalRowBackgroundRange>,
+    text_decorations: TerminalRowTextDecorations,
+    text_run_count: usize,
+    cell_glyphs: Vec<CellGlyph>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct TerminalRowBackgroundRange {
+    pub(super) bg: u32,
+    pub(super) start: usize,
+    pub(super) end: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TerminalRowDecorationRange {
+    color: u32,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TerminalRowTextDecorations {
+    underlines: Vec<TerminalRowDecorationRange>,
+    strikethroughs: Vec<TerminalRowDecorationRange>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct TerminalKeywordLayoutState {
+    rules_key: u64,
+    spans_present: bool,
+    result_known_empty: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NyaTerminalLayoutCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub shape_calls: u64,
+    pub shape_duration_us: u64,
+}
+
+impl NyaTerminalLayoutCacheStats {
+    /// Returns work recorded by one cache since an earlier observation.
+    ///
+    /// Counters remain cumulative so independent surfaces and parallel tests do
+    /// not need a process-wide reset.
+    pub fn delta_since(self, earlier: Self) -> Self {
+        Self {
+            hits: self.hits.saturating_sub(earlier.hits),
+            misses: self.misses.saturating_sub(earlier.misses),
+            shape_calls: self.shape_calls.saturating_sub(earlier.shape_calls),
+            shape_duration_us: self
+                .shape_duration_us
+                .saturating_sub(earlier.shape_duration_us),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct NyaTerminalLayoutCache {
+    contrast: TerminalContrastCache,
+    image_residents: HashMap<u64, Arc<()>>,
+    rows: HashMap<u64, Arc<CachedTerminalPaintRow>>,
+    row_order: VecDeque<u64>,
+    cursor_glyphs: HashMap<u64, Arc<ShapedLine>>,
+    cursor_glyph_order: VecDeque<u64>,
+    keyword_rules_source: Option<Arc<Vec<ResolvedKeywordHighlightRule>>>,
+    keyword_rules_key: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub shape_calls: u64,
+    pub shape_duration_us: u64,
+}
+
+const TERMINAL_LAYOUT_CACHE_ROW_CAP: usize = 4096;
+const TERMINAL_LAYOUT_CACHE_CURSOR_GLYPH_CAP: usize = 256;
+const TERMINAL_LAYOUT_CACHE_ROW_ORDER_MIN_COMPACT: usize = 256;
+const TERMINAL_ELEMENT_PREPAINT_SLOW_MS: u128 = 12;
+const TERMINAL_ELEMENT_PAINT_SLOW_MS: u128 = 12;
+
+impl NyaTerminalLayoutCache {
+    pub fn stats(&self) -> NyaTerminalLayoutCacheStats {
+        NyaTerminalLayoutCacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            shape_calls: self.shape_calls,
+            shape_duration_us: self.shape_duration_us,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.contrast = TerminalContrastCache::default();
+        self.image_residents.clear();
+        self.rows.clear();
+        self.row_order.clear();
+        self.cursor_glyphs.clear();
+        self.cursor_glyph_order.clear();
+        self.keyword_rules_source = None;
+        self.keyword_rules_key = 0;
+        self.hits = 0;
+        self.misses = 0;
+        self.shape_calls = 0;
+        self.shape_duration_us = 0;
+    }
+
+    fn keyword_rules_key(&mut self, rules: &Arc<Vec<ResolvedKeywordHighlightRule>>) -> u64 {
+        if let Some(cached) = self.keyword_rules_source.as_ref() {
+            if Arc::ptr_eq(cached, rules) {
+                return self.keyword_rules_key;
+            }
+            if cached.as_ref() == rules.as_ref() {
+                self.keyword_rules_source = Some(Arc::clone(rules));
+                return self.keyword_rules_key;
+            }
+        }
+        self.keyword_rules_key = terminal_keyword_rules_key(rules);
+        self.keyword_rules_source = Some(Arc::clone(rules));
+        self.keyword_rules_key
+    }
+
+    #[cfg(test)]
+    fn shaped_line(
+        &mut self,
+        _row: usize,
+        key: u64,
+        shape: impl FnOnce() -> (Arc<ShapedLine>, std::time::Duration),
+    ) -> (Arc<ShapedLine>, bool, std::time::Duration) {
+        let (row, did_shape, duration) = self.paint_row(_row, key, || {
+            let (line, duration) = shape();
+            (
+                line,
+                duration,
+                0,
+                Vec::new(),
+                TerminalRowTextDecorations::default(),
+                Vec::new(),
+            )
+        });
+        (Arc::clone(&row.line), did_shape, duration)
+    }
+
+    #[cfg(test)]
+    fn paint_row(
+        &mut self,
+        _row: usize,
+        key: u64,
+        build: impl FnOnce() -> (
+            Arc<ShapedLine>,
+            std::time::Duration,
+            usize,
+            Vec<TerminalRowBackgroundRange>,
+            TerminalRowTextDecorations,
+            Vec<CellGlyph>,
+        ),
+    ) -> (Arc<CachedTerminalPaintRow>, bool, std::time::Duration) {
+        self.paint_row_reusing(_row, key, None, build)
+    }
+
+    /// `reuse_key` must describe paint output equivalent to `key`.
+    fn paint_row_reusing(
+        &mut self,
+        _row: usize,
+        key: u64,
+        reuse_key: Option<u64>,
+        build: impl FnOnce() -> (
+            Arc<ShapedLine>,
+            std::time::Duration,
+            usize,
+            Vec<TerminalRowBackgroundRange>,
+            TerminalRowTextDecorations,
+            Vec<CellGlyph>,
+        ),
+    ) -> (Arc<CachedTerminalPaintRow>, bool, std::time::Duration) {
+        if let Some(cached) = self.rows.get(&key) {
+            self.hits = self.hits.saturating_add(1);
+            return (Arc::clone(cached), false, std::time::Duration::ZERO);
+        }
+        if let Some(reuse_key) = reuse_key.filter(|reuse_key| *reuse_key != key)
+            && let Some(cached) = self.rows.remove(&reuse_key)
+        {
+            self.hits = self.hits.saturating_add(1);
+            self.rows.insert(key, Arc::clone(&cached));
+            self.row_order.push_back(key);
+            self.compact_row_order_if_needed();
+            return (cached, false, std::time::Duration::ZERO);
+        }
+        self.misses = self.misses.saturating_add(1);
+        if self.rows.len() >= TERMINAL_LAYOUT_CACHE_ROW_CAP {
+            self.evict_oldest_row();
+        }
+        let (line, duration, text_run_count, background_ranges, text_decorations, cell_glyphs) =
+            build();
+        self.shape_calls = self.shape_calls.saturating_add(1);
+        self.shape_duration_us = self
+            .shape_duration_us
+            .saturating_add(duration.as_micros().min(u128::from(u64::MAX)) as u64);
+        let row = Arc::new(CachedTerminalPaintRow {
+            line: Arc::clone(&line),
+            background_ranges,
+            text_decorations,
+            text_run_count,
+            cell_glyphs,
+        });
+        self.rows.insert(key, Arc::clone(&row));
+        self.row_order.push_back(key);
+        (row, true, duration)
+    }
+
+    fn contains_paint_row(&self, key: u64, reuse_key: Option<u64>) -> bool {
+        self.rows.contains_key(&key)
+            || reuse_key
+                .filter(|reuse_key| *reuse_key != key)
+                .is_some_and(|reuse_key| self.rows.contains_key(&reuse_key))
+    }
+
+    fn cursor_glyph(
+        &mut self,
+        key: u64,
+        shape: impl FnOnce() -> (Arc<ShapedLine>, std::time::Duration),
+    ) -> (Arc<ShapedLine>, bool, std::time::Duration) {
+        if let Some(cached) = self.cursor_glyphs.get(&key) {
+            self.hits = self.hits.saturating_add(1);
+            return (Arc::clone(cached), false, std::time::Duration::ZERO);
+        }
+        self.misses = self.misses.saturating_add(1);
+        if self.cursor_glyphs.len() >= TERMINAL_LAYOUT_CACHE_CURSOR_GLYPH_CAP
+            && let Some(oldest) = self.cursor_glyph_order.pop_front()
+        {
+            self.cursor_glyphs.remove(&oldest);
+        }
+        let (line, duration) = shape();
+        self.shape_calls = self.shape_calls.saturating_add(1);
+        self.shape_duration_us = self
+            .shape_duration_us
+            .saturating_add(duration.as_micros().min(u128::from(u64::MAX)) as u64);
+        self.cursor_glyphs.insert(key, Arc::clone(&line));
+        self.cursor_glyph_order.push_back(key);
+        (line, true, duration)
+    }
+
+    fn evict_oldest_row(&mut self) {
+        while self.rows.len() >= TERMINAL_LAYOUT_CACHE_ROW_CAP {
+            let Some(key) = self.row_order.pop_front() else {
+                self.rows.clear();
+                return;
+            };
+            if self.rows.remove(&key).is_some() {
+                return;
+            }
+        }
+    }
+
+    fn compact_row_order_if_needed(&mut self) {
+        let compact_threshold = self
+            .rows
+            .len()
+            .saturating_mul(2)
+            .max(TERMINAL_LAYOUT_CACHE_ROW_ORDER_MIN_COMPACT);
+        if self.row_order.len() <= compact_threshold {
+            return;
+        }
+        let mut seen = HashSet::with_capacity(self.rows.len());
+        let mut compacted = VecDeque::with_capacity(self.rows.len());
+        for key in self.row_order.iter().rev() {
+            if self.rows.contains_key(key) && seen.insert(*key) {
+                compacted.push_front(*key);
+            }
+        }
+        self.row_order = compacted;
+    }
+}
+
+#[cfg(test)]
+mod layout_cache_tests;
+
+pub struct NyaTerminalElement {
+    snapshot: Arc<TerminalSnapshot>,
+    keyword_rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
+    keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
+    input_keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
+    decorations: Arc<[TerminalLineDecorations]>,
+    selection: Option<TerminalGridSelection>,
+    layout_cache: Option<Arc<Mutex<NyaTerminalLayoutCache>>>,
+    show_cursor: bool,
+    cursor_style: String,
+    cell_width: f32,
+    cell_height: f32,
+    palette: nyaterm_ui::ThemePalette,
+    font_family: String,
+    font_fallbacks: Option<FontFallbacks>,
+    font_size: f32,
+    normal_weight: f32,
+    bold_weight: f32,
+    bold_default_foreground: bool,
+    minimum_contrast_ratio: f32,
+    visual_y_offset: f32,
+    layout_rows: Option<usize>,
+    fill_height: bool,
+    zebra_stripes_enabled: bool,
+    target_line: Option<TerminalLineId>,
+    #[cfg(feature = "renderer-bench")]
+    cell_glyph_rendering: bool,
+}
+
+struct TerminalPaintRow {
+    y: Pixels,
+    line: Arc<ShapedLine>,
+}
+
+struct TerminalStrikethroughPaint {
+    origin: gpui::Point<Pixels>,
+    width: Pixels,
+    color: u32,
+}
+
+pub struct TerminalImagePaint {
+    bounds: Bounds<Pixels>,
+    image: std::sync::Arc<gpui::RenderImage>,
+}
+
+pub struct TerminalCursorGlyphPaint {
+    origin: gpui::Point<Pixels>,
+    line: Arc<ShapedLine>,
+}
+
+#[derive(Default)]
+pub struct NyaTerminalPaintPlan {
+    /// Shell-input and click-target row washes, below all terminal content.
+    zebra_stripes: Vec<PaintQuad>,
+    /// Explicit terminal cell backgrounds (under protocol images).
+    backgrounds: Vec<PaintQuad>,
+    /// Decoded graphics protocol images painted under terminal text.
+    images_under: Vec<TerminalImagePaint>,
+    /// Accent placeholders for undecodable under-text images.
+    placeholders_under: Vec<PaintQuad>,
+    /// Search match + selection washes (over under-text images, under glyphs).
+    decoration_backgrounds: Vec<PaintQuad>,
+    /// Active-search gutter marks (under glyphs).
+    active_markers: Vec<PaintQuad>,
+    rows: Vec<TerminalPaintRow>,
+    cell_glyphs: CellGlyphPaintPlan,
+    /// Terminal underline decorations painted with current scroll geometry.
+    underlines: Vec<PaintQuad>,
+    strikethroughs: Vec<TerminalStrikethroughPaint>,
+    /// Decoded graphics with Kitty z>0, painted above terminal text.
+    images_above: Vec<TerminalImagePaint>,
+    /// Accent placeholders for undecodable above-text images.
+    placeholders_above: Vec<PaintQuad>,
+    cursor_background: Option<PaintQuad>,
+    cursor_glyph: Option<TerminalCursorGlyphPaint>,
+    cursor_cell_glyphs: CellGlyphPaintPlan,
+    shape_line_count: usize,
+    shape_line_duration: std::time::Duration,
+    prefetched_row_count: usize,
+    text_run_count: usize,
+}
+
+impl NyaTerminalElement {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        snapshot: Arc<TerminalSnapshot>,
+        keyword_rules: Arc<Vec<ResolvedKeywordHighlightRule>>,
+        decorations: impl Into<Arc<[TerminalLineDecorations]>>,
+        show_cursor: bool,
+        cursor_style: impl Into<String>,
+        cell_width: f32,
+        cell_height: f32,
+        palette: nyaterm_ui::ThemePalette,
+        font_family: String,
+        font_size: f32,
+        normal_weight: f32,
+        bold_weight: f32,
+    ) -> Self {
+        Self {
+            snapshot,
+            keyword_rules,
+            keyword_highlights: None,
+            input_keyword_highlights: None,
+            decorations: decorations.into(),
+            selection: None,
+            layout_cache: None,
+            show_cursor,
+            cursor_style: cursor_style.into(),
+            cell_width,
+            cell_height,
+            palette,
+            font_family,
+            font_fallbacks: None,
+            font_size,
+            normal_weight,
+            bold_weight,
+            bold_default_foreground: false,
+            minimum_contrast_ratio: 1.0,
+            visual_y_offset: 0.0,
+            layout_rows: None,
+            fill_height: false,
+            zebra_stripes_enabled: false,
+            target_line: None,
+            #[cfg(feature = "renderer-bench")]
+            cell_glyph_rendering: true,
+        }
+    }
+
+    pub fn with_layout_cache(mut self, cache: Arc<Mutex<NyaTerminalLayoutCache>>) -> Self {
+        self.layout_cache = Some(cache);
+        self
+    }
+
+    /// Diagnostic control for comparing font glyphs with the cell graphics layer.
+    #[cfg(feature = "renderer-bench")]
+    pub fn with_cell_glyph_rendering(mut self, enabled: bool) -> Self {
+        self.cell_glyph_rendering = enabled;
+        self
+    }
+
+    fn cell_glyph_rendering_enabled(&self) -> bool {
+        #[cfg(feature = "renderer-bench")]
+        {
+            self.cell_glyph_rendering
+        }
+        #[cfg(not(feature = "renderer-bench"))]
+        {
+            true
+        }
+    }
+
+    pub fn with_bold_default_foreground(mut self, enabled: bool) -> Self {
+        self.bold_default_foreground = enabled;
+        self
+    }
+
+    /// Minimum contrast for text against its effective terminal cell background.
+    pub fn with_minimum_contrast_ratio(mut self, ratio: f32) -> Self {
+        self.minimum_contrast_ratio = normalize_ratio(ratio);
+        self
+    }
+
+    pub fn with_selection(mut self, selection: Option<TerminalGridSelection>) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    pub fn with_font_fallbacks(mut self, fallbacks: Option<FontFallbacks>) -> Self {
+        self.font_fallbacks = fallbacks;
+        self
+    }
+
+    pub fn with_keyword_highlights(
+        mut self,
+        highlights: Arc<TerminalKeywordHighlightSnapshot>,
+    ) -> Self {
+        self.keyword_highlights = Some(highlights);
+        self
+    }
+
+    /// Exact input-row results travel with the text frame and take precedence
+    /// over output batches. A known-empty result also suppresses stale colors.
+    pub fn with_input_keyword_highlights(
+        mut self,
+        highlights: Arc<TerminalKeywordHighlightSnapshot>,
+    ) -> Self {
+        self.input_keyword_highlights = Some(highlights);
+        self
+    }
+
+    fn keyword_highlight_lookup(
+        &self,
+        row: usize,
+        reuse_key: Option<TerminalKeywordRowReuseKey>,
+    ) -> Option<TerminalKeywordHighlightLookup<'_>> {
+        self.input_keyword_highlights
+            .as_ref()
+            .and_then(|highlights| highlights.lookup_with_reuse_key(row, &self.snapshot, reuse_key))
+            .or_else(|| {
+                self.keyword_highlights.as_ref().and_then(|highlights| {
+                    highlights
+                        .lookup_with_reuse_key(row, &self.snapshot, reuse_key)
+                        .or_else(|| {
+                            highlights.stale_lookup_with_reuse_key(row, &self.snapshot, reuse_key)
+                        })
+                })
+            })
+    }
+
+    pub fn with_visual_y_offset(mut self, offset: f32) -> Self {
+        self.visual_y_offset = offset;
+        self
+    }
+
+    pub fn with_zebra_stripes(
+        mut self,
+        enabled: bool,
+        target_line: Option<TerminalLineId>,
+    ) -> Self {
+        self.zebra_stripes_enabled = enabled;
+        self.target_line = target_line;
+        self
+    }
+
+    pub fn with_layout_rows(mut self, rows: usize) -> Self {
+        self.layout_rows = Some(rows.max(1));
+        self
+    }
+
+    /// Let the parent viewport own the element height, like an editor viewport.
+    /// The snapshot row count still limits which rows are painted.
+    pub fn with_fill_height(mut self, fill: bool) -> Self {
+        self.fill_height = fill;
+        self
+    }
+
+    #[cfg(test)]
+    fn row_layout_key(
+        &self,
+        row: usize,
+        display_line: &str,
+        ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>,
+        decorations: &TerminalLineDecorations,
+    ) -> u64 {
+        self.row_layout_key_with_keyword_key(
+            row,
+            display_line,
+            ansi_spans,
+            decorations,
+            self.keyword_rules_key(),
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    fn row_layout_key_with_keyword_key(
+        &self,
+        row: usize,
+        display_line: &str,
+        ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>,
+        decorations: &TerminalLineDecorations,
+        keyword_rules_key: u64,
+        keyword_spans_present: bool,
+    ) -> u64 {
+        self.row_layout_key_with_keyword_state(
+            row,
+            display_line,
+            ansi_spans,
+            decorations,
+            TerminalKeywordLayoutState {
+                rules_key: keyword_rules_key,
+                spans_present: keyword_spans_present,
+                result_known_empty: false,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn row_layout_key_with_keyword_state(
+        &self,
+        row: usize,
+        display_line: &str,
+        ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>,
+        decorations: &TerminalLineDecorations,
+        keyword_state: TerminalKeywordLayoutState,
+    ) -> u64 {
+        let effective_keyword_rules_key = terminal_effective_keyword_rules_key(
+            keyword_state.rules_key,
+            keyword_state.result_known_empty,
+        );
+        let paint_style_key = self.paint_style_key(effective_keyword_rules_key);
+        self.contrast_row_layout_key(
+            row,
+            decorations,
+            terminal_row_layout_key(
+                self.snapshot.row(row).map(|row| row.revision),
+                display_line,
+                ansi_spans,
+                decorations,
+                &[],
+                keyword_state.spans_present,
+                paint_style_key,
+            ),
+        )
+    }
+
+    fn paint_style_key(&self, keyword_rules_key: u64) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        keyword_rules_key.hash(&mut hasher);
+        self.palette.hash(&mut hasher);
+        self.font_family.hash(&mut hasher);
+        self.font_fallbacks.hash(&mut hasher);
+        self.font_size.to_bits().hash(&mut hasher);
+        self.normal_weight.to_bits().hash(&mut hasher);
+        self.bold_weight.to_bits().hash(&mut hasher);
+        self.bold_default_foreground.hash(&mut hasher);
+        self.minimum_contrast_ratio.to_bits().hash(&mut hasher);
+        self.cell_width.max(1.0).to_bits().hash(&mut hasher);
+        #[cfg(feature = "renderer-bench")]
+        self.cell_glyph_rendering.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn cursor_glyph_layout_key(&self, text: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        "terminal-cursor-glyph".hash(&mut hasher);
+        text.hash(&mut hasher);
+        self.paint_style_key(0).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn keyword_rules_key(&self) -> u64 {
+        self.input_keyword_highlights
+            .as_ref()
+            .or(self.keyword_highlights.as_ref())
+            .map_or_else(
+                || terminal_keyword_rules_key(&self.keyword_rules),
+                |highlights| highlights.rules_key(),
+            )
+    }
+
+    fn contrast_overlays<'a>(
+        &self,
+        row: usize,
+        decorations: &'a TerminalLineDecorations,
+    ) -> TerminalContrastOverlays<'a> {
+        TerminalContrastOverlays {
+            occurrences: &decorations.selected_occurrence_ranges,
+            search: &decorations.search_ranges,
+            active_search: &decorations.active_search_ranges,
+            selection: terminal_selection_cols_for_snapshot_row(
+                &self.snapshot,
+                row,
+                self.selection,
+            ),
+        }
+    }
+
+    fn contrast_row_layout_key(
+        &self,
+        row: usize,
+        decorations: &TerminalLineDecorations,
+        base: u64,
+    ) -> u64 {
+        if self.minimum_contrast_ratio <= 1.0 {
+            return base;
+        }
+        let overlays = self.contrast_overlays(row, decorations);
+        let mut hasher = DefaultHasher::new();
+        base.hash(&mut hasher);
+        overlays.occurrences.hash(&mut hasher);
+        overlays.search.hash(&mut hasher);
+        overlays.selection.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn row_layout_cache_keys(
+        &self,
+        row: usize,
+        keyword_paint_style_key: u64,
+        empty_keyword_paint_style_key: u64,
+        keyword_reuse_key: Option<TerminalKeywordRowReuseKey>,
+    ) -> (u64, Option<u64>) {
+        let snapshot_row = self.snapshot.row(row);
+        let line = snapshot_row.map(|row| row.text.as_str()).unwrap_or("");
+        let display_line = if line.is_empty() { " " } else { line };
+        let ansi = snapshot_row.map(|row| row.styled_spans.as_ref());
+        let row_revision = snapshot_row.map(|row| row.revision);
+        let keyword_lookup = self.keyword_highlight_lookup(row, keyword_reuse_key);
+        let keyword_result_known_empty = keyword_lookup
+            .as_ref()
+            .is_some_and(|lookup| lookup.is_known_empty());
+        let keyword_spans_present = keyword_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.ranges())
+            .is_some();
+        let paint_style_key = terminal_keyword_row_paint_style_key(
+            keyword_paint_style_key,
+            empty_keyword_paint_style_key,
+            keyword_lookup.as_ref(),
+        );
+        let default_decorations;
+        let decorations = if let Some(decorations) = self.decorations.get(row) {
+            decorations
+        } else {
+            default_decorations = TerminalLineDecorations::default();
+            &default_decorations
+        };
+        let keyword_excluded_ranges =
+            terminal_keyword_exclusion_ranges(snapshot_row, &decorations.link_ranges);
+        let keyword_exclusions_affect_glyphs = !keyword_result_known_empty
+            && (!self.keyword_rules.is_empty() || keyword_spans_present)
+            && !keyword_excluded_ranges.is_empty();
+        let row_layout_key = |paint_style_key: u64, keyword_spans_present: bool| {
+            let keyword_excluded_ranges = if keyword_exclusions_affect_glyphs {
+                keyword_excluded_ranges.as_slice()
+            } else {
+                &[]
+            };
+            self.contrast_row_layout_key(
+                row,
+                decorations,
+                terminal_row_layout_key(
+                    row_revision,
+                    display_line,
+                    ansi,
+                    decorations,
+                    keyword_excluded_ranges,
+                    keyword_spans_present,
+                    paint_style_key,
+                ),
+            )
+        };
+        let row_key = row_layout_key(paint_style_key, keyword_spans_present);
+        let pending_keyword_row_is_equivalent = keyword_lookup
+            .as_ref()
+            .is_some_and(|lookup| !lookup.is_stale())
+            && (keyword_result_known_empty || !self.keyword_rules.is_empty());
+        let pending_keyword_row_key = pending_keyword_row_is_equivalent
+            .then(|| row_layout_key(keyword_paint_style_key, false))
+            .filter(|pending_key| *pending_key != row_key);
+        (row_key, pending_keyword_row_key)
+    }
+}
+
+fn terminal_layout_prefetch_row(
+    visible_rows: std::ops::Range<usize>,
+    total_rows: usize,
+    mut row_is_cached: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    if visible_rows.clone().any(|row| !row_is_cached(row)) {
+        return None;
+    }
+    for distance in 1..=total_rows {
+        if let Some(row) = visible_rows.start.checked_sub(distance)
+            && !row_is_cached(row)
+        {
+            return Some(row);
+        }
+        let row = visible_rows.end.saturating_add(distance - 1);
+        if row < total_rows && !row_is_cached(row) {
+            return Some(row);
+        }
+    }
+    None
+}
+
+fn hash_stable_glyph_decorations<H: Hasher>(decorations: &TerminalLineDecorations, hasher: &mut H) {
+    decorations.active_search_ranges.hash(hasher);
+}
+
+fn hash_styled_spans<H: Hasher>(
+    ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>,
+    hasher: &mut H,
+) {
+    if let Some(spans) = ansi_spans {
+        spans.len().hash(hasher);
+        for span in spans {
+            span.text.hash(hasher);
+            span.style.hash(hasher);
+        }
+    } else {
+        0usize.hash(hasher);
+    }
+}
+
+fn terminal_cursor_cell_hidden(snapshot: &TerminalSnapshot) -> bool {
+    snapshot
+        .cell(snapshot.cursor.row, snapshot.cursor.col)
+        .is_some_and(|cell| cell.style.hidden)
+}
+
+fn terminal_glyph_decorations_needed(decorations: &TerminalLineDecorations) -> bool {
+    !decorations.active_search_ranges.is_empty()
+}
+
+fn terminal_row_layout_key(
+    row_revision: Option<u64>,
+    display_line: &str,
+    ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>,
+    decorations: &TerminalLineDecorations,
+    keyword_excluded_ranges: &[(usize, usize)],
+    keyword_spans_present: bool,
+    paint_style_key: u64,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    row_revision.hash(&mut hasher);
+    if row_revision.is_none() {
+        display_line.hash(&mut hasher);
+        hash_styled_spans(ansi_spans, &mut hasher);
+    }
+    hash_stable_glyph_decorations(decorations, &mut hasher);
+    keyword_excluded_ranges.hash(&mut hasher);
+    keyword_spans_present.hash(&mut hasher);
+    paint_style_key.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn terminal_plain_row_fast_path(
+    ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>,
+    keyword_rules: &[ResolvedKeywordHighlightRule],
+    decorations: &TerminalLineDecorations,
+) -> bool {
+    keyword_rules.is_empty()
+        && !terminal_glyph_decorations_needed(decorations)
+        && terminal_ansi_spans_are_plain(ansi_spans)
+}
+
+fn terminal_ansi_spans_are_plain(ansi_spans: Option<&[nyaterm_terminal::StyledSpan]>) -> bool {
+    let Some(spans) = ansi_spans else {
+        return true;
+    };
+    let default_style = nyaterm_terminal::CellStyle::default();
+    spans
+        .iter()
+        .all(|span| span.text.is_empty() || span.style == default_style)
+}
+
+/// Follow every double-width character with a space, so one glyph is one cell.
+///
+/// A shaped terminal row is laid out with `force_width`, which puts glyph *n* at
+/// `n * cell_width` regardless of how wide the glyph is. A CJK character covers
+/// two terminal columns, so without a filler for its second column every
+/// character after it is pulled one cell to the left and the row collapses into
+/// itself. The filler is a space: it advances the glyph index without painting,
+/// and the cell's own background is drawn as a rect underneath either way.
+fn pad_wide_cells(text: &str) -> String {
+    // A tab glyph has no defined advance in terminal fonts, so it must be
+    // painted as a plain space; see `append_padded_wide_cells` for details.
+    if !text
+        .chars()
+        .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+    {
+        return text.to_string();
+    }
+    let mut padded = String::with_capacity(text.len() + 4);
+    for ch in text.chars() {
+        if ch == '\t' {
+            padded.push(' ');
+            continue;
+        }
+        padded.push(ch);
+        if terminal_is_zero_width_mark(ch) {
+            continue;
+        }
+        for _ in 1..terminal_char_cell_width(ch) {
+            padded.push(' ');
+        }
+    }
+    padded
+}
+
+fn append_padded_wide_cells(output: &mut String, input: &str) -> usize {
+    let start_len = output.len();
+    // A tab glyph has no defined advance in terminal fonts, so the shaper would
+    // place it at an arbitrary width and shift the rest of the run. The grid
+    // already materializes the stop as blank cells; painting the tab cell as a
+    // plain space keeps the shaped string aligned with the cell grid.
+    if !input
+        .chars()
+        .any(|ch| terminal_char_cell_width(ch) > 1 || ch == '\t')
+    {
+        output.push_str(input);
+        return output.len().saturating_sub(start_len);
+    }
+    for ch in input.chars() {
+        if ch == '\t' {
+            output.push(' ');
+            continue;
+        }
+        output.push(ch);
+        if terminal_is_zero_width_mark(ch) {
+            continue;
+        }
+        for _ in 1..terminal_char_cell_width(ch) {
+            output.push(' ');
+        }
+    }
+    output.len().saturating_sub(start_len)
+}
+
+fn append_terminal_glyph_span(
+    output: &mut String,
+    span: &TerminalHighlightSpan,
+    col: &mut usize,
+    glyphs: &mut Vec<CellGlyph>,
+    cells: Option<&[nyaterm_terminal::RenderCell]>,
+    default_fg: u32,
+) -> usize {
+    if !span.text.chars().any(is_cell_glyph) {
+        *col += terminal_cell_count(&span.text);
+        return append_padded_wide_cells(output, &span.text);
+    }
+    let start = output.len();
+    let mut chars = span.text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        // Keep the original base glyph for attached marks, even if highlighting
+        // splits the mark into another span. Shaping a space changes its anchor.
+        let has_attached_mark = is_cell_glyph(ch)
+            && (chars
+                .peek()
+                .is_some_and(|ch| terminal_is_zero_width_mark(*ch))
+                || cells.and_then(|cells| cells.get(*col)).is_some_and(|cell| {
+                    cell.text.chars().skip(1).any(terminal_is_zero_width_mark)
+                }));
+        if is_cell_glyph(ch) && !has_attached_mark {
+            if !cells
+                .and_then(|cells| cells.get(*col))
+                .is_some_and(|cell| cell.style.hidden)
+            {
+                glyphs.push(CellGlyph {
+                    col: *col,
+                    ch,
+                    color: span.color.unwrap_or(default_fg),
+                });
+            }
+            output.push(' ');
+        } else if ch == '\t' {
+            // Never feed a literal tab to the shaper; see append_padded_wide_cells.
+            output.push(' ');
+        } else {
+            output.push(ch);
+        }
+        if terminal_is_zero_width_mark(ch) {
+            continue;
+        }
+        let width = terminal_char_cell_width(ch);
+        for _ in 1..width {
+            output.push(' ');
+        }
+        *col += width;
+    }
+    output.len() - start
+}
+
+fn cursor_cell_glyph(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    (is_cell_glyph(ch) && chars.next().is_none()).then_some(ch)
+}
+
+fn terminal_text_run_for_span(
+    span: &TerminalHighlightSpan,
+    len: usize,
+    base_font: Font,
+    normal_weight: f32,
+    bold_weight: f32,
+    palette: nyaterm_ui::ThemePalette,
+) -> TextRun {
+    TextRun {
+        len,
+        font: terminal_run_font(
+            base_font,
+            span.bold,
+            span.italic,
+            normal_weight,
+            bold_weight,
+        ),
+        color: span
+            .color
+            .map(rgb)
+            .unwrap_or_else(|| rgb(palette.terminal_fg))
+            .into(),
+        background_color: None,
+        underline: None,
+        // Cell graphics must be below decorations, so strikes paint separately.
+        strikethrough: None,
+    }
+}
+
+fn terminal_keyword_row_paint_style_key(
+    keyword_key: u64,
+    empty_key: u64,
+    lookup: Option<&TerminalKeywordHighlightLookup<'_>>,
+) -> u64 {
+    match lookup {
+        Some(lookup) if lookup.is_known_empty() => empty_key,
+        Some(lookup) => {
+            // OSC 133 can change colors without changing the text revision.
+            // A provisional prefix also differs from the final published parse.
+            let mut hasher = DefaultHasher::new();
+            keyword_key.hash(&mut hasher);
+            lookup.is_stale().hash(&mut hasher);
+            for range in lookup.ranges().unwrap_or_default() {
+                (range.start_col, range.end_col, range.color).hash(&mut hasher);
+            }
+            hasher.finish()
+        }
+        None => keyword_key,
+    }
+}
+
+#[cfg(test)]
+fn terminal_effective_keyword_rules_key(keyword_rules_key: u64, known_empty: bool) -> u64 {
+    if known_empty { 0 } else { keyword_rules_key }
+}
+
+pub(super) fn terminal_background_ranges_for_spans(
+    spans: &[TerminalHighlightSpan],
+) -> Vec<TerminalRowBackgroundRange> {
+    let mut out = Vec::new();
+    let mut col = 0usize;
+    let mut pending_bg: Option<TerminalRowBackgroundRange> = None;
+    for span in spans {
+        let bg = span.bg;
+        let span_cols = terminal_cell_count(&span.text).max(1);
+        if let Some(bg) = bg {
+            match pending_bg.as_mut() {
+                Some(current) if current.bg == bg && current.end == col => {
+                    current.end = col + span_cols;
+                }
+                _ => {
+                    if let Some(range) = pending_bg.take() {
+                        out.push(range);
+                    }
+                    pending_bg = Some(TerminalRowBackgroundRange {
+                        bg,
+                        start: col,
+                        end: col + span_cols,
+                    });
+                }
+            }
+        } else if let Some(range) = pending_bg.take() {
+            out.push(range);
+        }
+        col += span_cols;
+    }
+    if let Some(range) = pending_bg.take() {
+        out.push(range);
+    }
+    out
+}
+
+pub(super) fn terminal_background_ranges_for_cells(
+    cells: &[nyaterm_terminal::RenderCell],
+    palette: nyaterm_ui::ThemePalette,
+    bold_default_foreground: bool,
+) -> Vec<TerminalRowBackgroundRange> {
+    let mut out: Vec<TerminalRowBackgroundRange> = Vec::new();
+    // Include spacer cells and trailing blanks: text length is not a paint boundary.
+    for (col, cell) in cells.iter().enumerate() {
+        let Some(bg) = crate::resolve_cell_bg(palette, cell.style, bold_default_foreground) else {
+            continue;
+        };
+        if let Some(last) = out
+            .last_mut()
+            .filter(|last| last.bg == bg && last.end == col)
+        {
+            last.end = col + 1;
+        } else {
+            out.push(TerminalRowBackgroundRange {
+                bg,
+                start: col,
+                end: col + 1,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+fn terminal_underline_ranges_for_spans(
+    spans: &[TerminalHighlightSpan],
+    palette: nyaterm_ui::ThemePalette,
+) -> Vec<TerminalRowDecorationRange> {
+    terminal_text_decorations_for_row(
+        spans,
+        None,
+        palette,
+        false,
+        1.0,
+        &TerminalContrastOverlays::default(),
+        &mut TerminalContrastCache::default(),
+    )
+    .underlines
+}
+
+fn append_terminal_decoration_range(
+    out: &mut Vec<TerminalRowDecorationRange>,
+    color: u32,
+    start: usize,
+    end: usize,
+) {
+    if end <= start {
+        return;
+    }
+    if let Some(last) = out
+        .last_mut()
+        .filter(|last| last.color == color && last.end == start)
+    {
+        last.end = end;
+    } else {
+        out.push(TerminalRowDecorationRange { color, start, end });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn terminal_text_decorations_for_row(
+    spans: &[TerminalHighlightSpan],
+    cells: Option<&[nyaterm_terminal::RenderCell]>,
+    palette: nyaterm_ui::ThemePalette,
+    bold_default_foreground: bool,
+    minimum_contrast_ratio: f32,
+    overlays: &TerminalContrastOverlays<'_>,
+    contrast_cache: &mut TerminalContrastCache,
+) -> TerminalRowTextDecorations {
+    let mut out = TerminalRowTextDecorations::default();
+    let mut col = 0usize;
+    for span in spans {
+        let span_cols = terminal_cell_count(&span.text);
+        if span.underline {
+            append_terminal_decoration_range(
+                &mut out.underlines,
+                span.color.unwrap_or(palette.accent),
+                col,
+                col + span_cols,
+            );
+        }
+        if span.strikeout {
+            append_terminal_decoration_range(
+                &mut out.strikethroughs,
+                span.color.unwrap_or(palette.terminal_fg),
+                col,
+                col + span_cols,
+            );
+        }
+        col += span_cols;
+    }
+    // Highlight/search colors apply within shaped text. Full cells remain the
+    // authority for decorated blanks beyond that trimmed text boundary.
+    for (col, cell) in cells.unwrap_or_default().iter().enumerate().skip(col) {
+        if !cell.style.underline && !cell.style.strikeout {
+            continue;
+        }
+        let color = if cell.style.hidden {
+            crate::resolve_cell_bg(palette, cell.style, bold_default_foreground)
+                .unwrap_or(palette.terminal_bg)
+        } else {
+            crate::resolve_cell_fg(palette, cell.style, bold_default_foreground)
+        };
+        let color = if minimum_contrast_ratio > 1.0 {
+            let bg = overlays.background(
+                col,
+                crate::resolve_cell_bg(palette, cell.style, bold_default_foreground)
+                    .unwrap_or(palette.terminal_bg),
+                palette,
+            );
+            if cell.style.hidden {
+                bg
+            } else {
+                contrast_cache.resolve(color, bg, minimum_contrast_ratio)
+            }
+        } else {
+            color
+        };
+        if cell.style.underline {
+            append_terminal_decoration_range(&mut out.underlines, color, col, col + 1);
+        }
+        if cell.style.strikeout {
+            append_terminal_decoration_range(&mut out.strikethroughs, color, col, col + 1);
+        }
+    }
+    out
+}
+
+fn push_terminal_background_ranges(
+    row: usize,
+    ranges: &[TerminalRowBackgroundRange],
+    geometry: TerminalPaintGeometry,
+    scale: f32,
+    out: &mut Vec<PaintQuad>,
+) {
+    for range in ranges {
+        push_cell_background(range.start, range.end, range.bg, row, geometry, scale, out);
+    }
+}
+
+fn push_terminal_zebra_stripes(
+    snapshot: &TerminalSnapshot,
+    visible_rows: std::ops::Range<usize>,
+    target_line: Option<TerminalLineId>,
+    palette: nyaterm_ui::ThemePalette,
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    let mut pending: Option<(u32, usize, usize)> = None;
+    let flush = |color: u32, start: usize, end: usize, out: &mut Vec<PaintQuad>| {
+        let top = (f32::from(geometry.bounds.top())
+            + geometry.visual_y_offset
+            + start as f32 * geometry.cell_height)
+            .floor();
+        let bottom = (f32::from(geometry.bounds.top())
+            + geometry.visual_y_offset
+            + end as f32 * geometry.cell_height)
+            .ceil();
+        out.push(fill(
+            Bounds::new(
+                point(geometry.bounds.left(), px(top)),
+                size(geometry.bounds.size.width, px((bottom - top).max(0.0))),
+            ),
+            rgba(color),
+        ));
+    };
+
+    for row_index in visible_rows {
+        let color = snapshot.row(row_index).and_then(|row| {
+            if row.line_id.is_some() && row.line_id == target_line {
+                Some((palette.terminal_line_highlight << 8) | 0xff)
+            } else if matches!(
+                row.shell_input,
+                Some(ShellInputLineKind::Submitted | ShellInputLineKind::Active)
+            ) {
+                Some((palette.terminal_fg << 8) | 0x0f)
+            } else {
+                None
+            }
+        });
+        match (pending.as_mut(), color) {
+            (Some((pending_color, _, end)), Some(color))
+                if *pending_color == color && *end == row_index =>
+            {
+                *end = row_index + 1;
+            }
+            (Some(_), color) => {
+                let (pending_color, start, end) = pending.take().expect("pending stripe");
+                flush(pending_color, start, end, out);
+                if let Some(color) = color {
+                    pending = Some((color, row_index, row_index + 1));
+                }
+            }
+            (None, Some(color)) => {
+                pending = Some((color, row_index, row_index + 1));
+            }
+            (None, None) => {}
+        }
+    }
+    if let Some((color, start, end)) = pending {
+        flush(color, start, end, out);
+    }
+}
+
+fn terminal_underline_bounds(
+    row: usize,
+    start: usize,
+    end: usize,
+    geometry: TerminalPaintGeometry,
+) -> Bounds<Pixels> {
+    let left = (f32::from(geometry.bounds.left()) + start as f32 * geometry.cell_width).floor();
+    let right = (f32::from(geometry.bounds.left()) + end as f32 * geometry.cell_width).ceil();
+    let row_top = f32::from(geometry.bounds.top())
+        + geometry.visual_y_offset
+        + row as f32 * geometry.cell_height;
+    let bottom = (row_top + geometry.cell_height).floor();
+    let top = (bottom - 2.0).max(row_top);
+    Bounds::new(
+        point(px(left), px(top)),
+        size(px((right - left).max(0.)), px(1.0)),
+    )
+}
+
+fn push_terminal_underline_ranges(
+    row: usize,
+    ranges: &[TerminalRowDecorationRange],
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    for range in ranges {
+        if range.end <= range.start {
+            continue;
+        }
+        out.push(fill(
+            terminal_underline_bounds(row, range.start, range.end, geometry),
+            rgb(range.color),
+        ));
+    }
+}
+
+fn push_dynamic_link_underlines(
+    row: usize,
+    line: &str,
+    decorations: &TerminalLineDecorations,
+    palette: nyaterm_ui::ThemePalette,
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    if decorations.link_ranges.is_empty() {
+        return;
+    }
+    let text_cells = terminal_cell_count(line);
+    if text_cells == 0 {
+        return;
+    }
+    for &(start, end) in &decorations.link_ranges {
+        let start = start.min(text_cells);
+        let end = end.min(text_cells);
+        if end <= start {
+            continue;
+        }
+        out.push(fill(
+            terminal_underline_bounds(row, start, end, geometry),
+            rgb(terminal_link_underline_color(palette)),
+        ));
+    }
+}
+
+fn terminal_link_underline_color(palette: nyaterm_ui::ThemePalette) -> u32 {
+    palette.text_muted
+}
+
+fn push_dynamic_decoration_backgrounds(
+    row: usize,
+    decorations: &TerminalLineDecorations,
+    palette: nyaterm_ui::ThemePalette,
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    for &(start, end) in &decorations.selected_occurrence_ranges {
+        push_selected_occurrence_bg(row, start, end, palette, geometry, out);
+    }
+    for &(start, end) in &decorations.search_ranges {
+        push_col_range_bg(row, start, end, palette.terminal_find_bg, geometry, out);
+    }
+    for &(start, end) in &decorations.active_search_ranges {
+        let previous_len = out.len();
+        push_col_range_bg(row, start, end, palette.terminal_find_bg, geometry, out);
+        if out.len() > previous_len {
+            let bounds = out.last().expect("range fill was pushed").bounds;
+            out.push(outline(
+                bounds,
+                rgb(palette.terminal_find_border),
+                Default::default(),
+            ));
+        }
+    }
+}
+
+fn terminal_selection_cols_for_snapshot_row(
+    snapshot: &TerminalSnapshot,
+    row: usize,
+    selection: Option<TerminalGridSelection>,
+) -> Option<(usize, usize)> {
+    if row >= snapshot.row_count() {
+        return None;
+    }
+    let absolute_end = snapshot.total_rows.saturating_sub(snapshot.display_offset);
+    let absolute_start = absolute_end.saturating_sub(snapshot.row_count());
+    let absolute_line = absolute_start.saturating_add(row);
+    let (start, end) = selection?.cols_for_absolute_line(absolute_line)?;
+    let start = start.min(snapshot.cols);
+    let end = end.min(snapshot.cols);
+    expand_selection_range(&snapshot.row(row)?.cells, start, end)
+}
+
+fn push_dynamic_selection_background(
+    snapshot: &TerminalSnapshot,
+    row: usize,
+    selection: Option<TerminalGridSelection>,
+    palette: nyaterm_ui::ThemePalette,
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    let Some((start, end)) = terminal_selection_cols_for_snapshot_row(snapshot, row, selection)
+    else {
+        return;
+    };
+    push_col_range_bg(row, start, end, palette.terminal_selection, geometry, out);
+}
+
+fn push_selected_occurrence_bg(
+    row: usize,
+    start: usize,
+    end: usize,
+    palette: nyaterm_ui::ThemePalette,
+    geometry: TerminalPaintGeometry,
+    out: &mut Vec<PaintQuad>,
+) {
+    if end <= start {
+        return;
+    }
+    let left = (f32::from(geometry.bounds.left()) + start as f32 * geometry.cell_width).floor();
+    let top = (f32::from(geometry.bounds.top())
+        + geometry.visual_y_offset
+        + row as f32 * geometry.cell_height)
+        .floor();
+    let right = (f32::from(geometry.bounds.left()) + end as f32 * geometry.cell_width).ceil();
+    let bottom = (f32::from(geometry.bounds.top())
+        + geometry.visual_y_offset
+        + (row + 1) as f32 * geometry.cell_height)
+        .ceil();
+    out.push(fill(
+        Bounds::new(
+            point(px(left), px(top)),
+            size(px((right - left).max(0.0)), px((bottom - top).max(0.0))),
+        ),
+        rgba((palette.text_muted << 8) | 0x58),
+    ));
+}
+
+fn push_terminal_image_placeholder(
+    rect: Bounds<Pixels>,
+    x: Pixels,
+    y: Pixels,
+    w: Pixels,
+    above_text: bool,
+    palette: nyaterm_ui::ThemePalette,
+    plan: &mut NyaTerminalPaintPlan,
+) {
+    let mut wash = rgb(palette.accent);
+    wash.a = 0.18;
+    let bar = Bounds::new(point(x, y), size(w, px(2.)));
+    let mut bar_color = rgb(palette.accent);
+    bar_color.a = 0.55;
+    if above_text {
+        plan.placeholders_above.push(fill(rect, wash));
+        plan.placeholders_above.push(fill(bar, bar_color));
+    } else {
+        plan.placeholders_under.push(fill(rect, wash));
+        plan.placeholders_under.push(fill(bar, bar_color));
+    }
+}
+
+impl IntoElement for NyaTerminalElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for NyaTerminalElement {
+    type RequestLayoutState = ();
+    type PrepaintState = NyaTerminalPaintPlan;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = if self.fill_height {
+            relative(1.).into()
+        } else {
+            px(terminal_layout_height_px(
+                self.cell_height,
+                self.snapshot.row_count(),
+                self.layout_rows,
+            ))
+            .into()
+        };
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let started_at = Instant::now();
+        let visible_bounds = window.content_mask().bounds.intersect(&bounds);
+        if visible_bounds.size.width <= px(0.) || visible_bounds.size.height <= px(0.) {
+            return NyaTerminalPaintPlan::default();
+        }
+        let layout_cache = self.layout_cache.clone();
+        let mut layout_cache = layout_cache.as_ref().and_then(|cache| cache.lock().ok());
+        let cache_stats_before = layout_cache
+            .as_ref()
+            .map(|cache| (cache.hits, cache.misses));
+        let mut plan = NyaTerminalPaintPlan::default();
+        let cell_w = self.cell_width.max(1.);
+        let scale_factor = window.scale_factor();
+        let cell_h = nyaterm_core::terminal_snapped_cell_height(self.cell_height, scale_factor);
+        let font_size = px(self.font_size.max(8.));
+        let mut base_font = font(SharedString::from(self.font_family.clone()));
+        base_font.fallbacks = self.font_fallbacks.clone();
+        base_font.features = terminal_font_features();
+        let keyword_rules_key = if let Some(highlights) = self
+            .input_keyword_highlights
+            .as_ref()
+            .or(self.keyword_highlights.as_ref())
+        {
+            highlights.rules_key()
+        } else if self.keyword_rules.is_empty() {
+            0
+        } else if let Some(cache) = layout_cache.as_deref_mut() {
+            cache.keyword_rules_key(&self.keyword_rules)
+        } else {
+            self.keyword_rules_key()
+        };
+        let keyword_paint_style_key = self.paint_style_key(keyword_rules_key);
+        let empty_keyword_paint_style_key = if keyword_rules_key == 0 {
+            keyword_paint_style_key
+        } else {
+            self.paint_style_key(0)
+        };
+
+        let contrast_cache = RefCell::new(
+            layout_cache
+                .as_deref_mut()
+                .map(|cache| std::mem::take(&mut cache.contrast))
+                .unwrap_or_default(),
+        );
+
+        let visual_y_offset = self.visual_y_offset;
+        let paint_geometry = TerminalPaintGeometry {
+            bounds,
+            visual_y_offset,
+            cell_width: cell_w,
+            cell_height: cell_h,
+        };
+        let visible_rows = terminal_visible_rows_for_clipped_bounds(
+            bounds,
+            visible_bounds,
+            cell_h,
+            self.snapshot.row_count(),
+            visual_y_offset,
+        );
+        let visible_row_start = visible_rows.start;
+        let visible_row_end = visible_rows.end;
+        let visible_row_count = visible_rows.len();
+        if self.zebra_stripes_enabled {
+            push_terminal_zebra_stripes(
+                self.snapshot.as_ref(),
+                visible_rows.clone(),
+                self.target_line,
+                self.palette,
+                paint_geometry,
+                &mut plan.zebra_stripes,
+            );
+        }
+        let wrapped_scan_start = visible_rows.start.saturating_sub(1);
+        let wrapped_scan_end = visible_rows
+            .end
+            .saturating_add(1)
+            .min(self.snapshot.row_count());
+        let visible_has_wrapped_group = self
+            .snapshot
+            .rows()
+            .get(wrapped_scan_start..wrapped_scan_end)
+            .unwrap_or_default()
+            .iter()
+            .any(|row| row.wrapped);
+        let keyword_row_reuse_keys = self
+            .input_keyword_highlights
+            .as_ref()
+            .or(self.keyword_highlights.as_ref())
+            .filter(|_| visible_has_wrapped_group)
+            .map(|_| terminal_keyword_row_reuse_keys(self.snapshot.as_ref()));
+        // Follow the editor model: once the visible viewport is entirely hot,
+        // spend at most one subsequent frame shaping the nearest retained row.
+        // Any changed visible row suppresses this work, keeping input/output
+        // latency ahead of speculative scroll preparation.
+        let prefetch_row = layout_cache.as_deref().and_then(|cache| {
+            terminal_layout_prefetch_row(visible_rows.clone(), self.snapshot.row_count(), |row| {
+                let keyword_reuse_key = keyword_row_reuse_keys
+                    .as_deref()
+                    .and_then(|keys| keys.get(row))
+                    .copied()
+                    .flatten()
+                    .or_else(|| terminal_keyword_row_reuse_key(self.snapshot.as_ref(), row));
+                let (key, reuse_key) = self.row_layout_cache_keys(
+                    row,
+                    keyword_paint_style_key,
+                    empty_keyword_paint_style_key,
+                    keyword_reuse_key,
+                );
+                cache.contains_paint_row(key, reuse_key)
+            })
+        });
+        let mut rows_to_prepare = Vec::with_capacity(visible_row_count.saturating_add(1));
+        rows_to_prepare.extend(visible_rows.clone());
+        if let Some(row) = prefetch_row {
+            rows_to_prepare.push(row);
+        }
+        for row in rows_to_prepare {
+            let row_is_visible = row >= visible_row_start && row < visible_row_end;
+            let snapshot_row = self.snapshot.row(row);
+            let line = snapshot_row.map(|row| row.text.as_str()).unwrap_or("");
+            let display_line = if line.is_empty() { " " } else { line };
+            let ansi = snapshot_row.map(|row| row.styled_spans.as_ref());
+            let row_revision = snapshot_row.map(|row| row.revision);
+            let keyword_reuse_key = keyword_row_reuse_keys
+                .as_deref()
+                .and_then(|keys| keys.get(row))
+                .copied()
+                .flatten()
+                .or_else(|| terminal_keyword_row_reuse_key(self.snapshot.as_ref(), row));
+            let keyword_lookup = self.keyword_highlight_lookup(row, keyword_reuse_key);
+            let keyword_result_known_empty = keyword_lookup
+                .as_ref()
+                .is_some_and(|lookup| lookup.is_known_empty());
+            let keyword_ranges = keyword_lookup.as_ref().and_then(|lookup| lookup.ranges());
+            let keyword_spans_present = keyword_ranges.is_some();
+            let row_paint_style_key = terminal_keyword_row_paint_style_key(
+                keyword_paint_style_key,
+                empty_keyword_paint_style_key,
+                keyword_lookup.as_ref(),
+            );
+            let default_decorations;
+            let decorations = if let Some(decorations) = self.decorations.get(row) {
+                decorations
+            } else {
+                default_decorations = TerminalLineDecorations::default();
+                &default_decorations
+            };
+            let keyword_excluded_ranges =
+                terminal_keyword_exclusion_ranges(snapshot_row, &decorations.link_ranges);
+            let keyword_exclusions_affect_glyphs = !keyword_result_known_empty
+                && keyword_rules_key != 0
+                && !keyword_excluded_ranges.is_empty();
+            let y = px(f32::from(bounds.top()) + visual_y_offset + row as f32 * cell_h);
+
+            if row_is_visible {
+                if !decorations.active_search_ranges.is_empty() {
+                    plan.active_markers.push(fill(
+                        Bounds::new(point(bounds.left(), y), size(px(2.), px(cell_h))),
+                        rgb(self.palette.warning),
+                    ));
+                }
+                push_dynamic_decoration_backgrounds(
+                    row,
+                    decorations,
+                    self.palette,
+                    paint_geometry,
+                    &mut plan.decoration_backgrounds,
+                );
+                push_dynamic_selection_background(
+                    self.snapshot.as_ref(),
+                    row,
+                    self.selection,
+                    self.palette,
+                    paint_geometry,
+                    &mut plan.decoration_backgrounds,
+                );
+                push_dynamic_link_underlines(
+                    row,
+                    line,
+                    decorations,
+                    self.palette,
+                    paint_geometry,
+                    &mut plan.underlines,
+                );
+            }
+
+            let row_layout_key = |paint_style_key: u64, keyword_spans_present: bool| {
+                let keyword_excluded_ranges = if keyword_exclusions_affect_glyphs {
+                    keyword_excluded_ranges.as_slice()
+                } else {
+                    &[]
+                };
+                self.contrast_row_layout_key(
+                    row,
+                    decorations,
+                    terminal_row_layout_key(
+                        row_revision,
+                        display_line,
+                        ansi,
+                        decorations,
+                        keyword_excluded_ranges,
+                        keyword_spans_present,
+                        paint_style_key,
+                    ),
+                )
+            };
+            let row_key = row_layout_key(row_paint_style_key, keyword_spans_present);
+            // Reuse a pending row only when its paint is equivalent to the parsed result.
+            // TerminalSurface intentionally omits synchronous rules, so a matching result
+            // there must rebuild instead of promoting the cached plain row as highlighted.
+            let pending_keyword_row_is_equivalent = keyword_lookup
+                .as_ref()
+                .is_some_and(|lookup| !lookup.is_stale())
+                && (keyword_result_known_empty || !self.keyword_rules.is_empty());
+            let pending_keyword_row_key = pending_keyword_row_is_equivalent
+                .then(|| row_layout_key(keyword_paint_style_key, false))
+                .filter(|pending_key| *pending_key != row_key);
+            let build_row = |window: &mut Window| {
+                let row_keyword_rules: &[ResolvedKeywordHighlightRule] =
+                    if keyword_result_known_empty {
+                        &[]
+                    } else {
+                        self.keyword_rules.as_slice()
+                    };
+                if keyword_ranges.is_none()
+                    && terminal_plain_row_fast_path(ansi, row_keyword_rules, decorations)
+                    && !display_line.chars().any(is_cell_glyph)
+                    && (self.minimum_contrast_ratio <= 1.0
+                        || (self.contrast_overlays(row, decorations).is_empty()
+                            && !display_line.chars().any(contrast_excluded)))
+                {
+                    let text = pad_wide_cells(display_line);
+                    let text_runs = vec![TextRun {
+                        len: text.len().max(1),
+                        font: terminal_run_font(
+                            base_font.clone(),
+                            false,
+                            false,
+                            self.normal_weight,
+                            self.bold_weight,
+                        ),
+                        color: rgb(contrast_cache.borrow_mut().resolve(
+                            self.palette.terminal_fg,
+                            self.palette.terminal_bg,
+                            self.minimum_contrast_ratio,
+                        ))
+                        .into(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }];
+                    let line_started_at = Instant::now();
+                    let line = Arc::new(window.text_system().shape_line(
+                        SharedString::from(text),
+                        font_size,
+                        &text_runs,
+                        Some(px(cell_w)),
+                    ));
+                    return (
+                        line,
+                        line_started_at.elapsed(),
+                        text_runs.len(),
+                        Vec::new(),
+                        TerminalRowTextDecorations::default(),
+                        Vec::new(),
+                    );
+                }
+
+                // Base spans drive explicit terminal cell backgrounds only (under images).
+                let background_spans = keyword_ranges
+                    .map(|ranges| {
+                        terminal_highlight_spans_with_keyword_ranges_and_options(
+                            display_line,
+                            ansi,
+                            Some(ranges),
+                            &keyword_excluded_ranges,
+                            self.palette,
+                            self.bold_default_foreground,
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        // Use ANSI until background parsing publishes this row.
+                        terminal_highlight_spans_compiled(
+                            display_line,
+                            ansi,
+                            &[],
+                            &[],
+                            &[],
+                            &[],
+                            &[],
+                            &keyword_excluded_ranges,
+                            self.palette,
+                            self.bold_default_foreground,
+                        )
+                    });
+                // Off mode keeps dynamic overlays out of shaped rows. Contrast mode
+                // resolves their backgrounds below and includes them in the row key.
+                let glyph_spans_storage;
+                let glyph_spans = if decorations.active_search_ranges.is_empty() {
+                    background_spans.as_slice()
+                } else {
+                    glyph_spans_storage = apply_search_ranges(
+                        background_spans.clone(),
+                        &decorations.active_search_ranges,
+                        true,
+                        self.palette,
+                    );
+                    glyph_spans_storage.as_slice()
+                };
+                let contrast_spans;
+                let glyph_spans = if self.minimum_contrast_ratio > 1.0 {
+                    contrast_spans = apply_contrast(
+                        glyph_spans,
+                        self.palette,
+                        self.minimum_contrast_ratio,
+                        &self.contrast_overlays(row, decorations),
+                        &mut contrast_cache.borrow_mut(),
+                    );
+                    contrast_spans.as_slice()
+                } else {
+                    glyph_spans
+                };
+                let background_ranges = snapshot_row
+                    .map(|row| {
+                        terminal_background_ranges_for_cells(
+                            &row.cells,
+                            self.palette,
+                            self.bold_default_foreground,
+                        )
+                    })
+                    .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
+                let text_decorations = terminal_text_decorations_for_row(
+                    glyph_spans,
+                    snapshot_row.map(|row| row.cells.as_ref()),
+                    self.palette,
+                    self.bold_default_foreground,
+                    self.minimum_contrast_ratio,
+                    &self.contrast_overlays(row, decorations),
+                    &mut contrast_cache.borrow_mut(),
+                );
+
+                let mut text =
+                    String::with_capacity(display_line.len().saturating_add(glyph_spans.len()));
+                let mut text_runs = Vec::with_capacity(glyph_spans.len());
+                let mut cell_glyphs = Vec::new();
+                let mut col = 0;
+                for span in glyph_spans {
+                    let run_len = if self.cell_glyph_rendering_enabled() {
+                        append_terminal_glyph_span(
+                            &mut text,
+                            span,
+                            &mut col,
+                            &mut cell_glyphs,
+                            snapshot_row.map(|row| row.cells.as_ref()),
+                            self.palette.terminal_fg,
+                        )
+                    } else {
+                        append_padded_wide_cells(&mut text, &span.text)
+                    };
+                    if run_len > 0 {
+                        text_runs.push(terminal_text_run_for_span(
+                            span,
+                            run_len,
+                            base_font.clone(),
+                            self.normal_weight,
+                            self.bold_weight,
+                            self.palette,
+                        ));
+                    }
+                }
+
+                if text.is_empty() {
+                    text.push(' ');
+                    text_runs.push(TextRun {
+                        len: 1,
+                        font: terminal_run_font(
+                            base_font.clone(),
+                            false,
+                            false,
+                            self.normal_weight,
+                            self.bold_weight,
+                        ),
+                        color: rgb(self.palette.terminal_fg).into(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    });
+                }
+                let line_started_at = Instant::now();
+                let line = Arc::new(window.text_system().shape_line(
+                    SharedString::from(text),
+                    font_size,
+                    &text_runs,
+                    Some(px(cell_w)),
+                ));
+                (
+                    line,
+                    line_started_at.elapsed(),
+                    text_runs.len(),
+                    background_ranges,
+                    text_decorations,
+                    cell_glyphs,
+                )
+            };
+            let (painted_row, did_shape, shape_duration) = if let Some(cache) =
+                layout_cache.as_deref_mut()
+            {
+                cache.paint_row_reusing(row, row_key, pending_keyword_row_key, || build_row(window))
+            } else {
+                let (
+                    line,
+                    duration,
+                    text_run_count,
+                    background_ranges,
+                    text_decorations,
+                    cell_glyphs,
+                ) = build_row(window);
+                (
+                    Arc::new(CachedTerminalPaintRow {
+                        line,
+                        background_ranges,
+                        text_decorations,
+                        text_run_count,
+                        cell_glyphs,
+                    }),
+                    true,
+                    duration,
+                )
+            };
+            if did_shape {
+                plan.shape_line_count = plan.shape_line_count.saturating_add(1);
+                plan.shape_line_duration += shape_duration;
+            }
+            if row_is_visible {
+                push_terminal_background_ranges(
+                    row,
+                    &painted_row.background_ranges,
+                    paint_geometry,
+                    scale_factor,
+                    &mut plan.backgrounds,
+                );
+                push_cell_glyphs(
+                    &painted_row.cell_glyphs,
+                    row,
+                    paint_geometry,
+                    scale_factor,
+                    &mut plan.cell_glyphs,
+                );
+                plan.text_run_count = plan
+                    .text_run_count
+                    .saturating_add(painted_row.text_run_count);
+                plan.rows.push(TerminalPaintRow {
+                    y,
+                    line: Arc::clone(&painted_row.line),
+                });
+                push_terminal_underline_ranges(
+                    row,
+                    &painted_row.text_decorations.underlines,
+                    paint_geometry,
+                    &mut plan.underlines,
+                );
+                // Match GPUI's font-metric strike position, including its
+                // vertical centering, while painting above custom cell glyphs.
+                let ascent = painted_row.line.ascent;
+                let baseline = (px(cell_h) - ascent - painted_row.line.descent) / 2. + ascent;
+                let strike_y = y + (ascent * 0.5 + baseline) * 0.5;
+                for range in &painted_row.text_decorations.strikethroughs {
+                    plan.strikethroughs.push(TerminalStrikethroughPaint {
+                        origin: point(bounds.left() + px(range.start as f32 * cell_w), strike_y),
+                        width: px((range.end - range.start) as f32 * cell_w),
+                        color: range.color,
+                    });
+                }
+            } else {
+                plan.prefetched_row_count = plan.prefetched_row_count.saturating_add(1);
+            }
+        }
+        let visible_images = self
+            .snapshot
+            .images
+            .iter()
+            .filter(|image| {
+                image.width_cells > 0
+                    && image.height_cells > 0
+                    && image.row.saturating_add(image.height_cells) > visible_row_start
+                    && image.row < visible_row_end
+            })
+            .map(|image| image.content_id)
+            .collect::<HashSet<_>>();
+        let mut image_residents = HashMap::new();
+        if let Some(cache) = layout_cache.as_mut() {
+            cache
+                .image_residents
+                .retain(|key, _| visible_images.contains(key));
+            for key in &visible_images {
+                cache
+                    .image_residents
+                    .entry(*key)
+                    .or_insert_with(|| Arc::new(()));
+            }
+            image_residents.clone_from(&cache.image_residents);
+        } else {
+            image_residents.extend(visible_images.into_iter().map(|key| (key, Arc::new(()))));
+        }
+        if let Some(cache) = layout_cache.as_deref_mut() {
+            cache.contrast = contrast_cache.into_inner();
+        }
+        drop(layout_cache);
+        if !image_residents.is_empty() {
+            crate::images::protect_visible_images(&image_residents);
+        }
+
+        // Graphics protocol placements (Kitty / iTerm2 / Sixel).
+        // Kitty z>0 places above text; everything else stays under the glyph layer.
+        for image in &self.snapshot.images {
+            if image.width_cells == 0 || image.height_cells == 0 {
+                continue;
+            }
+            let image_row_end = image.row.saturating_add(image.height_cells);
+            if image_row_end <= visible_row_start || image.row >= visible_row_end {
+                continue;
+            }
+            let x = px(f32::from(bounds.left())
+                + (image.col as f32 - image.source_col_cells as f32) * cell_w);
+            let y = px(f32::from(bounds.top())
+                + visual_y_offset
+                + (image.row as f32 - image.source_row_cells as f32) * cell_h);
+            let w = px(image.image_width_cells as f32 * cell_w);
+            let h = px(image.image_height_cells as f32 * cell_h);
+            let rect = Bounds::new(point(x, y), size(w, h));
+            match crate::images::cached_render_image_in_window(
+                image.id,
+                image.content_id,
+                Arc::clone(&image.data),
+                &image_residents[&image.content_id],
+                window,
+                cx,
+            ) {
+                crate::images::CachedRenderImage::Ready(decoded) => {
+                    let paint = TerminalImagePaint {
+                        bounds: rect,
+                        image: decoded,
+                    };
+                    if image.above_text {
+                        plan.images_above.push(paint);
+                    } else {
+                        plan.images_under.push(paint);
+                    }
+                }
+                crate::images::CachedRenderImage::Pending => {
+                    push_terminal_image_placeholder(
+                        rect,
+                        x,
+                        y,
+                        w,
+                        image.above_text,
+                        self.palette,
+                        &mut plan,
+                    );
+                }
+                crate::images::CachedRenderImage::Failed => {
+                    push_terminal_image_placeholder(
+                        rect,
+                        x,
+                        y,
+                        w,
+                        image.above_text,
+                        self.palette,
+                        &mut plan,
+                    );
+                }
+            }
+        }
+
+        if self.show_cursor
+            && self.snapshot.cursor.row < self.snapshot.row_count()
+            && self.snapshot.cursor.col < self.snapshot.cols.max(1)
+            && self.snapshot.cursor.row >= visible_row_start
+            && self.snapshot.cursor.row < visible_row_end
+        {
+            let left =
+                (f32::from(bounds.left()) + self.snapshot.cursor.col as f32 * cell_w).floor();
+            let top = (f32::from(bounds.top())
+                + visual_y_offset
+                + self.snapshot.cursor.row as f32 * cell_h)
+                .floor();
+            let right =
+                (f32::from(bounds.left()) + (self.snapshot.cursor.col + 1) as f32 * cell_w).ceil();
+            let bottom = (f32::from(bounds.top())
+                + visual_y_offset
+                + (self.snapshot.cursor.row + 1) as f32 * cell_h)
+                .ceil();
+            let x = px(left);
+            let y = px(top);
+            let width = (right - left).max(1.);
+            let height = (bottom - top).max(1.);
+            let cursor_bounds = match self.cursor_style.as_str() {
+                "bar" => Bounds::new(point(x, y), size(px(2.), px(height))),
+                "underline" => {
+                    Bounds::new(point(x, px((bottom - 2.).floor())), size(px(width), px(2.)))
+                }
+                _ => Bounds::new(point(x, y), size(px(width), px(height))),
+            };
+            plan.cursor_background = Some(fill(cursor_bounds, rgb(self.palette.terminal_cursor)));
+            if self.cursor_style.as_str() != "bar"
+                && self.cursor_style.as_str() != "underline"
+                && !terminal_cursor_cell_hidden(&self.snapshot)
+            {
+                let cursor_line = self.snapshot.line(self.snapshot.cursor.row).unwrap_or("");
+                let cursor_text = terminal_cell_text_at_col(cursor_line, self.snapshot.cursor.col);
+                if let Some(ch) =
+                    cursor_cell_glyph(&cursor_text).filter(|_| self.cell_glyph_rendering_enabled())
+                {
+                    push_cell_glyphs(
+                        &[CellGlyph {
+                            col: self.snapshot.cursor.col,
+                            ch,
+                            color: self.palette.terminal_bg,
+                        }],
+                        self.snapshot.cursor.row,
+                        paint_geometry,
+                        scale_factor,
+                        &mut plan.cursor_cell_glyphs,
+                    );
+                } else {
+                    let cursor_runs = vec![TextRun {
+                        len: cursor_text.len().max(1),
+                        font: terminal_run_font(
+                            base_font,
+                            false,
+                            false,
+                            self.normal_weight,
+                            self.bold_weight,
+                        ),
+                        color: rgb(self.palette.terminal_bg).into(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }];
+                    let cursor_key = self.cursor_glyph_layout_key(&cursor_text);
+                    let build_cursor_glyph = |window: &mut Window| {
+                        let started_at = Instant::now();
+                        let line = Arc::new(window.text_system().shape_line(
+                            SharedString::from(cursor_text),
+                            font_size,
+                            &cursor_runs,
+                            Some(px(cell_w)),
+                        ));
+                        (line, started_at.elapsed())
+                    };
+                    let cursor_layout_cache = self.layout_cache.clone();
+                    let mut cursor_layout_cache = cursor_layout_cache
+                        .as_ref()
+                        .and_then(|cache| cache.lock().ok());
+                    let (line, did_shape, shape_duration) =
+                        if let Some(cache) = cursor_layout_cache.as_deref_mut() {
+                            cache.cursor_glyph(cursor_key, || build_cursor_glyph(window))
+                        } else {
+                            let (line, duration) = build_cursor_glyph(window);
+                            (line, true, duration)
+                        };
+                    if did_shape {
+                        plan.shape_line_count = plan.shape_line_count.saturating_add(1);
+                        plan.shape_line_duration += shape_duration;
+                    }
+                    plan.text_run_count = plan.text_run_count.saturating_add(cursor_runs.len());
+                    plan.cursor_glyph = Some(TerminalCursorGlyphPaint {
+                        origin: point(x, y),
+                        line,
+                    });
+                }
+            }
+        }
+
+        plan.cell_glyphs.finish();
+        plan.cursor_cell_glyphs.finish();
+        let cache_stats_after = self
+            .layout_cache
+            .as_ref()
+            .and_then(|cache| cache.lock().ok())
+            .map(|cache| (cache.hits, cache.misses));
+        if terminal_geometry_diagnostics_enabled() {
+            let metrics = |row: &TerminalPaintRow| {
+                let ascent = f32::from(row.line.ascent);
+                let descent = f32::from(row.line.descent);
+                let y = f32::from(row.y);
+                (
+                    y,
+                    ascent,
+                    descent,
+                    y + (cell_h - ascent - descent) / 2.0 + ascent,
+                )
+            };
+            let (first_y, first_ascent, first_descent, first_baseline) =
+                plan.rows.first().map(metrics).unwrap_or_default();
+            let (last_y, last_ascent, last_descent, last_baseline) =
+                plan.rows.last().map(metrics).unwrap_or_default();
+            let first_absolute_row = self
+                .snapshot
+                .total_rows
+                .saturating_sub(self.snapshot.row_count())
+                .saturating_add(visible_row_start);
+            let mut sampled_rows = Vec::new();
+            for (index, row) in plan.rows.iter().enumerate() {
+                if index < 4 || index >= plan.rows.len().saturating_sub(4) {
+                    sampled_rows.push((first_absolute_row.saturating_add(index), metrics(row)));
+                }
+            }
+            tracing::info!(
+                diagnostic = "terminal_element_geometry",
+                bounds_top = f32::from(bounds.top()),
+                bounds_height = f32::from(bounds.size.height),
+                visual_y_offset,
+                cell_height = cell_h,
+                snapshot_rows = self.snapshot.row_count(),
+                viewport_rows = self.snapshot.viewport_rows,
+                total_rows = self.snapshot.total_rows,
+                visible_row_start,
+                visible_row_end,
+                first_absolute_row,
+                first_y,
+                first_ascent,
+                first_descent,
+                first_baseline,
+                last_absolute_row =
+                    first_absolute_row.saturating_add(plan.rows.len().saturating_sub(1)),
+                last_y,
+                last_ascent,
+                last_descent,
+                last_baseline,
+                ?sampled_rows,
+                shaped_rows = plan.rows.len(),
+                underlines = plan.underlines.len(),
+                "terminal element geometry"
+            );
+        }
+        let elapsed = started_at.elapsed();
+        if elapsed.as_millis() >= TERMINAL_ELEMENT_PREPAINT_SLOW_MS {
+            let (cache_hits, cache_misses) = cache_stats_after.unwrap_or((0, 0));
+            let (cache_hit_delta, cache_miss_delta) =
+                cache_stats_before.map_or((0, 0), |(before_hits, before_misses)| {
+                    (
+                        cache_hits.saturating_sub(before_hits),
+                        cache_misses.saturating_sub(before_misses),
+                    )
+                });
+            tracing::warn!(
+                diagnostic = "terminal_element_prepaint",
+                total_ms = elapsed.as_millis(),
+                visible_row_start,
+                visible_row_end,
+                visible_row_count,
+                snapshot_rows = self.snapshot.row_count(),
+                snapshot_cols = self.snapshot.cols,
+                styled_lines = self.snapshot.row_count(),
+                decorations = self.decorations.len(),
+                keyword_rules = self.keyword_rules.len(),
+                images = self.snapshot.images.len(),
+                backgrounds = plan.backgrounds.len(),
+                cell_glyph_primitives = plan.cell_glyphs.primitive_count(),
+                underlines = plan.underlines.len(),
+                decoration_backgrounds = plan.decoration_backgrounds.len(),
+                active_markers = plan.active_markers.len(),
+                shaped_rows = plan.rows.len(),
+                prefetched_rows = plan.prefetched_row_count,
+                shape_line_count = plan.shape_line_count,
+                shape_line_ms = plan.shape_line_duration.as_millis(),
+                text_run_count = plan.text_run_count,
+                images_under = plan.images_under.len(),
+                images_above = plan.images_above.len(),
+                placeholders_under = plan.placeholders_under.len(),
+                placeholders_above = plan.placeholders_above.len(),
+                cache_hit_delta,
+                cache_miss_delta,
+                cache_hits,
+                cache_misses,
+                "slow terminal element prepaint"
+            );
+        }
+
+        plan
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let started_at = Instant::now();
+        let cell_height =
+            nyaterm_core::terminal_snapped_cell_height(self.cell_height, window.scale_factor());
+        let zebra_stripes = prepaint.zebra_stripes.len();
+        let backgrounds = prepaint.backgrounds.len();
+        let cell_glyph_primitives = prepaint.cell_glyphs.primitive_count();
+        let images_under = prepaint.images_under.len();
+        let placeholders_under = prepaint.placeholders_under.len();
+        let decoration_backgrounds = prepaint.decoration_backgrounds.len();
+        let active_markers = prepaint.active_markers.len();
+        let shaped_rows = prepaint.rows.len();
+        let underlines = prepaint.underlines.len();
+        let images_above = prepaint.images_above.len();
+        let placeholders_above = prepaint.placeholders_above.len();
+        let cursor = prepaint.cursor_background.is_some();
+        let cursor_glyph = prepaint.cursor_glyph.is_some();
+        let shape_line_count = prepaint.shape_line_count;
+        let shape_line_ms = prepaint.shape_line_duration.as_millis();
+        let text_run_count = prepaint.text_run_count;
+        let viewport_mask = ContentMask {
+            bounds: window.content_mask().bounds.intersect(&bounds),
+        };
+        window.with_content_mask(Some(viewport_mask), |window| {
+            // zebra → cell bg → under images → search/selection → marks → text → images → cursor
+            for quad in prepaint.zebra_stripes.drain(..) {
+                window.paint_quad(quad);
+            }
+            for quad in prepaint.backgrounds.drain(..) {
+                window.paint_quad(quad);
+            }
+            for image in prepaint.images_under.drain(..) {
+                let _ = window.paint_image(
+                    image.bounds,
+                    image.bounds,
+                    gpui::Corners::default(),
+                    image.image,
+                    0,
+                    false,
+                );
+            }
+            for quad in prepaint.placeholders_under.drain(..) {
+                window.paint_quad(quad);
+            }
+            for quad in prepaint.decoration_backgrounds.drain(..) {
+                window.paint_quad(quad);
+            }
+            for quad in prepaint.active_markers.drain(..) {
+                window.paint_quad(quad);
+            }
+            for row in prepaint.rows.drain(..) {
+                let _ = row.line.paint(
+                    point(bounds.left(), row.y),
+                    px(cell_height),
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+            prepaint.cell_glyphs.paint(window, cx);
+            for strike in prepaint.strikethroughs.drain(..) {
+                window.paint_strikethrough(
+                    strike.origin,
+                    strike.width,
+                    &line_strike_color(rgb(strike.color).into()),
+                );
+            }
+            for quad in prepaint.underlines.drain(..) {
+                window.paint_quad(quad);
+            }
+            for image in prepaint.images_above.drain(..) {
+                let _ = window.paint_image(
+                    image.bounds,
+                    image.bounds,
+                    gpui::Corners::default(),
+                    image.image,
+                    0,
+                    false,
+                );
+            }
+            for quad in prepaint.placeholders_above.drain(..) {
+                window.paint_quad(quad);
+            }
+            if let Some(cursor) = prepaint.cursor_background.take() {
+                window.paint_quad(cursor);
+            }
+            prepaint.cursor_cell_glyphs.paint(window, cx);
+            if let Some(cursor_glyph) = prepaint.cursor_glyph.take() {
+                let _ = cursor_glyph.line.paint(
+                    cursor_glyph.origin,
+                    px(cell_height),
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+        });
+        let elapsed = started_at.elapsed();
+        if elapsed.as_millis() >= TERMINAL_ELEMENT_PAINT_SLOW_MS {
+            tracing::warn!(
+                diagnostic = "terminal_element_paint",
+                total_ms = elapsed.as_millis(),
+                snapshot_rows = self.snapshot.row_count(),
+                snapshot_cols = self.snapshot.cols,
+                zebra_stripes,
+                backgrounds,
+                cell_glyph_primitives,
+                decoration_backgrounds,
+                active_markers,
+                shaped_rows,
+                underlines,
+                images_under,
+                images_above,
+                placeholders_under,
+                placeholders_above,
+                cursor,
+                cursor_glyph,
+                shape_line_count,
+                shape_line_ms,
+                text_run_count,
+                "slow terminal element paint"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+fn terminal_visible_rows_for_bounds(
+    bounds: Bounds<Pixels>,
+    cell_h: f32,
+    row_limit: usize,
+    visual_y_offset: f32,
+) -> std::ops::Range<usize> {
+    terminal_visible_rows_for_clipped_bounds(bounds, bounds, cell_h, row_limit, visual_y_offset)
+}
+
+fn terminal_visible_rows_for_clipped_bounds(
+    bounds: Bounds<Pixels>,
+    visible_bounds: Bounds<Pixels>,
+    cell_h: f32,
+    row_limit: usize,
+    visual_y_offset: f32,
+) -> std::ops::Range<usize> {
+    if row_limit == 0 {
+        return 0..0;
+    }
+    let cell_h = cell_h.max(1.);
+    let visible_top = f32::from(visible_bounds.top() - bounds.top());
+    let visible_bottom = f32::from(visible_bounds.bottom() - bounds.top());
+    let overscan_rows = 1usize;
+    let visible_start = ((visible_top - visual_y_offset) / cell_h).floor().max(0.0) as usize;
+    let visible_end = ((visible_bottom - visual_y_offset) / cell_h)
+        .ceil()
+        .max(0.0) as usize;
+    let start = visible_start.saturating_sub(overscan_rows).min(row_limit);
+    let end = visible_end.saturating_add(overscan_rows).min(row_limit);
+    if end < start {
+        return start..start;
+    }
+    start..end
+}
+
+fn terminal_layout_rows(snapshot_rows: usize, override_rows: Option<usize>) -> usize {
+    override_rows.unwrap_or(snapshot_rows).max(1)
+}
+
+fn terminal_layout_height_px(
+    cell_height: f32,
+    snapshot_rows: usize,
+    override_rows: Option<usize>,
+) -> f32 {
+    cell_height.max(1.0) * terminal_layout_rows(snapshot_rows, override_rows) as f32
+}
+
+#[cfg(test)]
+mod tab_paint_tests {
+    use super::{
+        TerminalHighlightSpan, append_padded_wide_cells, pad_wide_cells,
+        terminal_background_ranges_for_spans,
+    };
+
+    fn span(text: &str, bg: Option<u32>) -> TerminalHighlightSpan {
+        TerminalHighlightSpan {
+            text: text.to_string(),
+            color: None,
+            bg,
+            keyword: false,
+            underline: false,
+            strikeout: false,
+            bold: false,
+            italic: false,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn shaped_text_never_receives_literal_tab() {
+        // The grid keeps a literal `\t` in the tab cell (alacritty fork
+        // `put_tab`). Terminal fonts define no tab advance, so feeding it to
+        // the shaper shifts the rest of the run by an arbitrary width. Paint
+        // the cell as a plain space instead.
+        let mut output = String::new();
+        let len = append_padded_wide_cells(&mut output, "a\tb");
+        assert_eq!(output, "a b");
+        assert_eq!(len, 3);
+    }
+
+    #[test]
+    fn plain_row_fast_path_paints_tab_as_space() {
+        // `printf 'Name\tValue\n'` produces a default-styled row that takes the
+        // plain-row fast path (pad_wide_cells -> shape_line). The literal tab
+        // must never reach the shaper on this path either. The input is the
+        // materialized grid text: the tab cell plus the blank cells up to the
+        // stop (tab at col 4 jumps to col 8).
+        let padded = pad_wide_cells("Name\t   Value");
+        assert!(!padded.contains('\t'));
+        // One space for the tab cell plus the three materialized blanks puts
+        // the value at column 8.
+        assert_eq!(padded, "Name    Value");
+    }
+
+    #[test]
+    fn background_ranges_start_colored_span_at_tab_stop() {
+        // Snapshot spans carry the tab cell plus the blank cell the grid left
+        // behind, so the tab span covers two columns and the colored span
+        // starts on the stop — here col 16, matching the cell path.
+        let spans = vec![
+            span("System load:  \t ", None),
+            span("0.33", Some(0x0000_0000)),
+        ];
+        let ranges = terminal_background_ranges_for_spans(&spans);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 16);
+        assert_eq!(ranges[0].end, 20);
+    }
+}

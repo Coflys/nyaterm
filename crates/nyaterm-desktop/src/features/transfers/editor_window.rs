@@ -1,0 +1,201 @@
+use rust_i18n::t;
+
+use std::rc::Rc;
+
+use gpui::{
+    App, AppContext, Context, Entity, FocusHandle, IntoElement, Render, Subscription, Window, div,
+    prelude::*, px, rgb,
+};
+use nyaterm_ui::{NyaRoot, NyaWindowHandle, nya_root};
+
+use crate::features::{
+    NyaTermApp,
+    view_widgets::{
+        ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, child_window_header,
+        child_window_options, child_window_root, focus_child_window_shell_if_idle,
+    },
+};
+
+pub(super) struct RemoteFileEditorWindow {
+    app: Entity<NyaTermApp>,
+    shell_focus: FocusHandle,
+    chrome: ChildWindowChrome,
+    _app_subscription: Subscription,
+}
+
+impl RemoteFileEditorWindow {
+    fn new(app: Entity<NyaTermApp>, chrome: ChildWindowChrome, cx: &mut Context<Self>) -> Self {
+        let app_subscription = cx.observe(&app, |_, _, cx| cx.notify());
+        Self {
+            app,
+            shell_focus: cx.focus_handle(),
+            chrome,
+            _app_subscription: app_subscription,
+        }
+    }
+}
+
+impl Render for RemoteFileEditorWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.app.read(cx).transfer.has_window_editor_documents() {
+            let handle = window.window_handle().downcast::<NyaRoot>();
+            self.app.update(cx, |app, cx| {
+                if handle.is_some_and(|handle| app.transfer.clear_editor_window_if(handle)) {
+                    cx.notify();
+                }
+            });
+            window.defer(cx, |window, _| window.remove_window());
+            return div().size_full().into_any_element();
+        }
+
+        let (palette, font, font_size, window_title) = self.app.read_with(cx, |app, _| {
+            let workspace = app
+                .transfer
+                .window_editor_workspace()
+                .expect("editor checked above");
+            let editor = workspace
+                .active_tab()
+                .expect("open editor workspace has an active tab");
+            let name = if editor.name.trim().is_empty() {
+                &editor.remote_path
+            } else {
+                &editor.name
+            };
+            (
+                app.theme_palette(),
+                app.gpui_ui_font().font(),
+                app.settings.summary().ui_font_size.clamp(12, 24) as f32,
+                format!(
+                    "{}{}",
+                    if workspace.tabs.iter().any(|tab| tab.dirty) {
+                        "* "
+                    } else {
+                        ""
+                    },
+                    name
+                ),
+            )
+        });
+        window.set_window_title(&window_title);
+        let content = self
+            .app
+            .update(cx, |app, cx| app.transfer_editor_window_view(cx));
+        let close_app = self.app.clone();
+        let on_close: ChildWindowCloseHandler =
+            Rc::new(move |window: &mut Window, cx: &mut App| {
+                let handle = window.window_handle().downcast::<NyaRoot>();
+                let should_close = close_app.update(cx, |app, cx| {
+                    app.close_transfer_editor(cx);
+                    let should_close = !app.transfer.has_window_editor_documents();
+                    if should_close && let Some(handle) = handle {
+                        app.transfer.clear_editor_window_if(handle);
+                    }
+                    should_close
+                });
+                if should_close {
+                    window.remove_window();
+                }
+            });
+        let header_close = on_close.clone();
+        focus_child_window_shell_if_idle(&self.shell_focus, window, cx);
+
+        child_window_root(&self.shell_focus, false, on_close)
+            .bg(rgb(palette.bg))
+            .text_color(rgb(palette.text))
+            .font(font)
+            .text_size(px(font_size))
+            .child(child_window_header(
+                palette,
+                t!("fileEditor.title").to_string(),
+                Some("icons/edit.svg"),
+                self.chrome,
+                window,
+                move |_, window, cx| header_close(window, cx),
+            ))
+            .child(div().flex_1().min_h_0().overflow_hidden().child(content))
+            .into_any_element()
+    }
+}
+
+impl NyaTermApp {
+    pub(in crate::features) fn open_remote_file_editor_window(&mut self, cx: &mut Context<Self>) {
+        if self.transfer.editor_window().is_some() {
+            let app = cx.entity();
+            cx.defer(move |cx| open_remote_file_editor_window_now_from_app(app, cx));
+            return;
+        }
+        if !self.transfer.begin_editor_window_open() {
+            return;
+        }
+        cx.notify();
+        let app = cx.entity();
+        cx.defer(move |cx| {
+            let should_open = app.read(cx).transfer.editor_window_open_is_pending();
+            if should_open {
+                open_remote_file_editor_window_now_from_app(app, cx);
+            }
+        });
+    }
+}
+
+fn open_remote_file_editor_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut App) {
+    if let Some(handle) = app.read(cx).transfer.editor_window() {
+        let activate_result = handle.update(cx, |_, window, _| window.activate_window());
+        let cleared = app.update(cx, |app, cx| {
+            let cleared = app
+                .transfer
+                .finish_editor_window_activation(handle, activate_result.is_ok());
+            cx.notify();
+            cleared
+        });
+        if activate_result.is_ok() || !cleared {
+            return;
+        }
+        if !app.update(cx, |app, _| app.transfer.begin_editor_window_open()) {
+            return;
+        }
+    }
+    if !app.read(cx).transfer.has_window_editor_documents() {
+        app.update(cx, |app, cx| {
+            app.transfer.clear_editor_window_tracking();
+            cx.notify();
+        });
+        return;
+    }
+
+    let title = t!("fileEditor.title").to_string();
+    let spec = ChildWindowSpec::document(title, 980., 720.).min_size(640., 480.);
+    let chrome = spec.chrome();
+    let parent = app.read(cx).shell.main_window();
+    let options = child_window_options(&spec, parent, cx);
+    let close_app = app.clone();
+    let view_app = app.clone();
+    let result: anyhow::Result<NyaWindowHandle> = cx.open_window(options, move |window, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
+            let handle = window.window_handle().downcast::<NyaRoot>();
+            close_app.update(cx, |app, cx| {
+                app.close_transfer_editor(cx);
+                let should_close = !app.transfer.has_window_editor_documents();
+                if should_close && let Some(handle) = handle {
+                    app.transfer.clear_editor_window_if(handle);
+                }
+                should_close
+            })
+        });
+        let view = cx.new(|cx| RemoteFileEditorWindow::new(view_app, chrome, cx));
+        cx.new(|cx| nya_root(view, window, cx))
+    });
+
+    app.update(cx, |app, cx| match result {
+        Ok(handle) => {
+            app.transfer.finish_editor_window_open(handle);
+            cx.notify();
+        }
+        Err(error) => {
+            app.transfer.clear_editor_window_tracking();
+            app.shell
+                .set_status(format!("failed to open remote editor window: {error}"));
+            cx.notify();
+        }
+    });
+}

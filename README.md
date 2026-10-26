@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./public/icons/app/nyaterm.svg" alt="NyaTerm" width="128" height="128">
+  <img src="./docs-site/static/img/nyaterm.svg" alt="NyaTerm" width="128" height="128">
 </p>
 
 <h1 align="center">NyaTerm</h1>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>A modern remote terminal workspace built with Tauri, React, and Rust.</strong><br/>
+  <strong>A modern native remote terminal workspace built with GPUI.</strong><br/>
   <a href="https://nyaterm.app"><strong>nyaterm.app</strong></a> ·
   <a href="https://nyaterm.app/docs/"><strong>Documentation</strong></a>
 </p>
@@ -70,7 +70,7 @@ NyaTerm includes an AI Assistant panel for command generation, terminal output e
 <a name="what-is-nyaterm"></a>
 # What is NyaTerm
 
-**NyaTerm** is a desktop client for SSH-centric operations and mixed terminal workflows. It combines a React + Tauri interface with a Rust backend so you can manage remote hosts, local shells, file transfers, authentication, network tooling, AI-assisted terminal actions, session import/export, diagnostics, and encrypted sync/backup from one workspace.
+**NyaTerm** is a native GPUI desktop client for SSH-centric operations and mixed terminal workflows. Its Rust workspace combines the desktop interface, terminal rendering, transport protocols, persistence, authentication, network tooling, AI-assisted terminal actions, session import/export, diagnostics, and encrypted sync/backup in one application.
 
 - **NyaTerm is** an SSH client for developers, sysadmins, and DevOps engineers
 - **NyaTerm is** a terminal workspace with tabs, horizontal splits, and vertical splits
@@ -100,7 +100,7 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 
 - SSH, Local Terminal, Telnet, Serial, RDP, and VNC session support
 - Multi-tab workspace with horizontal and vertical pane splits, tab drag docking, and layout restoration
-- RDP and VNC remote desktop panes; VNC supports direct TCP, None / classic VNC Auth, RA2_256 in Auto mode with server-key TOFU verification, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
+- RDP and VNC remote desktop panes; VNC currently supports direct TCP, None / classic VNC Auth, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
 - Saved connections with folders, icons, metadata, duplication, keyboard copy, reconnect, and import flows
 - Command Palette and session quick switcher for finding actions, open sessions, saved connections, and new-session entry points
 - Main-window `Background Image` customization with `cover` / `contain` / `stretch` / `tile` sizing and adjustable `Background Content Opacity`
@@ -121,11 +121,11 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 - Optional line-number and timestamp gutter
 - Optional action links for IPv4 addresses, `host:port`, and archive filenames
 - Optional keyword highlighting with expanded built-in presets, custom rules, and JSON import
-- Terminal zoom, workspace padding, font weight controls, macOS IME compatibility, image path paste handling, and a clear-terminal action
+- Terminal zoom, workspace padding, font weight controls, native IME support, image path paste handling, and a clear-terminal action
 - AI shortcuts for explaining recent output, plus inline Agent command output with configurable `Terminal Output Lines`
 - Large-output protection, configurable scrollback, SSH keep-alive, and session recording
 - Online search and translation from selected terminal text
-- ZMODEM file transfer support directly from the terminal, plus Serial XMODEM/YMODEM/ZMODEM drag-and-drop uploads surfaced in the transfer queue
+- Zmodem file transfer support directly from the terminal, surfaced in the transfer queue
 - Confirmation dialog before closing all sessions
 - Customizable keyboard shortcuts for terminal and UI actions, including `Backspace Mode` selection for Telnet and Serial sessions
 
@@ -137,6 +137,8 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 - Transfer queue with speed display, pause, resume, cancel, retry, duplicate-target handling, timestamp preservation, and configurable concurrency
 - Enhanced SCP and directory-transfer handling with original-property preservation where available
 - Open remote files in a local editor and upload saved changes back through the watcher-driven auto-upload flow, with content fingerprinting so only real content changes trigger re-upload
+- Multi-tab read-only remote file preview for text, JSON, Markdown, CSV/TSV, images, and PDF, with per-tab session labels, zoom/rotate/fit controls, and paged PDF rendering
+- Preview loading and decoding run off the render thread with per-format size limits, so oversized or unsupported files surface a clear message instead of blocking the UI
 - SFTP channel concurrency limiting and automatic retry on transient channel-open failures
 - External drag-and-drop upload support on Windows
 - Zmodem transfers track local paths and can reveal completed files in the system file manager
@@ -260,7 +262,7 @@ Download installers from [nyaterm.app](https://nyaterm.app) or the [Releases](ht
 | SSH | Linux / Unix remote servers | Supports SFTP, OTP, resource / GPU / process / Docker monitoring, proxy, jump host, tunnels, and per-connection algorithm preferences |
 | Local Terminal | Local shell workflows | Uses your local shell path and working directory |
 | Telnet | Legacy network devices or lab systems | Lightweight terminal session without SSH-only features, with `Backspace Mode` for `Ctrl+H (BS)` or `DEL (0x7F)` |
-| Serial | Routers, boards, embedded devices | Configurable port, baud rate, data bits, parity, stop bits, `Backspace Mode`, and XMODEM/YMODEM/ZMODEM drag-and-drop upload protocol |
+| Serial | Routers, boards, embedded devices | Configurable port, baud rate, data bits, parity, stop bits, and `Backspace Mode` |
 
 ---
 
@@ -273,11 +275,13 @@ Download the latest build for your platform from [nyaterm.app](https://nyaterm.a
 
 | Platform | Format |
 |----------|--------|
-| Windows | `.msi` / `.exe` / portable `.zip` |
+| Windows | `.exe` / portable `.zip` |
 | macOS | `.dmg` |
-| Linux | `.deb` / `.AppImage` |
+| Linux | `.deb` / `.AppImage` / `.rpm` |
 
-For the Windows portable edition, extract the zip and run `NyaTerm.exe`. **Help → Check Updates** uses the same Cloudflare R2 update manifest and download source as the installed edition. Tauri updater signatures are always verified before staging an update; NyaTerm preserves the complete `data/` folder while replacing the program files and restarting.
+For the Windows portable edition, extract the ZIP and run `NyaTerm.exe`; data lives in the adjacent `data/` directory. GPUI **Help → Check Updates** uses signed manifests and supports downloading and installing updates for supported installation types. Homebrew and deb/rpm installations use their package manager.
+
+**Migrating from 1.x: Windows portable and old MSI installations require manual upgrades.** Quit and back up all data and keys first. Replace the complete portable program payload while preserving `data/`; for MSI, back up, uninstall the old version, and install NSIS. Replacing only the main executable is insufficient, and automatic migration is not promised for all legacy installers. See the [2.0 migration guide](https://nyaterm.app/en/docs/getting-started/migration-v2).
 
 ### macOS
 
@@ -322,43 +326,38 @@ AUR package: [`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 > `nyaterm-bin` is a community-maintained binary AUR package. If the AUR package has not yet caught up with the latest release, download the official package from [Releases](https://github.com/nyakang/nyaterm/releases).
 
 
-## Web / Docker Deployment
-
-The Web Beta serves the browser interface and API from a single container for one trusted administrator. See [deploy/web/](./deploy/web/README.md) for build and Compose commands, and the [deployment guide](./docs/web-deployment.md) for configuration and supported capabilities.
-
 ## Prerequisites for Development
 
-- Node.js 18+
 - Rust stable via [rustup](https://rustup.rs/)
-- pnpm
+- Platform dependencies required by GPUI and your operating system
 
 ## Development
 
 ```bash
 git clone https://github.com/nyakang/nyaterm.git
 cd nyaterm
-pnpm install
-pnpm tauri dev
+cargo run -p nyaterm-app --bin nyaterm
 ```
 
 ## Project Structure
 
 ```text
-├── src/                    # React frontend
-│   ├── components/         # UI, terminal, panels, dialogs, settings
-│   ├── hooks/              # Frontend state and workflow hooks
-│   ├── lib/                # Terminal, AI, sync, theme, platform helpers
-│   ├── pages/              # Child-window pages
-│   └── i18n/               # Application translations
-├── src-tauri/              # Tauri 2 + Rust backend
-│   ├── src/cmd/            # Tauri commands exposed to the frontend
-│   ├── src/core/           # SSH, SFTP, PTY, Telnet, Serial, AI, backup logic
-│   ├── src/config/         # Persistent config models
-│   └── crates/otp/         # Local OTP implementation
-├── deploy/web/             # Web Dockerfile, Compose, and deployment entry point
-├── docs-site/              # Docusaurus documentation site
-├── public/                 # Static assets
-└── scripts/                # Checks, version sync, and demo helper scripts
+├── crates/
+│   ├── nyaterm-app/             # Native GPUI application entry point and assets
+│   ├── nyaterm-desktop/         # GPUI application composition and feature state
+│   ├── nyaterm-core/            # UI-independent domain models and policies
+│   ├── nyaterm-terminal/        # Terminal state machine and parsing
+│   ├── nyaterm-terminal-gpui/   # GPUI terminal layout, input, and painting
+│   ├── nyaterm-transport/       # SSH, PTY, SFTP, Telnet, Serial, and transfers
+│   ├── nyaterm-store/           # Persistence and database compatibility
+│   ├── nyaterm-ui/              # Shared GPUI controls and theme integration
+│   ├── nyaterm-remote-desktop/  # UI-independent RDP/VNC sessions and typed IPC
+│   ├── nyaterm-rdp-helper/      # Isolated IronRDP protocol helper process
+│   ├── nyaterm-vnc-helper/      # Isolated VNC protocol helper process
+│   └── nyaterm-otp/             # OTP compatibility implementation
+├── docs-site/                   # Docusaurus documentation site
+├── Cargo.toml                   # Rust workspace definition
+└── Cargo.lock
 ```
 
 ---
@@ -368,7 +367,7 @@ pnpm tauri dev
 Thanks to the following projects and libraries that make NyaTerm possible:
 - [WindTerm](https://github.com/kingToolbox/WindTerm) - Inspired the design and features of NyaTerm
 - [tabby](https://github.com/Eugeny/tabby) - An excellent cross-platform terminal that provided many design inspirations
-- [xterm.js](https://xtermjs.org/) - A powerful frontend terminal emulator that provides rich terminal functionality and extensibility
+- [Alacritty](https://github.com/alacritty/alacritty) - Terminal emulation components used by NyaTerm
 - [russh](https://github.com/warp-tech/russh) - An SSH client and server implementation in Rust
 
 ---

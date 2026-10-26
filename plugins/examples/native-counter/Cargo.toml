@@ -1,8 +1,0 @@
-[package]
-name = "nyaterm-native-counter"
-version = "1.0.1"
-edition = "2024"
-
-[dependencies]
-nyaterm-plugin-sdk = { path = "../../sdk/rust/nyaterm-plugin-sdk" }
-tokio = { version = "1", features = ["rt", "macros"] }

@@ -1,6 +1,0 @@
-{
-  "compilerOptions": { "types": ["vite/client"] },
-  "extends": "../../../../tsconfig.json",
-  "include": ["main.tsx", "../../../../src/types/global.d.ts"],
-  "references": []
-}

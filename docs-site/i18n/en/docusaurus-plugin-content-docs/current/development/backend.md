@@ -1,195 +1,76 @@
----
-sidebar_position: 4
----
+# Runtime, Transport, and Storage Development
 
-# Backend Development
+NyaTerm has no separate Web backend. Domain logic, protocol runtimes, and persistence are split across Rust crates and communicate with the GPUI desktop layer through typed interfaces.
 
-Backend code lives in `src-tauri/src/` and is written in Rust. It is the runtime core of NyaTerm: session management, SSH/SFTP, recording, translation, tunnels, authentication, and config persistence all land here.
+## Crate boundaries
 
-## Command entry points and module organization
+| Crate | Behavior it owns |
+|------|------------------|
+| `nyaterm-core` | Pure models, parsing, policies, compatibility formats, schema-neutral serialization |
+| `nyaterm-transport` | PTY, SSH, SFTP, Telnet, Serial, tunnels, remote operations, and transfer runtimes |
+| `nyaterm-store` | redb, transactions, storage workers, encryption adapters, compatibility readers |
+| `nyaterm-terminal` | Terminal state, snapshots, control sequences, encodings, and graphics protocols |
+| `nyaterm-remote-desktop` | RDP/VNC session management, framebuffer and input models, certificate policy, clipboard state, and the helper IPC contracts |
+| `nyaterm-rdp-helper` / `nyaterm-vnc-helper` | Isolated helper processes owning their protocol decoders |
+| `nyaterm-otp` | HOTP/TOTP compatibility implementation |
 
-Backend command registration is centralized in `src-tauri/src/lib.rs`:
+Low-level crates do not import GPUI or desktop presentation types. Use a small typed adapter at a boundary instead of pushing application-wide models into transport or storage code.
 
-- Shared manager state is created there
-- Tauri plugins are mounted there
-- Commands are registered there through `tauri::generate_handler![]`
+Protocol decoders that parse server-controlled bytes live only in the helper crates. `nyaterm-remote-desktop` owns no decoder, and both helpers must translate a decoder panic into a fatal IPC error. See [Architecture → RDP / VNC process isolation](./architecture#rdp--vnc-process-isolation).
 
-Command modules live in:
+## Session and transport runtime
 
-```text
-src-tauri/src/cmd/
-├── session.rs
-├── sftp.rs
-├── connection.rs
-├── settings.rs
-├── watcher.rs
-├── translate.rs
-├── stats.rs
-├── tunnel.rs
-├── proxy.rs
-├── otp.rs
-├── importer.rs
-├── cloud_sync.rs
-├── clipboard.rs
-└── log.rs
-```
+The `SessionManager` in `nyaterm-transport` manages active sessions and provides a common lifecycle entry point for local PTY, SSH, Telnet, raw TCP, Serial, RDP, and VNC sessions.
 
-When adding a new command, the usual flow is:
+Session output returns through `SessionEvent` variants:
 
-1. Define a `#[tauri::command]` in the appropriate `cmd/*.rs` file
-2. Reuse existing logic in `core/` or `config/` where possible
-3. Register the command in `src-tauri/src/lib.rs`
-4. Call it from the frontend through `src/lib/invoke.ts`
+- `Output` / `OutputDropped`
+- `CwdChanged`
+- `CommandAccepted`
+- `Exited`
+- `Error`
 
-## Shared runtime state
+The event queue coalesces and bounds high-throughput output. The desktop drains events in batches instead of allowing background threads to mutate GPUI state. New session events use typed enum variants and include tests for ordering, queue limits, and close behavior.
 
-`src-tauri/src/lib.rs` injects these shared objects into Tauri state:
+SSH, SFTP, tunnel, remote-process, and Docker operations also remain asynchronous or run on dedicated workers. Transport code does not depend on windows, dialogs, or desktop feature types.
 
-- `SessionManager`
-- `TunnelManager`
-- `RecordingManager`
-- `PendingAuthManager`
-- `CloudSyncManager`
+## Terminal runtime
 
-Their roles are:
+Transport wire bytes enter `nyaterm-terminal`. That crate maintains the grid, scrollback, modes, OSC marks, search results, and graphics-protocol state, then produces UI-neutral snapshots.
 
-- Active session lifecycle and command history
-- SSH tunnel state
-- Recording state
-- Pending keyboard-interactive / OTP authentication requests
-- Cloud sync / backup state, remote snapshot operations, and conflict handling
+Terminal-semantic keyboard and mouse protocol encoding stays at the terminal/core boundary. Pixel sizing, GPUI key events, and painting stay in `nyaterm-terminal-gpui`.
 
-## SessionManager
+## StoreRuntime and persistence
 
-`src-tauri/src/core/session.rs` contains `SessionManager`, the center of session runtime behavior. It is responsible for:
+`nyaterm_store::StoreRuntime` owns the database worker. The desktop submits typed `StoreRequest` implementations through `StoreUiClient` or `StoreBlockingClient`, then updates UI state from the task result.
 
-- Registering and removing active sessions
-- Sending `Write`, `Resize`, `Close`, and `Attach` commands into session I/O loops
-- Managing command history and fuzzy search storage
-- Emitting events such as `sessions-changed` and `command-history-changed`
+Database implementation is grouped under `nyaterm-store/src/storage/`. Storage changes preserve:
 
-The session metadata exposed to the frontend also includes `injection_active`, which indicates whether the current session supports shell-integration features such as terminal path tracking.
+- Existing redb table names, keys, and document keys
+- Serialized field names and unknown-field handling
+- Master-key wrapping, encryption prefixes, and fallback decryption
+- `.nya` backups, portable snapshots, and Dragonfly compatibility readers
+- Existing user data until replacement data has passed validation
 
-## Session implementations
+Pure compatibility models and policies belong in `nyaterm-core`; database transactions, file I/O, and compatibility readers belong in `nyaterm-store`.
 
-Concrete session types are implemented under `src-tauri/src/core/`:
+## AI, sync, and native HTTP
 
-- `ssh/` — SSH connections, authentication, OSC/CWD tracking, SFTP, tunnels
-- `pty.rs` — local terminal sessions
-- `telnet.rs` — Telnet sessions
-- `serial.rs` — serial sessions
-- `recording.rs` — session recording
-- `watcher.rs` — local file watching and auto-upload flows
-- `importer.rs` — external client session import
+AI providers, translation, cloud sync, and update checks use native HTTP adapters. Request construction, risk policy, and schema-neutral provider settings stay in `nyaterm-core` where practical. The desktop owns secret masking, interaction state, and task coordination.
 
-## SSH modules
+Cloud sync treats portable snapshots as a compatibility contract. Pulled data is decrypted, parsed, and validated before it is applied; conflicts, retries, and errors return to the UI as typed results.
 
-`src-tauri/src/core/ssh/` is the most central backend area:
+## Errors and security
 
-- `client.rs` — russh client setup, known-host verification, proxy-aware connection setup
-- `auth.rs` — loading saved authentication data and handling keyboard-interactive / OTP flows
-- `io.rs` — terminal I/O and cwd update events
-- `sftp.rs` — remote file operations and transfer queue handling
-- `tunnel.rs` — local / remote / dynamic tunnels
-- `session.rs` — SSH session lifecycle coordination
+Low-level libraries return typed errors, and desktop adapters decide how to present them. Errors, logs, and `Debug` output must never include passwords, private keys, OTP values, API secrets, or unredacted terminal context.
 
-A typical SSH flow is:
+Background tasks handle cancellation, window closure, and runtime shutdown. On exit, `AppShell` requests a store flush and shutdown so database writes do not outlive the UI lifecycle.
 
-1. Read the connection configuration
-2. Decrypt passwords, private keys, or other credentials
-3. Establish the TCP or proxy connection
-4. Apply host-key policy verification
-5. Complete authentication, possibly entering OTP / interactive flow
-6. Open the PTY channel and enter the async I/O loop
-7. Inject OSC/CWD tracking when supported
+## Tests
 
-## SFTP and the transfer queue
-
-`src-tauri/src/core/ssh/sftp.rs` is responsible for:
-
-- Listing directories
-- Uploading / downloading files and directories
-- Delete / rename / mkdir / symlink / stat operations
-- Transfer queue control such as pause / resume / cancel
-- Emitting `transfer-event` for the frontend
-
-The frontend transfer panel and `TransferContext` are built on top of these events.
-
-## Watcher and auto-upload
-
-`src-tauri/src/core/watcher.rs` handles local file watching.
-
-A typical flow is:
-
-1. The frontend chooses **Open** on a remote file from the file explorer
-2. The backend downloads it into a local temp directory and starts watching it
-3. After the local file is saved, a `file-modified` event is emitted
-4. The frontend decides whether to open the auto-upload window or upload immediately when the user previously chose an always-upload behavior
-
-This flow involves:
-
-- `cmd/watcher.rs`
-- `core/watcher.rs`
-- Frontend `FileUploadPage.tsx`
-
-## Cloud sync / portable snapshot
-
-`src-tauri/src/core/cloud_sync.rs` owns the runtime behavior for this capability, including:
-
-- startup sync checks
-- manual push / pull
-- debounced auto-push
-- conflict detection and event emission
-
-The frontend reaches it through `src-tauri/src/cmd/cloud_sync.rs`, which exposes commands such as:
-
-- `test_cloud_sync_connection`
-- `get_cloud_sync_status`
-- `sync_push_now`
-- `sync_pull_now`
-- `list_cloud_sync_history`
-- `resolve_cloud_sync_conflict`
-
-`src-tauri/src/core/portable_snapshot.rs` defines which data belongs in a portable snapshot. That matters because it controls:
-
-- which settings are suitable for cross-device sync
-- which data should remain local to the device
-- how sync snapshots differ in scope from local `.nya` export snapshots
-
-In the current implementation, portable snapshots cover connections, credential config, OTP, proxies, tunnels, quick commands, and most application settings; they do not blindly roam all live UI state.
-
-## Configuration and encryption
-
-Configuration and records are stored in `~/.nyaterm/nyaterm.redb` and are mainly managed by `src-tauri/src/storage.rs` and `src-tauri/src/config/`. When upgrading from Dragonfly, NyaTerm copies `~/.dragonfly/dragonfly.redb`; if the old environment only has `.dragonfly` JSON / text files, they are copied and imported into redb. The old directory is not deleted.
-
-Primary redb documents include:
-
-- JSON documents: `settings`, `sessions`, `keys`, `passwords`, `otp`, `quick-command`, `tunnels`, `proxies`, `history`, `cloud-sync-state`
-- Text documents: `known_hosts`, `master.key`
-
-Sensitive fields are encrypted before being written, so when adding new configuration you should verify whether it crosses a sensitive-data boundary.
-
-For cloud sync specifically, also pay attention to:
-
-- provider credential fields going through encrypt / mask / merge handling
-- runtime state being stored separately in the `cloud-sync-state` document
-- history mainly being reconstructed from structured logs and then exposed through `list_cloud_sync_history`
-
-## Event model
-
-The backend relies heavily on Tauri events to notify the frontend. Typical events include:
-
-| Event | Description |
-|------|------|
-| `terminal-output-{id}` | Terminal output |
-| `cwd-changed-{id}` | Working directory changed |
-| `session-closed-{id}` | Session closed |
-| `sessions-changed` | Session list changed |
-| `connections-changed` | Saved connections changed |
-| `transfer-event` | Transfer progress |
-| `otp-request` | OTP / keyboard-interactive authentication requested |
-| `cloud-sync-status-changed` | Cloud sync / backup status changed |
-| `cloud-sync-history-changed` | Sync / backup history changed |
-| `cloud-sync-conflict` | Cloud sync conflict preview |
-
-When designing new backend features, prefer exposing them through the existing event flow where appropriate rather than introducing extra polling APIs.
+- Pure parsing, policy, and compatibility-format tests live in `nyaterm-core`.
+- PTY, SSH, SFTP, Telnet, Serial, tunnel, and event-queue tests live in `nyaterm-transport`.
+- Terminal parsing, snapshots, graphics, and encoding tests live in `nyaterm-terminal`.
+- Storage changes include new-data round trips, representative legacy data, invalid-password cases, and corrupted data.
+- RDP/VNC protocol, framebuffer, input mapping, IPC, certificate, clipboard, and reconnect tests belong in `nyaterm-remote-desktop`, `nyaterm-rdp-helper`, or `nyaterm-vnc-helper`. Both helper crates' `tests/lifecycle.rs` cover the handshake, an ordinary disconnect, and crash/hang reaping; keep them in step when the IPC contract changes.
+- Cross-crate behavior is tested through small adapters without real credentials or production services.

@@ -1,0 +1,535 @@
+use rust_i18n::t;
+
+use crate::models::{
+    ActivityBarLayoutState, BottomPanelMode, NavItem, PanelSide, SessionEventBridge,
+    TerminalFramePipeline,
+};
+use crate::terminal::initial_terminal_screen;
+use gpui::{AppContext as _, Context};
+use nyaterm_core::{AppRuntime, WorkspaceUiState, uuid};
+use nyaterm_store::BootstrapSnapshot;
+#[cfg(test)]
+use nyaterm_store::{LoadBootstrap, StoreConfig, StoreRuntime};
+use nyaterm_terminal::TerminalOutputDecoder;
+use nyaterm_transport::SftpDuplicatePolicy;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::app_shell::session_hub::SessionHub;
+
+use super::{NyaTermApp, NyaTermProcessEntities, NyaTermStoreClients};
+use crate::features::ai::{
+    AiFeatureFocus, AiFeatureInit, AiFeatureState, AiPanel, ai_active_profile_drafts,
+};
+use crate::features::assets::StartWorkspaceFeatureState;
+use crate::features::commands::{
+    CommandFeatureInit, CommandFeatureState, QuickCommandFeatureFocus,
+    quick_command_sort_mode_from_setting, quick_command_view_mode_from_setting,
+};
+use crate::features::connections::{ConnectionFeatureFocus, ConnectionFeatureState};
+use crate::features::file_manager::FileManagerFeatureState;
+use crate::features::mcp::McpHostFeatureState;
+use crate::features::notes::{NotesFeatureState, NotesPanel};
+use crate::features::pages::connections::panel::ConnectionPanel;
+use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::pages::transfers::panel::TransferPanel;
+use crate::features::panels::SendCommandFeatureState;
+use crate::features::recording::RecordingFeatureState;
+use crate::features::remote::{RemoteOpsFeatureFocus, RemoteOpsFeatureState};
+use crate::features::remote_desktop::RemoteDesktopFeatureState;
+use crate::features::selects::SelectRegistry;
+use crate::features::session::{NativeOtpProvider, SessionFeatureFocus, SessionFeatureState};
+use crate::features::settings::{
+    SecurityCatalogState, SecurityFeatureFocus, SecurityFeatureState, SettingsFeatureFocus,
+    SettingsFeatureInit, SettingsFeatureState,
+};
+use crate::features::shell::{ShellFeatureInit, ShellFeatureState};
+use crate::features::sync::CloudSyncFeatureState;
+use crate::features::sync_input::SyncInputFeatureState;
+use crate::features::terminal::{TerminalFeatureFocus, TerminalFeatureState};
+use crate::features::text_inputs::TextInputRegistry;
+use crate::features::transfers::{TransferFeatureFocus, TransferFeatureState};
+use crate::features::translation::TranslationFeatureState;
+use crate::features::tunnels::{TunnelCatalogState, TunnelFeatureState};
+use crate::models::panel_collapsed_from_persistence;
+use crate::terminal::INITIAL_TERMINAL_BANNER;
+impl NyaTermApp {
+    pub(crate) fn from_bootstrap(
+        runtime: AppRuntime,
+        stores: crate::entities::UiStoreHandles,
+        process_entities: NyaTermProcessEntities,
+        workspace_init: crate::app_shell::WorkspaceInitSnapshot,
+        store_clients: NyaTermStoreClients,
+        session_hub: SessionHub,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let NyaTermProcessEntities {
+            process_state,
+            update,
+            plugins,
+        } = process_entities;
+        let session_manager = session_hub.manager();
+        let ssh_connections = session_hub.ssh_connections();
+        nyaterm_core::warm_terminal_input_tracker();
+        let NyaTermStoreClients {
+            ui: store_ui,
+            blocking: store_blocking,
+        } = store_clients;
+        let workspace_id = workspace_init.workspace_id;
+        let mut bootstrap = process_state.read(cx).snapshot().clone();
+        let workspace_ui = workspace_init
+            .state
+            .as_ref()
+            .map(|workspace| workspace.ui.clone())
+            .unwrap_or_default();
+        if let Some(workspace) = workspace_init.state.as_ref() {
+            bootstrap.open_tabs = workspace.sessions.open_tabs.clone();
+        } else {
+            bootstrap.open_tabs.clear();
+        }
+        apply_workspace_ui_to_settings(&mut bootstrap.settings, &workspace_ui);
+        let BootstrapSnapshot {
+            database_path,
+            custom_icons,
+            connections,
+            connection_groups,
+            ssh_keys: connection_ssh_keys,
+            otp_entries: connection_otp_entries,
+            saved_passwords: connection_saved_passwords,
+            saved_credentials: connection_saved_credentials,
+            tunnels,
+            tunnel_groups,
+            proxies,
+            proxy_groups,
+            quick_commands,
+            quick_command_categories,
+            command_history,
+            keyword_highlights,
+            settings,
+            cloud_sync_settings,
+            cloud_sync_state,
+            translation_settings,
+            ai_settings,
+            ai_session_count,
+            ai_message_count,
+            ai_audit_count,
+            open_tabs,
+            ..
+        } = bootstrap;
+        let mut settings = settings;
+        // Localized child views cache placeholders while they are constructed, so
+        // the persisted locale must be active before any of those entities exist.
+        crate::i18n::apply_locale(&settings.language);
+        crate::i18n::configure_input_labels(cx);
+        let notes_in_layout = settings
+            .ui_activity_bar_left_top
+            .iter()
+            .chain(&settings.ui_activity_bar_left_bottom)
+            .chain(&settings.ui_activity_bar_right_top)
+            .chain(&settings.ui_activity_bar_right_bottom)
+            .any(|id| id == "notes");
+        if !notes_in_layout {
+            let insert_at = settings
+                .ui_activity_bar_left_top
+                .iter()
+                .position(|id| id == "fileExplorer")
+                .map_or(0, |index| index + 1);
+            settings
+                .ui_activity_bar_left_top
+                .insert(insert_at, "notes".to_string());
+        }
+        let store_status = (
+            database_path.display().to_string(),
+            t!("settings.redbStoreOnline").to_string(),
+            true,
+        );
+        let otp_provider = Arc::new(NativeOtpProvider::new(store_blocking.clone()));
+        let transfer_duplicate_policy =
+            SftpDuplicatePolicy::from_legacy_value(&settings.transfer_duplicate_strategy);
+        let recording = RecordingFeatureState::new(settings.recording_memory_limit_bytes as usize);
+        recording.set_history_include_input(settings.recording_include_input);
+        let recording_writer = recording.writer();
+        let (ai_model_draft, ai_base_url_draft) = ai_active_profile_drafts(&ai_settings);
+        let mcp = McpHostFeatureState::new(&ai_settings.external_mcp);
+        let left_panel_width = settings.ui_left_panel_width as f32;
+        let right_panel_width = settings.ui_right_panel_width as f32;
+        let transfer_panel_height = settings.ui_transfer_height as f32;
+        let quick_cmd_height = settings.ui_quick_cmd_height as f32;
+        let serial_send_height = settings.ui_serial_send_height as f32;
+        let mut activity_bar_layout = ActivityBarLayoutState {
+            left_top: settings.ui_activity_bar_left_top.clone(),
+            left_bottom: settings.ui_activity_bar_left_bottom.clone(),
+            right_top: settings.ui_activity_bar_right_top.clone(),
+            right_bottom: settings.ui_activity_bar_right_bottom.clone(),
+            hidden_items: settings.ui_activity_bar_hidden_items.clone(),
+            show_labels: settings.ui_activity_bar_show_labels,
+        };
+        activity_bar_layout.ensure_plugin_entry();
+        activity_bar_layout.ensure_remote_monitor_entries();
+        settings.ui_activity_bar_right_top = activity_bar_layout.right_top.clone();
+        settings.ui_activity_bar_left_bottom = activity_bar_layout.left_bottom.clone();
+        let mut active_left_panel = settings
+            .ui_active_left_panel
+            .as_deref()
+            .and_then(NavItem::from_persistence_id)
+            .filter(|item| {
+                activity_bar_layout.side_for_entry(item.persistence_id()) == Some(PanelSide::Left)
+            });
+        let mut active_right_panel = settings
+            .ui_active_right_panel
+            .as_deref()
+            .and_then(NavItem::from_persistence_id)
+            .filter(|item| {
+                activity_bar_layout.side_for_entry(item.persistence_id()) == Some(PanelSide::Right)
+            });
+        let mut left_sidebar_collapsed = panel_collapsed_from_persistence(
+            settings.ui_left_panel_collapsed,
+            settings.ui_panel_multi_open,
+            active_left_panel.is_some(),
+            !settings.ui_left_open_panels.is_empty(),
+        );
+        let mut right_inspector_collapsed = panel_collapsed_from_persistence(
+            settings.ui_right_panel_collapsed,
+            settings.ui_panel_multi_open,
+            active_right_panel.is_some(),
+            !settings.ui_right_open_panels.is_empty(),
+        );
+        let security_secrets_unlocked = !settings.has_master_password;
+        let mut left_open_panels = settings.ui_left_open_panels.clone();
+        let mut right_open_panels = settings.ui_right_open_panels.clone();
+        let panel_stack_sizes = settings
+            .ui_panel_stack_sizes
+            .iter()
+            .filter(|(_, value)| **value > 0)
+            .map(|(key, value)| (key.clone(), (*value as f32) / 1000.))
+            .collect::<HashMap<_, _>>();
+        let panel_multi_open = settings.ui_panel_multi_open;
+        let panel_open_mode =
+            crate::models::PanelOpenMode::from_setting(&settings.ui_panel_open_mode);
+        let selected_nav = NavItem::from_persistence_id(&workspace_ui.current_page)
+            .filter(|item| !item.opens_settings())
+            .unwrap_or(NavItem::Workspace);
+        if panel_open_mode.is_floating() {
+            active_left_panel = None;
+            active_right_panel = None;
+            left_open_panels.clear();
+            right_open_panels.clear();
+            left_sidebar_collapsed = true;
+            right_inspector_collapsed = true;
+        }
+        let mut terminal_output_decoder = TerminalOutputDecoder::default();
+        if let Err(error) =
+            terminal_output_decoder.set_encoding(&settings.interaction_default_encoding)
+        {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
+        let mut terminal_screen = initial_terminal_screen();
+        if let Err(error) = terminal_screen.set_encoding(&settings.interaction_default_encoding) {
+            tracing::warn!(%error, "terminal encoding configuration rejected");
+        }
+        let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer.clone());
+        let session_event_bridge = SessionEventBridge::spawn(
+            Arc::clone(&session_manager),
+            terminal_frame_pipeline.clone(),
+            Some(recording_writer),
+            settings.interaction_default_encoding.clone(),
+            settings.terminal_scrollback_lines.clamp(100, 100_000) as usize,
+        );
+        stores.startup_restore.update(cx, |store, _| {
+            store.set_loaded_open_tabs(open_tabs);
+        });
+
+        let connections_filter_placeholder = t!("savedConnections.filter");
+        let command_store = store_blocking.clone();
+
+        let app_entity = cx.entity();
+        let remote_panels =
+            crate::features::pages::remote::RemotePanels::new(app_entity.downgrade(), cx);
+        let connection_panel =
+            cx.new(|cx| ConnectionPanel::new(app_entity.downgrade(), cx.focus_handle()));
+        let settings_panel = cx.new(|cx| SettingsPanel::new(app_entity.downgrade(), cx));
+        let transfer_panel = cx.new(|_| TransferPanel::new(app_entity.downgrade()));
+        let notes_panel = cx.new(|cx| NotesPanel::new(app_entity.downgrade(), cx));
+        let ai_panel = cx.new(|cx| AiPanel::new(app_entity.downgrade(), cx));
+        let start_workspace = StartWorkspaceFeatureState::new(&connection_groups, &settings, cx);
+
+        // Settings are loaded after gpui-kit initialization, so this is the
+        // first point at which the persisted shortcut map can replace the defaults.
+        crate::shortcuts::rebuild_keymap(&settings.keybindings, cx);
+
+        let blocking_jobs = crate::blocking_jobs::BlockingJobScheduler::new();
+        let send_command = SendCommandFeatureState::new(cx);
+        cx.observe(&send_command.presentation(cx).hex, |_, _, cx| cx.notify())
+            .detach();
+        let mut app = Self {
+            plugins: crate::features::plugins::PluginFeatureState::new(
+                app_entity.downgrade(),
+                plugins,
+                cx,
+            ),
+            workspace_id,
+            workspace_revision: 0,
+            desktop_controller: None,
+            process_state,
+            blocking_jobs: blocking_jobs.clone(),
+            stores,
+            store_ui,
+            store_blocking,
+            runtime,
+            connection_state: ConnectionFeatureState::new(
+                connections,
+                connection_groups,
+                &settings,
+                ConnectionFeatureFocus {
+                    filter_placeholder: connections_filter_placeholder.into(),
+                    editor: cx.focus_handle(),
+                },
+                cx,
+            ),
+            start_workspace,
+            connection_panel,
+            settings_panel,
+            native_settings_panel: None,
+            transfer_panel,
+            notes: NotesFeatureState::new(),
+            notes_panel,
+            commands: CommandFeatureState::new(CommandFeatureInit {
+                commands: quick_commands,
+                categories: quick_command_categories,
+                history: command_history,
+                sort_mode: quick_command_sort_mode_from_setting(&settings.ui_quick_cmd_sort_mode),
+                view_mode: quick_command_view_mode_from_setting(&settings.ui_quick_cmd_view_mode),
+                selected_category: settings.ui_quick_cmd_selected_category.clone(),
+                focus: QuickCommandFeatureFocus {
+                    editor: cx.focus_handle(),
+                    details: cx.focus_handle(),
+                    variable: cx.focus_handle(),
+                },
+                store: command_store,
+                scheduler: blocking_jobs,
+            }),
+            send_command,
+            terminal: TerminalFeatureState::new(
+                terminal_screen,
+                terminal_output_decoder,
+                terminal_frame_pipeline,
+                String::from(INITIAL_TERMINAL_BANNER),
+                1.0,
+                TerminalFeatureFocus {
+                    actions: cx.focus_handle(),
+                    terminal: cx.focus_handle(),
+                },
+            ),
+            ai: AiFeatureState::new(
+                AiFeatureInit {
+                    settings: ai_settings,
+                    model_draft: ai_model_draft,
+                    base_url_draft: ai_base_url_draft,
+                    chat_session_id: format!("ai-session-{}", uuid()),
+                    session_count: ai_session_count,
+                    message_count: ai_message_count,
+                    audit_count: ai_audit_count,
+                },
+                AiFeatureFocus {
+                    chat: cx.focus_handle(),
+                    manual_model: cx.focus_handle(),
+                },
+            ),
+            ai_panel,
+            mcp,
+            transfer: TransferFeatureState::new(
+                ".".to_string(),
+                String::new(),
+                transfer_duplicate_policy,
+                transfer_panel_height,
+                TransferFeatureFocus {
+                    tree: cx.focus_handle(),
+                    queue: cx.focus_handle(),
+                    browser: cx.focus_handle(),
+                    editor: cx.focus_handle(),
+                    preview: cx.focus_handle(),
+                    external_sync: cx.focus_handle(),
+                },
+                cx.background_executor().clone(),
+            ),
+            file_manager: FileManagerFeatureState::default(),
+            security: SecurityFeatureState::new(
+                SecurityCatalogState::new(
+                    connection_ssh_keys,
+                    connection_otp_entries,
+                    connection_saved_passwords,
+                    connection_saved_credentials,
+                ),
+                security_secrets_unlocked,
+                "security ready".to_string(),
+                SecurityFeatureFocus {
+                    key_editor: cx.focus_handle(),
+                    otp_editor: cx.focus_handle(),
+                    password_editor: cx.focus_handle(),
+                    credential_editor: cx.focus_handle(),
+                    screen_lock: cx.focus_handle(),
+                },
+            ),
+            remote_ops: RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {}),
+            remote_panels,
+            remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
+            translation: TranslationFeatureState::new(translation_settings),
+            update,
+            cloud_sync: CloudSyncFeatureState::new(
+                cloud_sync_settings,
+                cloud_sync_state,
+                Vec::new(),
+            ),
+            session: SessionFeatureState::new(
+                session_manager,
+                ssh_connections,
+                session_event_bridge,
+                otp_provider,
+                SessionFeatureFocus {
+                    credential: cx.focus_handle(),
+                    tab_actions: cx.focus_handle(),
+                    color_picker: cx.focus_handle(),
+                    info: cx.focus_handle(),
+                },
+            ),
+            text_inputs: TextInputRegistry::default(),
+            selects: SelectRegistry::default(),
+            shell: ShellFeatureState::new(ShellFeatureInit {
+                status: "idle".to_string(),
+                selected_nav,
+                bottom_panel_mode: if settings.ui_serial_send_visible {
+                    BottomPanelMode::CommandSend
+                } else if settings.ui_quick_cmd_visible {
+                    BottomPanelMode::QuickCommands
+                } else {
+                    BottomPanelMode::Hidden
+                },
+                quick_commands_height: quick_cmd_height,
+                command_send_height: serial_send_height,
+                active_left_panel,
+                active_right_panel,
+                left_open_panels,
+                right_open_panels,
+                panel_stack_sizes,
+                panel_open_mode,
+                panel_multi_open,
+                left_sidebar_collapsed,
+                right_inspector_collapsed,
+                left_panel_width,
+                right_panel_width,
+                activity_bar_layout,
+            }),
+            sync_input: SyncInputFeatureState::new(cx.focus_handle()),
+            settings: SettingsFeatureState::new(
+                SettingsFeatureInit {
+                    summary: settings,
+                    keyword_config: keyword_highlights,
+                    store_path: store_status.0,
+                    store_message: store_status.1,
+                    store_ready: store_status.2,
+                    ui_font_options: Vec::new(),
+                    terminal_font_options: Vec::new(),
+                },
+                SettingsFeatureFocus {
+                    search_engine: cx.focus_handle(),
+                    keyword_highlight: cx.focus_handle(),
+                    keybindings: cx.focus_handle(),
+                },
+            ),
+            recording,
+            tunnel_state: TunnelFeatureState::new(TunnelCatalogState::new(
+                tunnels,
+                tunnel_groups,
+                proxies,
+                proxy_groups,
+            )),
+            #[cfg(test)]
+            _test_config_dir: None,
+        };
+        app.update_custom_icons(custom_icons, cx);
+        app.sync_quick_command_selected_category(cx);
+        app
+    }
+
+    pub(crate) fn start_shell_environment_preload(&self, cx: &mut Context<Self>) {
+        let shell_environment = self.session.manager().shell_environment();
+        cx.background_executor()
+            .spawn(async move {
+                // Preload the complete shell environment after the production window
+                // starts so features can share it without affecting test construction.
+                if let Err(error) = shell_environment.initialize().await {
+                    // Preload failure must not block local terminals; transport keeps an
+                    // inherited fallback. Never log shell stderr or environment values.
+                    tracing::error!(%error, "shell environment preload failed");
+                }
+            })
+            .detach();
+    }
+
+    #[cfg(test)]
+    pub fn new(
+        runtime: AppRuntime,
+        stores: crate::entities::UiStoreHandles,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let test_config_dir =
+            crate::test_support::TestConfigDir::from_path(runtime.data_dir().to_path_buf());
+        let store_runtime = StoreRuntime::spawn(StoreConfig {
+            config_dir: runtime.config_dir().to_path_buf(),
+            portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
+        })
+        .expect("spawn test store runtime");
+        let store_ui = store_runtime.ui_client();
+        let store_blocking = store_runtime.blocking_client();
+        let bootstrap = store_blocking
+            .request(0, LoadBootstrap)
+            .expect("receive test bootstrap")
+            .outcome
+            .expect("load test bootstrap");
+        let workspace_id = bootstrap
+            .workspace_restore
+            .most_recent()
+            .map(|workspace| workspace.id)
+            .unwrap_or_default();
+        let process_state = cx.new(|_| crate::app_shell::ProcessStateStore::new(bootstrap));
+        let workspace_init = process_state.read(cx).workspace_init(workspace_id);
+        let update = cx.new(|_| crate::features::update::UpdateStore::new());
+        let mut app = Self::from_bootstrap(
+            runtime,
+            stores,
+            NyaTermProcessEntities::new(
+                process_state,
+                update,
+                cx.new(|_| crate::features::plugins::PluginProcess::empty()),
+            ),
+            workspace_init,
+            NyaTermStoreClients::new(store_ui, store_blocking),
+            SessionHub::new(),
+            cx,
+        );
+        app._test_config_dir = Some(test_config_dir);
+        app
+    }
+}
+
+fn apply_workspace_ui_to_settings(
+    settings: &mut nyaterm_core::AppSettingsSummary,
+    ui: &WorkspaceUiState,
+) {
+    settings.ui_left_panel_width = ui.left_panel_width;
+    settings.ui_right_panel_width = ui.right_panel_width;
+    settings.ui_transfer_height = ui.transfer_panel_height;
+    settings.ui_quick_cmd_height = ui.bottom_panel_height;
+    settings.ui_serial_send_height = ui.serial_send_panel_height;
+    settings.ui_quick_cmd_visible = ui.bottom_panel_mode == "quick_commands";
+    settings.ui_serial_send_visible = ui.bottom_panel_mode == "command_send";
+    settings.ui_active_left_panel = ui.active_left_panel.clone();
+    settings.ui_active_right_panel = ui.active_right_panel.clone();
+    settings.ui_left_panel_collapsed = ui.left_panel_collapsed;
+    settings.ui_right_panel_collapsed = ui.right_panel_collapsed;
+    settings.ui_panel_multi_open = ui.panel_multi_open;
+    settings.ui_panel_open_mode = ui.panel_open_mode.clone();
+    settings.ui_left_open_panels = ui.left_open_panels.clone();
+    settings.ui_right_open_panels = ui.right_open_panels.clone();
+    settings.ui_panel_stack_sizes = ui.panel_stack_sizes.clone().into_iter().collect();
+}

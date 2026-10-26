@@ -1,0 +1,55 @@
+[package]
+name = "nyaterm-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nyaterm-core.workspace = true
+gpui.workspace = true
+ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf"] }
+gpui-base.workspace = true
+gpui-kit = { workspace = true, features = [
+    "tree-sitter-astro",
+    "tree-sitter-bash",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-css",
+    "tree-sitter-diff",
+    "tree-sitter-ejs",
+    "tree-sitter-elixir",
+    "tree-sitter-erb",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-jsdoc",
+    "tree-sitter-kotlin",
+    "tree-sitter-lua",
+    "tree-sitter-make",
+    "tree-sitter-markdown",
+    "tree-sitter-php",
+    "tree-sitter-python",
+    "tree-sitter-ruby",
+    "tree-sitter-rust",
+    "tree-sitter-scala",
+    "tree-sitter-sql",
+    "tree-sitter-svelte",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+    "tree-sitter-zig",
+] }
+url.workspace = true
+
+[dev-dependencies]
+# Tests assert the Base scrollbar projection, which is the global the
+# `Scrollbar` element reads. Production UI integration goes through the
+# nyaterm-ui facade.
+gpui = { workspace = true, features = ["test-support"] }
+# Only to assert that gpui-kit reads the same process-wide locale that
+# nyaterm-desktop sets. Production code here never translates.
+rust-i18n.workspace = true

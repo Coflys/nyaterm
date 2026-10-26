@@ -1,12 +1,8 @@
----
-sidebar_position: 100
----
-
 # FAQ
 
 ## Sessions and connections
 
-### SSH works, so why do Local Terminal, Telnet, and Serial behave differently?
+### SSH works, so why do Local Terminal, Telnet, Serial, RDP, and VNC behave differently?
 
 Because NyaTerm supports multiple session types, and their capabilities are not identical:
 
@@ -14,6 +10,8 @@ Because NyaTerm supports multiple session types, and their capabilities are not 
 - **Local Terminal** — local shell workflow only
 - **Telnet** — lightweight remote terminal without SSH-specific features
 - **Serial** — serial debugging, not an SSH network path
+- **RDP** — graphical remote desktop without text-terminal behavior
+- **VNC** — traditional RFB graphical desktop; some real-server combinations are still being validated
 
 If you need the file explorer, remote resource monitoring, or OTP, make sure the current tab is an **SSH session**.
 
@@ -26,6 +24,8 @@ These session types do not provide the remote file explorer:
 - Local Terminal
 - Telnet
 - Serial
+- RDP
+- VNC
 
 ### Why can’t I see remote resource monitoring?
 
@@ -64,6 +64,22 @@ Keyword highlighting is disabled by default. Enable it first in **Settings → T
 ### Why are line numbers and timestamps not visible?
 
 These are also optional enhancements. Enable them separately in **Settings → Terminal**.
+
+### Why are there no models available in the AI Assistant?
+
+Check, in order:
+
+1. Whether AI is enabled in **Settings → AI**
+2. Whether at least one provider is configured and enabled
+3. Whether at least one model is enabled for that provider
+
+When using a custom provider, confirm it is OpenAI-compatible and that the base URL, API key, and model discovery results are all correct.
+
+### Why doesn't the app quit when I close the window?
+
+Check **Minimize to tray when closing** in **Settings → General**.
+
+When it is on, closing the main window moves the app to the tray instead of quitting, and active sessions and sync jobs keep running.
 
 ## File transfer
 
@@ -105,7 +121,7 @@ In the current behavior:
 
 There is currently no built-in recovery flow for the master password. If your local data is protected by it and you can no longer provide the correct password, those protected sensitive settings cannot continue to be used in the original way.
 
-Before making manual changes, back up `~/.nyaterm/` first, then decide how to rebuild local configuration.
+Before making manual changes, back up the data directory for the current mode: usually `~/.nyaterm/` for an installed build, or the adjacent `data/` directory for portable mode.
 
 ### Where should OTP entries be managed?
 
@@ -115,14 +131,12 @@ Manage them centrally in the **OTP** tab of the **Security/Auth** panel, then bi
 
 ### Which clients can NyaTerm import sessions from?
 
-Current supported imports are:
+Xshell, MobaXterm, WindTerm, SecureCRT, FinalShell, Termius, and NyaTerm / Electerm JSON. Each format and its caveats are documented in [Importing sessions from other clients](./guide/ssh-connection#import-sessions-from-other-clients).
 
-- Xshell (`.xts`)
-- MobaXterm (`.mxtsessions`)
-- WindTerm (`.sessions`)
-
-After import, it is a good idea to review the username, port, authentication method, and whether proxy / jump host / OTP still needs to be configured.
+After import, review the username, port, authentication method, and whether proxy / jump host / OTP binding still needs to be configured.
 
 ### Where are NyaTerm’s config files stored?
 
-Application configuration is stored in `~/.nyaterm/nyaterm.redb`, including settings, connections, keys, OTP data, tunnels, proxies, and history. When upgrading from Dragonfly, NyaTerm copies `~/.dragonfly/dragonfly.redb` on first launch; if the old environment only has `.dragonfly` JSON / text files, they are copied and imported into redb. The old `~/.dragonfly/` directory is kept as a rollback backup.
+In installed mode, the main data file is normally `~/.nyaterm/nyaterm.redb`; portable mode uses configuration data under the adjacent `data/config/` directory. This data includes settings, connections, keys, OTP data, tunnels, proxies, history, and other local state.
+
+Legacy Dragonfly data is handled through compatibility fallbacks for old encryption prefixes and storage documents. NyaTerm does not promise to copy the entire `~/.dragonfly/` directory or create a rollback copy on first launch.

@@ -1,0 +1,80 @@
+"""Exercise release job gates without dispatching any publishing operation."""
+
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+
+WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/release.yml"
+
+
+def jobs() -> dict[str, str]:
+    parts = re.split(r"^  ([a-z_][a-z_0-9]*):\s*$", WORKFLOW.read_text(encoding="utf-8"), flags=re.M)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
+def gate(job: str, values: dict[str, object]) -> bool:
+    condition = re.search(r"^    if: (.+(?:\n      [^\n]+)*)", job, flags=re.M).group(1)
+    condition = condition.removeprefix(">-").strip().replace("\n", " ")
+    condition = condition.replace("always()", "True")
+    for name, value in sorted(values.items(), key=lambda item: -len(item[0])):
+        condition = condition.replace(name, repr(value))
+    condition = re.sub(r"\btrue\b(?=(?:[^']*'[^']*')*[^']*$)", "True", condition)
+    condition = condition.replace("&&", " and ").replace("||", " or ")
+    # Only literals/boolean operators remain; never evaluate shell or workflow code.
+    if re.search(r"[^\w\s'().=!-]", condition):
+        raise ValueError(f"unexpected gate expression: {condition}")
+    return bool(eval(condition, {"__builtins__": {}}, {}))
+
+
+class ReleaseWorkflowTests(unittest.TestCase):
+    def test_rehearsal_never_enables_publication(self) -> None:
+        blocks = jobs()
+        for publish, verify, package, reuse, expected in (
+            (False, False, "success", "", False),
+            (False, True, "success", "", True),
+            (False, True, "skipped", "123", True),
+            (False, True, "failure", "", False),
+            (True, False, "success", "", True),
+        ):
+            with self.subTest(publish=publish, verify=verify, package=package):
+                values = {
+                    "needs.preflight.result": "success",
+                    "needs.preflight.outputs.publish": str(publish).lower(),
+                    "inputs.verify_release": verify,
+                    "needs.package.result": package,
+                    "inputs.source_run_id": reuse,
+                    "needs.release.result": "success",
+                    "needs.prepare_release.result": "success",
+                }
+                self.assertEqual(gate(blocks["prepare_release"], values), expected)
+                self.assertEqual(gate(blocks["release"], values), publish)
+                self.assertEqual(gate(blocks["r2"], values), publish)
+
+    def test_signing_job_has_no_publication_commands_or_write_token(self) -> None:
+        preparation = jobs()["prepare_release"]
+        for forbidden in ("contents: write", "gh release ", "aws s3", "git push", "gh workflow run"):
+            self.assertNotIn(forbidden, preparation)
+        self.assertIn("needs: [preflight, prepare_release]", jobs()["release"])
+
+    def test_decoded_signing_key_is_not_persisted_in_step_environment(self) -> None:
+        preparation = jobs()["prepare_release"]
+        self.assertNotIn('>> "${GITHUB_ENV}"', preparation)
+        self.assertIn("unset TAURI_SIGNING_PRIVATE_KEY", preparation)
+
+    def test_later_checkouts_cannot_follow_a_moving_branch(self) -> None:
+        for name in ("package", "prepare_release", "r2"):
+            self.assertIn("ref: ${{ needs.preflight.outputs.source_sha }}", jobs()[name])
+            self.assertNotIn("inputs.source_ref", jobs()[name])
+
+    def test_downstream_channels_require_successful_r2_publication(self) -> None:
+        for name in ("homebrew", "aur", "gitee-release"):
+            content = WORKFLOW.with_name(f"publish-{name}.yml").read_text(encoding="utf-8")
+            self.assertIn('select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")', content)
+            self.assertIn('if [[ "${r2_success}" == \'1\' ]]', content)
+
+
+if __name__ == "__main__":
+    unittest.main()

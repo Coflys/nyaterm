@@ -2,265 +2,146 @@ name: Publish Gitee Release
 
 on:
   workflow_run:
-    workflows: ["Build and Release"]
+    workflows: ['Release']
     types: [completed]
-
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v1.1.14"
+        description: Release tag, for example v2.0.0
         required: true
         type: string
       upload_small_assets:
-        description: "Upload assets smaller than MAX_GITEE_ASSET_MB to Gitee"
+        description: Upload assets within the configured Gitee size limit
         required: false
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
 
 concurrency:
   group: gitee-release-${{ github.event.workflow_run.id || inputs.tag || github.run_id }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
 env:
+  GITEE_API_BASE: ${{ vars.GITEE_API_BASE || 'https://gitee.com/api/v5' }}
   GITEE_OWNER: ${{ vars.GITEE_OWNER }}
   GITEE_REPO: ${{ vars.GITEE_REPO }}
-  GITEE_API_BASE: ${{ vars.GITEE_API_BASE || 'https://gitee.com/api/v5' }}
   MAX_GITEE_ASSET_MB: ${{ vars.MAX_GITEE_ASSET_MB || '99' }}
   R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
-  UPLOAD_SMALL_ASSETS: ${{ inputs.upload_small_assets || 'true' }}
-  FAIL_ON_GITEE_ASSET_UPLOAD_ERROR: "false"
 
 jobs:
-  publish-gitee-release:
-    name: Create or update Gitee Release
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'workflow_run' &&
-          github.event.workflow_run.conclusion == 'success'
-        )
-      }}
+  publish:
+    name: Mirror GitHub release to Gitee
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, linux, x64, gitee-release]
-
+    timeout-minutes: 60
     steps:
       - name: Resolve release tag
-        env:
-          MANUAL_TAG: ${{ inputs.tag }}
-          UPSTREAM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        id: release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            TAG="${MANUAL_TAG}"
-          else
-            HEAD_SHA="${UPSTREAM_HEAD_SHA}"
-
-            if [[ -z "$HEAD_SHA" ]]; then
-              echo "::error::Upstream workflow head SHA is empty"
+          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
+            tag="${INPUT_TAG}"
+            [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+              echo "invalid release tag: ${tag}" >&2
               exit 1
-            fi
-
-            echo "Resolving release tag for upstream commit: ${HEAD_SHA}"
-
-            TAG="$(
-              git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git" |
-                awk -v sha="$HEAD_SHA" '
-                  $1 == sha {
-                    ref = $2
-                    sub(/^refs\/tags\//, "", ref)
-                    sub(/\^\{\}$/, "", ref)
-                    print ref
-                  }
-                ' |
-                sort -Vu |
-                tail -n 1
-            )"
-          fi
-
-          if [[ -z "$TAG" ]]; then
-            echo "::error::Unable to resolve release tag"
-            echo "::error::For workflow_run, make sure Build and Release runs against the tagged commit."
-            exit 1
-          fi
-
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "Publishing Gitee release for tag: $TAG"
-
-      - name: Validate Gitee config
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${GITEE_OWNER}" ]]; then
-            echo "::error::GITEE_OWNER is empty. Please set it in GitHub repository Variables."
-            exit 1
-          fi
-
-          if [[ -z "${GITEE_REPO}" ]]; then
-            echo "::error::GITEE_REPO is empty. Please set it in GitHub repository Variables."
-            exit 1
-          fi
-
-          echo "Gitee repository: ${GITEE_OWNER}/${GITEE_REPO}"
-
-      - name: Prepare clean workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf release-assets
-          rm -f github-release.json github-release.json.tmp
-          rm -rf "$RUNNER_TEMP/gitee-release-venv"
-          mkdir -p release-assets
-
-      - name: Wait for GitHub release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Waiting for GitHub release and assets: ${TAG}"
-
-          for i in {1..30}; do
-            rm -f github-release.json.tmp
-
-            if gh release view "$TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json tagName,name,body,isPrerelease,isDraft,url,targetCommitish,assets \
-              > github-release.json.tmp; then
-
-              IS_DRAFT="$(jq -r '.isDraft' github-release.json.tmp)"
-              ASSET_COUNT="$(jq '.assets | length' github-release.json.tmp)"
-
-              echo "GitHub release found: draft=${IS_DRAFT}, assets=${ASSET_COUNT}"
-
-              if [[ "$IS_DRAFT" == "false" && "$ASSET_COUNT" -gt 0 ]]; then
-                mv github-release.json.tmp github-release.json
-
-                echo "GitHub release metadata:"
-                jq '{
-                  tagName,
-                  name,
-                  isPrerelease,
-                  isDraft,
-                  url,
-                  targetCommitish,
-                  assetCount: (.assets | length)
-                }' github-release.json
-
-                exit 0
-              fi
+            }
+            publish='true'
+          else
+            r2_success="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")] | length')"
+            if [[ "${r2_success}" == '1' ]]; then
+              tag="$(git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v*' | awk -v sha="${HEAD_SHA}" '$1 == sha {sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2}' | sort -V | tail -n 1)"
+              publish='true'
+              [[ -n "${tag}" ]] || publish='false'
             else
-              echo "GitHub release ${TAG} is not available yet."
+              tag=''
+              publish='false'
             fi
-
-            echo "Release assets are not ready, waiting 10s... ($i/30)"
-            sleep 10
-          done
-
-          echo "::error::GitHub release ${TAG} did not expose any assets after waiting."
-          echo "::error::Make sure Build and Release uploads all assets before the workflow completes."
-          exit 1
-
-      - name: Download GitHub release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gh release download "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir release-assets \
-            --clobber
-
-          ASSET_COUNT="$(find release-assets -maxdepth 1 -type f | wc -l)"
-
-          if [[ "$ASSET_COUNT" -eq 0 ]]; then
-            echo "::error::No GitHub release assets were downloaded for ${TAG}"
-            exit 1
           fi
+          {
+            echo "publish=${publish}"
+            echo "tag=${tag}"
+          } >> "${GITHUB_OUTPUT}"
 
-          echo "Downloaded assets (${ASSET_COUNT}):"
-          find release-assets -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+      - name: Skip run without a release tag
+        if: steps.release.outputs.publish != 'true'
+        run: echo 'The completed Release run did not publish a version tag.'
 
-      - name: Wait for Gitee mirror tag
+      - name: Validate mirror configuration
+        if: steps.release.outputs.publish == 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Waiting for Gitee mirror tag: ${TAG}"
-
-          for i in {1..30}; do
-            if git ls-remote --tags \
-              "https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git" \
-              "refs/tags/${TAG}" |
-              grep -q "refs/tags/${TAG}$"; then
-              echo "Gitee tag found: ${TAG}"
-              exit 0
-            fi
-
-            echo "Gitee tag ${TAG} not found yet, waiting 20s... ($i/30)"
-            sleep 20
-          done
-
-          echo "::error::Gitee tag ${TAG} was not found after waiting."
-          echo "::error::Make sure GitHub -> Gitee mirror has synced tags."
-          exit 1
-
-      - name: Install Python dependencies
-        shell: bash
-        env:
-            PIP_DISABLE_PIP_VERSION_CHECK: "1"
-            PIP_NO_INPUT: "1"
-        run: |
-            set -euo pipefail
-
-            VENV_DIR="$RUNNER_TEMP/gitee-release-venv"
-            PYTHON_BIN="$VENV_DIR/bin/python"
-
-            # 防止自托管 Runner 残留损坏或不完整的虚拟环境
-            rm -rf "$VENV_DIR"
-            python3 -m venv "$VENV_DIR"
-
-            echo "Python:"
-            "$PYTHON_BIN" --version
-
-            echo "Effective pip configuration:"
-            "$PYTHON_BIN" -m pip config debug || true
-
-            "$PYTHON_BIN" -m pip install \
-            --upgrade \
-            --no-cache-dir \
-            --index-url "https://pypi.org/simple" \
-            pip setuptools wheel
-
-            "$PYTHON_BIN" -m pip install \
-            --upgrade \
-            --no-cache-dir \
-            --index-url "https://pypi.org/simple" \
-            "requests==2.34.2" \
-            "requests-toolbelt==1.0.0"
-
-            "$PYTHON_BIN" -m pip check
-
-            echo "PYTHON_BIN=$PYTHON_BIN" >> "$GITHUB_ENV"
-
-      - name: Create or update Gitee release and upload assets
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in GITEE_OWNER GITEE_REPO GITEE_API_BASE R2_PUBLIC_BASE_URL GITEE_TOKEN; do
+            [[ -n "${!name:-}" ]] || { echo "${name} is required" >&2; exit 1; }
+          done
+          [[ "${MAX_GITEE_ASSET_MB}" =~ ^[0-9]+$ ]] || { echo 'MAX_GITEE_ASSET_MB must be an integer' >&2; exit 1; }
+
+      - name: Wait for mirrored tag
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for _ in {1..30}; do
+            if git ls-remote --exit-code "https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git" "refs/tags/${TAG}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Gitee mirror tag did not appear: ${TAG}" >&2
+          exit 1
+
+      - name: Download and verify GitHub assets
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir release-assets
+          for _ in {1..12}; do
+            if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,name,body,isPrerelease,targetCommitish > github-release.json && \
+               gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir release-assets --clobber; then
+              break
+            fi
+            sleep 10
+          done
+          test -f release-assets/SHA256SUMS
+          (cd release-assets && sha256sum --check SHA256SUMS)
+
+      - name: Install Python dependencies
+        if: steps.release.outputs.publish == 'true'
         shell: bash
         run: |
-          "$PYTHON_BIN" <<'PY'
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/gitee-release-venv"
+          "${RUNNER_TEMP}/gitee-release-venv/bin/pip" install --disable-pip-version-check 'requests==2.32.5'
+
+      - name: Create or update Gitee release
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          UPLOAD_SMALL_ASSETS: ${{ inputs.upload_small_assets || 'true' }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/gitee-release-venv/bin/python" <<'PY'
           import json
           import mimetypes
           import os
@@ -270,439 +151,121 @@ jobs:
           import urllib.parse
 
           import requests
-          from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
+          tag = os.environ["TAG"]
+          owner = os.environ["GITEE_OWNER"]
+          repo = os.environ["GITEE_REPO"]
+          api = os.environ["GITEE_API_BASE"].rstrip("/")
+          token = os.environ["GITEE_TOKEN"]
+          r2 = os.environ["R2_PUBLIC_BASE_URL"].rstrip("/")
+          max_bytes = int(os.environ["MAX_GITEE_ASSET_MB"]) * 1024 * 1024
+          upload_small = os.environ.get("UPLOAD_SMALL_ASSETS", "true").lower() == "true"
+          github = json.loads(pathlib.Path("github-release.json").read_text(encoding="utf-8"))
+          assets = sorted(pathlib.Path("release-assets").iterdir(), key=lambda path: path.name.lower())
+          session = requests.Session()
 
-          def require_env(name: str) -> str:
-              value = os.environ.get(name, "").strip()
-              if not value:
-                  print(f"::error::{name} is required")
+          def request(method, path, *, expected=(200, 201), allow_404=False, **kwargs):
+              params = kwargs.pop("params", {})
+              params["access_token"] = token
+              response = session.request(method, f"{api}{path}", params=params, timeout=300, **kwargs)
+              if allow_404 and response.status_code == 404:
+                  return None
+              if response.status_code not in expected:
+                  print(f"::error::Gitee API {method} {path}: HTTP {response.status_code}")
+                  print(response.text[:3000])
                   sys.exit(1)
-              return value
-
-
-          token = require_env("GITEE_TOKEN")
-          owner = require_env("GITEE_OWNER")
-          repo = require_env("GITEE_REPO")
-          tag = require_env("TAG")
-
-          api_base = os.environ.get("GITEE_API_BASE", "https://gitee.com/api/v5").rstrip("/")
-          r2_public_base_url = os.environ.get("R2_PUBLIC_BASE_URL", "").strip().rstrip("/")
-          max_mb = float(os.environ.get("MAX_GITEE_ASSET_MB", "99"))
-          max_bytes = int(max_mb * 1024 * 1024)
-          upload_small_assets = os.environ.get("UPLOAD_SMALL_ASSETS", "true").lower() == "true"
-          fail_on_upload_error = os.environ.get("FAIL_ON_GITEE_ASSET_UPLOAD_ERROR", "false").lower() == "true"
-
-          assets_dir = pathlib.Path("release-assets")
-          release_json_path = pathlib.Path("github-release.json")
-
-          if not release_json_path.exists():
-              print("::error::github-release.json not found")
-              sys.exit(1)
-
-          release = json.loads(release_json_path.read_text(encoding="utf-8"))
-
-          release_name = release.get("name") or tag
-          github_body = release.get("body") or ""
-          is_prerelease = bool(release.get("isPrerelease"))
-          target_commitish = release.get("targetCommitish") or ""
+              return response.json() if response.text.strip() else None
 
           owner_q = urllib.parse.quote(owner, safe="")
           repo_q = urllib.parse.quote(repo, safe="")
           tag_q = urllib.parse.quote(tag, safe="")
-
-          session = requests.Session()
-
-
-          def gitee_request(method: str, path: str, *, expected=(200, 201), allow_404=False, **kwargs):
-              url = f"{api_base}{path}"
-              params = kwargs.pop("params", {}) or {}
-              params["access_token"] = token
-
-              response = session.request(
-                  method,
-                  url,
-                  params=params,
-                  timeout=120,
-                  **kwargs,
-              )
-
-              if allow_404 and response.status_code == 404:
-                  return None
-
-              if response.status_code not in expected:
-                  print(f"::error::Gitee API failed: {method} {path} -> HTTP {response.status_code}")
-                  print(response.text[:3000])
-                  sys.exit(1)
-
-              if response.text.strip():
-                  try:
-                      return response.json()
-                  except Exception:
-                      return response.text
-
-              return None
-
-
-          def human_size(size: int) -> str:
-              units = ["B", "KB", "MB", "GB"]
-              value = float(size)
-
-              for unit in units:
-                  if value < 1024 or unit == units[-1]:
-                      if unit == "B":
-                          return f"{int(value)} {unit}"
-                      return f"{value:.2f} {unit}"
-                  value /= 1024
-
-              return f"{size} B"
-
-          def make_upload_progress_callback(filename: str, total_bytes: int):
-              started_at = time.monotonic()
-              state = {
-                  "last_percent": -1,
-                  "last_report_at": 0.0,
-              }
-
-              def callback(monitor: MultipartEncoderMonitor):
-                  if total_bytes <= 0:
-                      return
-
-                  now = time.monotonic()
-                  uploaded = min(monitor.bytes_read, total_bytes)
-                  percent = int(uploaded * 100 / total_bytes)
-
-                  should_report = (
-                      percent == 0
-                      or percent == 100
-                      or percent >= state["last_percent"] + 10
-                      or now - state["last_report_at"] >= 15
-                  )
-
-                  if not should_report:
-                      return
-
-                  elapsed = max(now - started_at, 0.001)
-                  speed = uploaded / elapsed
-
-                  print(
-                      f"Upload progress: {filename}: "
-                      f"{percent}% "
-                      f"({human_size(uploaded)}/{human_size(total_bytes)}, "
-                      f"{human_size(int(speed))}/s)",
-                      flush=True,
-                  )
-
-                  state["last_percent"] = percent
-                  state["last_report_at"] = now
-
-              return callback
-
-          def build_r2_url(filename: str) -> str:
-              if not r2_public_base_url:
-                  return ""
-              return (
-                  f"{r2_public_base_url}/"
-                  f"{urllib.parse.quote(tag, safe='')}/"
-                  f"{urllib.parse.quote(filename, safe='')}"
-              )
-
-
-          asset_files = []
-          if assets_dir.exists():
-              asset_files = sorted(
-                  [p for p in assets_dir.iterdir() if p.is_file()],
-                  key=lambda p: p.name.lower(),
-              )
-
-
-          def build_release_body(
-              *,
-              uploadable_assets,
-              skipped_assets,
-              failed_assets,
-              no_assets=False,
-              uploading=False,
-          ) -> str:
-              body = github_body.rstrip()
-
-              lines = []
-              lines.append("")
-              lines.append("---")
-              lines.append("")
-              lines.append("## 下载")
-              lines.append("")
-
-              if uploading:
-                  lines.append("> 正在同步发行版附件，请稍后刷新页面。")
-                  return body + "\n" + "\n".join(lines) + "\n"
-
-              if no_assets:
-                  lines.append("- 本次 GitHub Release 未检测到附件。")
-                  return body + "\n" + "\n".join(lines) + "\n"
-
-              if uploadable_assets:
-                  lines.append("> 安装包已同步到本发行版附件区，请在本页附件区下载。")
-              elif not upload_small_assets:
-                  lines.append("> 本次未上传附件到 Gitee Release 附件区。")
-              else:
-                  lines.append("> 本次没有可上传到 Gitee Release 附件区的附件。")
-
-              fallback_lines = []
-
-              for file_path in skipped_assets:
-                  size_text = human_size(file_path.stat().st_size)
-                  r2_url = build_r2_url(file_path.name)
-
-                  if r2_url:
-                      fallback_lines.append(f"- [{file_path.name}]({r2_url}) `{size_text}`")
-                  else:
-                      fallback_lines.append(f"- `{file_path.name}` `{size_text}`（未上传到 Gitee 附件区）")
-
-              for file_path, reason in failed_assets:
-                  size_text = human_size(file_path.stat().st_size)
-                  r2_url = build_r2_url(file_path.name)
-
-                  if r2_url:
-                      fallback_lines.append(f"- [{file_path.name}]({r2_url}) `{size_text}`（Gitee 附件同步失败）")
-                  else:
-                      fallback_lines.append(f"- `{file_path.name}` `{size_text}`（Gitee 附件同步失败：{reason}）")
-
-              if fallback_lines:
-                  lines.append("")
-                  lines.append("### 备用下载")
-                  lines.append("")
-                  lines.extend(fallback_lines)
-
-              return body + "\n" + "\n".join(lines) + "\n"
-
-
-          existing = gitee_request(
-              "GET",
-              f"/repos/{owner_q}/{repo_q}/releases/tags/{tag_q}",
-              expected=(200,),
-              allow_404=True,
-          )
-
-          initial_body = build_release_body(
-              uploadable_assets=[],
-              skipped_assets=[],
-              failed_assets=[],
-              no_assets=not bool(asset_files),
-              uploading=bool(asset_files),
-          )
-
+          release_path = f"/repos/{owner_q}/{repo_q}/releases"
+          existing = request("GET", f"{release_path}/tags/{tag_q}", expected=(200,), allow_404=True)
+          payload = {
+              "tag_name": tag,
+              "name": github.get("name") or f"NyaTerm {tag}",
+              "body": (github.get("body") or "") + "\n\n---\n\n正在同步发行版附件。\n",
+              "prerelease": str(bool(github.get("isPrerelease"))).lower(),
+          }
           if existing:
-              release_id = existing.get("id")
-              print(f"Updating existing Gitee release: id={release_id}, tag={tag}")
-
-              updated = gitee_request(
-                  "PATCH",
-                  f"/repos/{owner_q}/{repo_q}/releases/{release_id}",
-                  data={
-                      "tag_name": tag,
-                      "name": release_name,
-                      "body": initial_body,
-                      "prerelease": str(is_prerelease).lower(),
-                  },
-                  expected=(200, 201),
-              )
-
-              if isinstance(updated, dict) and updated.get("id"):
-                  release_id = updated["id"]
+              release_id = existing["id"]
+              request("PATCH", f"{release_path}/{release_id}", data=payload)
           else:
-              print(f"Creating Gitee release: tag={tag}")
-
-              payload = {
-                  "tag_name": tag,
-                  "name": release_name,
-                  "body": initial_body,
-                  "prerelease": str(is_prerelease).lower(),
-              }
-
-              if target_commitish:
-                  payload["target_commitish"] = target_commitish
-
-              created = gitee_request(
-                  "POST",
-                  f"/repos/{owner_q}/{repo_q}/releases",
-                  data=payload,
-                  expected=(200, 201),
-              )
-
-              if not isinstance(created, dict) or not created.get("id"):
-                  print("::error::Gitee release was created but release id was not returned")
-                  print(created)
-                  sys.exit(1)
-
+              payload["target_commitish"] = github.get("targetCommitish") or ""
+              created = request("POST", release_path, data=payload)
               release_id = created["id"]
 
-          print(f"Gitee release id: {release_id}")
+          uploaded = []
+          fallbacks = []
+          verified_r2 = set()
 
-          if not asset_files:
-              print("No assets to upload.")
+          def verify_r2_url(name, url):
+              if name in verified_r2:
+                  return
+              try:
+                  response = session.head(url, allow_redirects=True, timeout=60)
+              except Exception as error:
+                  print(f"::error::R2 fallback verification failed for {name}: {error}")
+                  sys.exit(1)
+              if response.status_code != 200:
+                  print(f"::error::R2 fallback verification failed for {name}: HTTP {response.status_code}")
+                  sys.exit(1)
+              verified_r2.add(name)
 
-              final_body = build_release_body(
-                  uploadable_assets=[],
-                  skipped_assets=[],
-                  failed_assets=[],
-                  no_assets=True,
-                  uploading=False,
-              )
-
-              gitee_request(
-                  "PATCH",
-                  f"/repos/{owner_q}/{repo_q}/releases/{release_id}",
-                  data={
-                      "tag_name": tag,
-                      "name": release_name,
-                      "body": final_body,
-                      "prerelease": str(is_prerelease).lower(),
-                  },
-                  expected=(200, 201),
-              )
-
-              sys.exit(0)
-
-          uploadable_files = []
-          skipped_files = []
-
-          if upload_small_assets:
-              for file_path in asset_files:
-                  size = file_path.stat().st_size
-
-                  if size <= max_bytes:
-                      uploadable_files.append(file_path)
-                  else:
-                      skipped_files.append(file_path)
-          else:
-              skipped_files = asset_files[:]
-
-          for file_path in skipped_files:
-              print(
-                  f"Skip asset: {file_path.name} "
-                  f"({human_size(file_path.stat().st_size)}, threshold={max_mb} MB, upload_small_assets={upload_small_assets})"
-              )
-
-          uploaded_or_existing_files = []
-          failed_files = []
-
-
-          def upload_asset(file_path: pathlib.Path) -> tuple[bool, str]:
-              filename = file_path.name
-              content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-
+          for asset in assets:
+              r2_url = f"{r2}/releases/{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(asset.name)}"
+              if not upload_small or asset.stat().st_size > max_bytes:
+                  verify_r2_url(asset.name, r2_url)
+                  fallbacks.append((asset.name, r2_url, "附件过大，使用 R2 下载"))
+                  continue
+              content_type = mimetypes.guess_type(asset.name)[0] or "application/octet-stream"
+              success = False
+              reason = ""
               for attempt in range(1, 4):
-                  print(f"Uploading asset to Gitee: {filename}, attempt {attempt}/3")
-
                   try:
-                      with file_path.open("rb") as file_handle:
-                          encoder = MultipartEncoder(
-                              fields={
-                                  "name": filename,
-                                  "file": (filename, file_handle, content_type),
-                              }
-                          )
-
-                          monitor = MultipartEncoderMonitor(
-                              encoder,
-                              make_upload_progress_callback(filename, encoder.len),
-                          )
-
+                      with asset.open("rb") as handle:
                           response = session.post(
-                              f"{api_base}/repos/{owner_q}/{repo_q}/releases/{release_id}/attach_files",
+                              f"{api}{release_path}/{release_id}/attach_files",
                               params={"access_token": token},
-                              data=monitor,
-                              headers={
-                                  "Content-Type": monitor.content_type,
-                              },
+                              files={"file": (asset.name, handle, content_type)},
+                              data={"name": asset.name},
                               timeout=300,
                           )
-                  except Exception as exc:
-                      reason = str(exc)
-
-                      if attempt < 3:
-                          print(f"::warning::Upload failed with exception: {reason}. Retrying...")
-                          time.sleep(5 * attempt)
-                          continue
-
-                      return False, reason
-
-                  if response.status_code in (200, 201):
-                      print(f"Uploaded: {filename}")
-                      return True, "uploaded"
-
-                  text = response.text or ""
-                  lowered = text.lower()
-
-                  duplicate_markers = [
-                      "already",
-                      "exist",
-                      "duplicate",
-                      "taken",
-                      "已存在",
-                      "重复",
-                  ]
-
-                  if response.status_code in (400, 409, 422) and any(marker in lowered or marker in text for marker in duplicate_markers):
-                      print(f"::warning::Asset may already exist, treat as available: {filename}")
-                      print(text[:1000])
-                      return True, "already_exists"
-
+                      if response.status_code in (200, 201):
+                          success = True
+                          break
+                      lowered = response.text.lower()
+                      if response.status_code in (400, 409, 422) and any(word in lowered for word in ("already", "exist", "duplicate", "已存在", "重复")):
+                          success = True
+                          break
+                      if response.status_code in (401, 403, 404, 429):
+                          print(f"::error::Gitee attachment API failed for {asset.name}: HTTP {response.status_code}")
+                          print(response.text[:3000])
+                          sys.exit(1)
+                      reason = f"HTTP {response.status_code}: {response.text[:300]}"
+                  except Exception as error:
+                      reason = str(error)
                   if attempt < 3:
-                      print(f"::warning::Upload failed: HTTP {response.status_code}. Retrying...")
-                      print(text[:1000])
                       time.sleep(5 * attempt)
-                      continue
-
-                  return False, f"HTTP {response.status_code}: {text[:1000]}"
-
-
-          for file_path in uploadable_files:
-              ok, reason = upload_asset(file_path)
-
-              if ok:
-                  uploaded_or_existing_files.append(file_path)
+              if success:
+                  uploaded.append(asset.name)
               else:
-                  message = f"Upload failed permanently: {file_path.name}, {reason}"
+                  print(f"::warning::Gitee attachment failed for {asset.name}: {reason}")
+                  verify_r2_url(asset.name, r2_url)
+                  fallbacks.append((asset.name, r2_url, "Gitee 附件同步失败"))
 
-                  if fail_on_upload_error:
-                      print(f"::error::{message}")
-                      sys.exit(1)
-
-                  print(f"::warning::{message}")
-                  failed_files.append((file_path, reason))
-
-          final_body = build_release_body(
-              uploadable_assets=uploaded_or_existing_files,
-              skipped_assets=skipped_files,
-              failed_assets=failed_files,
-              no_assets=False,
-              uploading=False,
-          )
-
-          gitee_request(
-              "PATCH",
-              f"/repos/{owner_q}/{repo_q}/releases/{release_id}",
-              data={
-                  "tag_name": tag,
-                  "name": release_name,
-                  "body": final_body,
-                  "prerelease": str(is_prerelease).lower(),
-              },
-              expected=(200, 201),
-          )
-
-          print("Gitee release publish completed.")
-          print(f"Uploaded or existing assets: {len(uploaded_or_existing_files)}")
-          print(f"Skipped assets: {len(skipped_files)}")
-          print(f"Failed assets: {len(failed_files)}")
+          body = (github.get("body") or "").rstrip() + "\n\n---\n\n## 下载\n\n"
+          if uploaded:
+              body += "> 小于 Gitee 限制的安装包已同步到本页附件区。\n"
+          if fallbacks:
+              body += "\n### R2 备用下载\n\n"
+              for name, url, reason in fallbacks:
+                  body += f"- [{name}]({url})（{reason}）\n"
+          payload["body"] = body
+          request("PATCH", f"{release_path}/{release_id}", data=payload)
+          print(f"Gitee release {tag}: {len(uploaded)} attachments, {len(fallbacks)} R2 links")
           PY
 
-      - name: Cleanup release assets
+      - name: Cleanup
         if: always()
-        shell: bash
-        run: |
-          rm -rf release-assets
-          rm -f github-release.json
-          rm -rf "$RUNNER_TEMP/gitee-release-venv"
+        run: rm -rf release-assets github-release.json "${RUNNER_TEMP}/gitee-release-venv"

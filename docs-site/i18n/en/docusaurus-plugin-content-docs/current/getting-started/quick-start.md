@@ -1,19 +1,17 @@
----
-sidebar_position: 2
----
-
 # Quick Start
 
 This chapter helps you experience NyaTerm's core workflow as quickly as possible: create a connection, open sessions, split the workspace, browse files, turn on terminal enhancements, and find the migration, AI assistance, and backup entry points.
 
 ## Step 1: Pick a session type
 
-When you click **New Connection**, NyaTerm offers four session types:
+When you click **New Connection**, NyaTerm offers six session types:
 
 - **SSH** — the most complete remote-operations workflow
 - **Local Terminal** — open a local shell inside NyaTerm
-- **Telnet** — useful for legacy systems or lab environments
-- **Serial** — useful for serial debugging devices
+- **Telnet** — legacy systems or lab environments
+- **Serial** — serial debugging devices
+- **RDP** — Windows Remote Desktop
+- **VNC** — VNC services or VM consoles; real-server interoperability is still being validated
 
 If this is your first time using NyaTerm, start with one **SSH** session and then add one **Local Terminal** to compare the mixed-workspace experience.
 
@@ -37,16 +35,12 @@ After saving, the connection appears in the saved-connections list.
 
 ## Step 3: Import existing configuration if you have it
 
-If you already maintain many hosts in another client, you do not need to rebuild them manually.
+If you already maintain many hosts in another client, you do not need to rebuild them manually. NyaTerm can import from Xshell, MobaXterm, WindTerm, SecureCRT, FinalShell, Termius, and NyaTerm / Electerm JSON — the format list and caveats are in [Importing sessions from other clients](../guide/ssh-connection#import-sessions-from-other-clients).
 
-NyaTerm can import from:
+The two paths serve different goals:
 
-- **Xshell** (`.xts`)
-- **MobaXterm** (`.mxtsessions`)
-- **WindTerm** (`.sessions`)
-- NyaTerm encrypted backup files (`.nya`)
-
-Session import is best for connection inventories. `.nya` import is best for restoring a full local NyaTerm environment and requires a **Master Password**.
+- Migrating a **connection inventory**: start from the import entry in the **Saved Connections** panel
+- Restoring a **complete NyaTerm environment**: use a `.nya` encrypted backup, which requires a master password first
 
 ## Step 4: Understand the workspace
 
@@ -74,7 +68,7 @@ Right-click a tab and choose:
 - **Horizontal Split**
 - **Vertical Split**
 
-This is useful when you want to watch logs, run commands, and compare output from different hosts at the same time.
+Use it to watch logs, run commands, and compare output from different hosts at the same time.
 
 ### 3. Open the remote file explorer and transfer queue
 
@@ -86,8 +80,8 @@ On Windows, you can also try dragging files or folders from the system file mana
 
 ### 4. Open command history and quick commands
 
-- **Command History** is useful for recall and fuzzy lookup
-- **Quick Commands** is useful for reusable actions with categories, execution modes, variable prompts, sorting, and view modes
+- **Command History** for recall and fuzzy lookup
+- **Quick Commands** for reusable actions, with categories, execution modes, and variable prompts
 - **Command suggestions** appear while typing based on history and built-in commands
 
 If suggestions are too noisy or include very long commands, tune **Minimum history command length** and **Maximum history command length** in **Settings → Interaction**.
@@ -102,7 +96,7 @@ When text is selected in the terminal, the context menu can:
 
 ### 6. Try AI Assistant
 
-The **AI Assistant** in the right activity bar is useful for:
+The **AI Assistant** in the right activity bar can:
 
 - Generating a command from your goal
 - Explaining recent terminal output or selected text
@@ -121,7 +115,19 @@ In **Settings → Terminal**, you can enable:
 - Keyword highlighting
 - Remote resource stats
 
-These features are intentionally conservative by default, so you can enable them only where they help your workflow.
+These are off by default; enable the ones that help your workflow.
+
+### 8. Try session recording
+
+`Ctrl / Cmd + Shift + R` records the active session's output to a log file.
+
+To collect recordings in a fixed directory, set **Recording path** in **Settings → Transfer** first.
+
+### 9. Review the settings
+
+Before settling in, read through these settings groups: **General** (startup restore, minimize to tray on close), **Interaction** (command suggestions, copy and paste behavior), **Terminal** (scrollback, Keep-Alive, optional enhancements), **Transfer** (download directory, default editor, concurrency), **Security** (master password, screen lock, host key policy), and **AI** (provider, model, risk thresholds).
+
+When troubleshooting, **Settings → General** can open the local log directory and export a diagnostics bundle directly.
 
 ## Step 6: Optionally configure Cloud Sync
 

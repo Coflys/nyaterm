@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./public/icons/app/nyaterm.svg" alt="NyaTerm" width="128" height="128">
+  <img src="./docs-site/static/img/nyaterm.svg" alt="NyaTerm" width="128" height="128">
 </p>
 
 <h1 align="center">NyaTerm</h1>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>基于 Tauri、React 与 Rust 构建的现代远程终端工作区。</strong><br/>
+  <strong>基于 GPUI 构建的现代原生远程终端工作区。</strong><br/>
   <a href="https://nyaterm.app"><strong>nyaterm.app</strong></a> ·
   <a href="https://nyaterm.app/docs/"><strong>在线文档</strong></a>
 </p>
@@ -83,7 +83,7 @@ NyaTerm 内置 AI Assistant 面板，可用于生成命令、解释终端输出�
 <a name="nyaterm-是什么"></a>
 # NyaTerm 是什么
 
-**NyaTerm** 是一个面向 SSH 运维和混合终端工作流的桌面客户端。它使用 React + Tauri 构建界面，由 Rust 后端负责 SSH、SFTP、会话生命周期、认证、网络工具、AI 辅助终端操作、导入导出、诊断、加密同步与备份。
+**NyaTerm** 是一个面向 SSH 运维和混合终端工作流的原生 GPUI 桌面客户端。它通过 Rust 工作区统一实现桌面界面、终端渲染、传输协议、持久化、认证、网络工具、AI 辅助终端操作、导入导出、诊断、加密同步与备份。
 
 - **NyaTerm 是** 面向开发者、系统管理员和 DevOps 工程师的 SSH 客户端
 - **NyaTerm 是** 支持标签页、横向分屏和纵向分屏的终端工作区
@@ -131,7 +131,7 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 - 可选行号和时间戳 gutter
 - 可选动作链接，识别 IPv4、`host:port` 和压缩包文件名
 - 可选关键词高亮，支持内置预设、自定义规则和 JSON 导入
-- 支持终端缩放、工作区 padding、字体粗细、macOS IME 兼容和图片路径粘贴
+- 支持终端缩放、工作区 padding、字体粗细、原生输入法和图片路径粘贴
 - 可直接让 AI 解释最近输出，并通过 `Terminal Output Lines` 控制 Agent 命令的终端内联输出
 - 大输出保护、可配置回滚缓冲区、SSH Keep-Alive 和会话录制
 - 可从选中文本发起在线搜索和翻译
@@ -146,6 +146,8 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 - 传输队列支持速度显示、暂停、继续、取消、失败重试、重复目标处理、时间戳保留和并发配置
 - 增强 SCP 和目录传输处理，并在可用时保留原始属性
 - 可在本地编辑远程文件，保存后通过 watcher 驱动的自动上传流程回传
+- 多标签只读远程文件预览，支持文本、JSON、Markdown、CSV/TSV、图片和 PDF，带每标签会话标识、缩放/旋转/适配控制以及分页 PDF 渲染
+- 预览的加载与解码在渲染线程之外进行，并按格式设置大小上限，超大或不支持的文件会给出明确提示而不会阻塞界面
 - Windows 下支持从系统文件管理器拖拽文件或文件夹到文件浏览器上传
 - Zmodem 传输会记录本地路径，并可在系统文件管理器中显示已完成文件
 
@@ -280,11 +282,13 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 | 平台 | 格式 |
 |------|------|
-| Windows | `.msi` / `.exe` / 便携版 `.zip` |
+| Windows | `.exe` / 便携版 `.zip` |
 | macOS | `.dmg` |
-| Linux | `.deb` / `.AppImage` |
+| Linux | `.deb` / `.AppImage` / `.rpm` |
 
-Windows 便携版解压后运行 `NyaTerm.exe` 即可。**Help → 检查更新** 与安装版共用 Cloudflare R2 更新清单和下载源，暂存更新前会强制验证 Tauri updater 签名。重启时 NyaTerm 会自动替换程序文件，并完整保留 `data/` 目录。
+Windows 便携版解压后运行 `NyaTerm.exe`，数据保存在旁边的 `data/`。GPUI 的 **Help → 检查更新** 使用签名更新清单，支持适用安装方式的下载和安装；Homebrew、deb/rpm 用户通过包管理器更新。
+
+**从 1.x 迁移：Windows 便携版和旧 MSI 必须手动升级。** 先退出并备份完整数据及密钥；便携版完整覆盖程序文件并保留 `data/`，MSI 备份后卸载旧版再安装 NSIS。不能只复制主程序，也不承诺所有旧安装方式都能自动升级。详见 [2.0 迁移指南](https://nyaterm.app/docs/getting-started/migration-v2)。
 
 ### macOS
 
@@ -329,43 +333,38 @@ AUR 软件包：[`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 > `nyaterm-bin` 为社区维护的 AUR 二进制包。如果 AUR 版本暂未同步到最新发布版，可以从 [Releases](https://github.com/nyakang/nyaterm/releases) 下载官方安装包。
 
 
-## Web / Docker 部署
-
-Web Beta 通过单个容器提供浏览器界面与 API，面向一个可信管理员。构建与 Compose 命令见 [deploy/web/](./deploy/web/README.md)，配置和能力范围见 [部署指南](./docs/web-deployment.md)。
-
 ## 开发环境要求
 
-- Node.js 18+
 - 通过 [rustup](https://rustup.rs/) 安装 Rust stable
-- pnpm
+- GPUI 和操作系统所需的平台依赖
 
 ## 本地开发
 
 ```bash
 git clone https://github.com/nyakang/nyaterm.git
 cd nyaterm
-pnpm install
-pnpm tauri dev
+cargo run -p nyaterm-app --bin nyaterm
 ```
 
 ## 项目结构
 
 ```text
-├── src/                    # React 前端
-│   ├── components/         # UI、终端、面板、对话框、设置页
-│   ├── hooks/              # 前端状态与工作流 hooks
-│   ├── lib/                # 终端、AI、同步、主题、平台辅助逻辑
-│   ├── pages/              # 子窗口页面
-│   └── i18n/               # 应用内多语言
-├── src-tauri/              # Tauri 2 + Rust 后端
-│   ├── src/cmd/            # 暴露给前端的 Tauri commands
-│   ├── src/core/           # SSH、SFTP、PTY、Telnet、串口、AI、备份逻辑
-│   ├── src/config/         # 持久化配置模型
-│   └── crates/otp/         # 本地 OTP 实现
-├── deploy/web/             # Web Dockerfile、Compose 与部署入口
-├── docs-site/              # Docusaurus 文档站点
-├── public/                 # 静态资源
-└── scripts/                # 检查、版本同步与演示辅助脚本
+├── crates/
+│   ├── nyaterm-app/             # 原生 GPUI 应用入口和资源
+│   ├── nyaterm-desktop/         # GPUI 应用组合与功能状态
+│   ├── nyaterm-core/            # 与 UI 无关的领域模型和策略
+│   ├── nyaterm-terminal/        # 终端状态机和解析
+│   ├── nyaterm-terminal-gpui/   # GPUI 终端布局、输入和绘制
+│   ├── nyaterm-transport/       # SSH、PTY、SFTP、Telnet、串口和传输
+│   ├── nyaterm-store/           # 持久化和数据库兼容层
+│   ├── nyaterm-ui/              # 共享 GPUI 控件和主题集成
+│   ├── nyaterm-remote-desktop/  # 与 UI 无关的 RDP/VNC 会话和类型化 IPC
+│   ├── nyaterm-rdp-helper/      # 隔离的 IronRDP 协议 helper 进程
+│   ├── nyaterm-vnc-helper/      # 隔离的 VNC 协议 helper 进程
+│   └── nyaterm-otp/             # OTP 兼容实现
+├── docs-site/                   # Docusaurus 文档站点
+├── Cargo.toml                   # Rust workspace 定义
+└── Cargo.lock
 ```
 
 ---
@@ -375,7 +374,7 @@ pnpm tauri dev
 感谢以下项目和库使 NyaTerm 成为可能：
 - [WindTerm](https://github.com/kingToolbox/WindTerm) - 启发了 NyaTerm 的设计和功能
 - [tabby](https://github.com/Eugeny/tabby) - 一个优秀的跨平台终端，提供了很多设计灵感
-- [xterm.js](https://xtermjs.org/) - 强大的前端终端模拟器，提供了丰富的终端功能和扩展性
+- [Alacritty](https://github.com/alacritty/alacritty) - NyaTerm 使用的终端模拟组件
 - [russh](https://github.com/warp-tech/russh) - SSH 客户端和服务端 Rust 库
 
 ---

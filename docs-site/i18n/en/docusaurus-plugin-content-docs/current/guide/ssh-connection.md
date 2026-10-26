@@ -1,7 +1,3 @@
----
-sidebar_position: 1
----
-
 # SSH Connection Management
 
 SSH is still NyaTerm's most complete session type. Beyond a basic login, an SSH connection can also be tied to:
@@ -45,23 +41,9 @@ You can select saved passwords or saved keys instead of re-entering them every t
 
 **No authentication (none)** is for hosts that complete authentication by other means (for example some jump-host or gateway flows, or servers that accept an empty auth). Only use it when the target host genuinely requires no SSH-level credential.
 
-#### Password authentication
+Password authentication covers temporary test hosts, environments that have not issued private keys yet, and accounts combined with OTP. Private key authentication covers daily operations work, reusing one identity across many hosts, and workflows involving jump hosts or automation.
 
-Useful for:
-
-- Temporary test hosts
-- Environments that have not issued private keys yet
-- Accounts that are combined with OTP
-
-#### Private key authentication
-
-Useful for:
-
-- Daily operations work
-- Reusing one identity across many hosts
-- Workflows that involve jump hosts or automation
-
-Both passwords and keys can be managed centrally in **Security/Auth**.
+Both passwords and keys are managed centrally in **Security/Auth**.
 
 #### SSH Agent authentication
 
@@ -73,7 +55,7 @@ When the Agent is waiting for a hardware touch, PIN, or desktop approval, NyaTer
 
 ### Interactive authentication requests
 
-When a server asks for additional keyboard-interactive input, OTP, or a restarted authentication step, NyaTerm collects the information through a dedicated SSH authentication request window instead of mixing every prompt into terminal output. This makes it easier to distinguish:
+When a server asks for additional keyboard-interactive input, OTP, or a restarted authentication step, NyaTerm collects the information through a dedicated SSH authentication request window instead of mixing every prompt into terminal output. The window distinguishes:
 
 - Normal password / private-key authentication
 - Keyboard-interactive authentication
@@ -227,14 +209,13 @@ If you just want a one-off connection without saving it, use a **temporary SSH l
 Two input forms are supported:
 
 - `ssh://user@host:port` URLs
-- `ssh://user:password@host:port` URLs; the password is used only for this temporary SSH session and is not saved
 - `ssh [-p port] [-l user] user@host` command strings
 
 Conventions and limits:
 
 - Default username is `root` and default port is `22`
 - Uses password authentication, with no proxy, jump host, post-login command, or X11
-- For safety, only `ssh://` URLs may include one-time passwords; command-style inline passwords (`user:pass@host`) and unsupported options such as `-J`, `-L/-R/-D`, `-i`, and `-o ProxyJump/ProxyCommand` are rejected
+- For safety, inline passwords (`user:pass@host`) are rejected in every URL and command form; unsupported options such as `-J`, `-L/-R/-D`, `-i`, and `-o ProxyJump/ProxyCommand` are also rejected
 
 A temporary session never becomes a saved connection: NyaTerm strips the connection ID, proxy, jump host, post-login command, X11, and algorithm preferences, so it stays a one-off session.
 
@@ -245,38 +226,27 @@ NyaTerm can also open connection links from browsers, scripts, launchers, or oth
 Supported entry points:
 
 - Program invocation: pass a link as a NyaTerm startup argument, for example `NyaTerm.exe ssh://root@example.com:22`
-- Local terminal invocation: use `NyaTerm.exe --local`, or `NyaTerm.exe --local --cwd "D:\Projects\foo"` to set the initial working directory
-- Protocol invocation: open an `ssh://`, `telnet://`, or `nyaterm://` link through the operating system URL scheme handler
+- Protocol invocation: installed packages register the `nyaterm://` operating-system URL scheme. NyaTerm does not claim the generic `ssh://` or `telnet://` handlers, but those links can still be passed as startup arguments
 
 Supported link formats:
 
 - `ssh://user@host:port`
-- `ssh://user:password@host:port`; the password is used only for this temporary SSH session and is not saved
 - `telnet://host:port`
 - `nyaterm://connect/ssh?host=host&port=22&username=user`
 - `nyaterm://connect/telnet?host=host&port=23`
-- `nyaterm://connect/local`
-- `nyaterm://connect/local?cwd=<urlencoded-path>`
 
 Handling rules:
 
 - SSH defaults to username `root` and port `22`; Telnet defaults to port `23`
-- External local terminal requests do not match or create saved connections; `cwd` only controls the initial working directory and does not execute arbitrary startup commands
 - NyaTerm first looks for saved connections with the same protocol, host, and port; when an SSH link includes a username, the username must match exactly
-- If multiple saved connections match, NyaTerm shows a chooser; if none match, it opens a temporary connection
-- `ssh://` links with one-time passwords always open as temporary connections, so an externally supplied password is not attached to a saved connection
-- `nyaterm://` links do not accept `password`, post-login command, proxy, jump host, port forwarding, or private-key parameters; save a connection first if you need those capabilities
+- If multiple saved connections match, NyaTerm refuses to choose one arbitrarily; add an explicit SSH username to disambiguate. If none match, it opens a temporary connection
+- Every external link rejects passwords, post-login commands, proxies, jump hosts, port forwarding, and private-key parameters; save a connection first if you need those capabilities
 
 ## Session input synchronization
 
-When you need to run the same operation on several hosts at once, use **session input sync groups** to broadcast what you type in one terminal to multiple sessions.
+When you need to run the same operation on several hosts at once, use a **synchronized input group** to broadcast what you type in one terminal to multiple sessions. It is not SSH-only — serial sessions can join too.
 
-- Create named, colored sync groups in the sync group manager dialog and add currently live sessions to a group
-- A group can be enabled or disabled as a whole, and individual sessions can be paused
-- While a session belongs to an enabled group, keystrokes in one terminal are mirrored to the other non-paused sessions in the group; command preview and history are recorded only on the origin session where you actually type
-- The bottom **Send Command** panel adds a target selector: current session, all sessions, or a specific `Group: <name>`. Group targets are filtered by session type (Serial vs shell) and exclude paused or duplicate sessions
-
-Sync groups are runtime state and are not persisted, so you need to recreate them after restarting the app.
+Configuration, filtering, broadcast control, and the send command panel are documented in [Layout & Workspace → Synchronized input groups](./layout-and-workspace#synchronized-input-groups).
 
 ## Import sessions from other clients
 
@@ -300,7 +270,7 @@ If the default path is not found, select the Termius `file__0.indexeddb.leveldb`
 
 ### Import from NyaTerm JSON
 
-If you need to organize connection inventories in bulk, choose **NyaTerm JSON** and import a `.json` file. This format is useful when session data is generated from scripts, asset inventories, or other systems.
+Choose **NyaTerm JSON** to import a `.json` file, for session data generated from scripts, asset inventories, or other systems.
 
 Sample file: [session-import-sample.json](/examples/session-import-sample.json)
 
@@ -351,24 +321,10 @@ NyaTerm maintains known-host records and offers three SSH host key policies:
 | Accept | Automatically accept and record new host keys |
 | Strict | Reject all unknown host keys |
 
-Known host records are stored in local storage at `~/.nyaterm/nyaterm.redb`; legacy `known_hosts` is imported on first launch.
+Known host records are stored in the local redb `known_hosts` document. Legacy `known_hosts` content from the old redb text-document path can be imported through the compatibility reader; NyaTerm does not promise to scan arbitrary filesystem locations for an old file.
 
 If you operate in a stricter environment, verify the host key source before accepting it.
 
-## When should you choose SSH?
+## When to use SSH
 
-SSH is the right first choice when:
-
-- You need the file explorer or SFTP
-- You need OTP, jump hosts, proxies, or tunnels
-- You need remote resource monitoring
-- You want a saved connection you can reuse long term
-
-If you only want a local shell inside NyaTerm, use **Local Terminal** from [Session Types](./session-types) instead.
-
-:::tip Screenshot suggestion
-- Suggested image path: `/img/docs/session-types/ssh-advanced-form.png`
-- Show the SSH form with host, authentication, and the advanced area for proxy / jump host / OTP binding
-- Another good image path: `/img/docs/network/ssh-import-and-groups.png`
-- Show saved-connection groups and the import entry
-:::
+The file explorer / SFTP, OTP, jump hosts, proxies, tunnels, and remote host monitoring all require SSH — those capabilities exist only on SSH sessions. For a plain local shell, use [Local Terminal](./session-types#local-terminal).

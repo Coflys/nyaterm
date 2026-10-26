@@ -1,11 +1,10 @@
 ---
-sidebar_position: 1
 slug: /
 ---
 
 # Introduction
 
-**NyaTerm** is a desktop client built around remote terminal workflows. It pairs a Tauri + React interface with a Rust backend that handles SSH, SFTP, session lifecycle, tunnels, authentication, AI features, Cloud Sync, and config persistence, so you can work with remote servers, local shells, serial devices, and network helpers inside one workspace.
+**NyaTerm** is a native desktop client built with GPUI around remote terminal workflows. Its Rust workspace combines the desktop interface, terminal rendering, SSH, SFTP, session lifecycle, tunnels, authentication, AI features, Cloud Sync, and configuration persistence, so you can work with remote servers, local shells, serial devices, and network helpers inside one workspace.
 
 ## Where NyaTerm fits best
 
@@ -14,18 +13,20 @@ slug: /
 - Working with remote files while watching terminal output
 - Standardizing common operations with reusable commands, jump-host chains, and saved connection metadata
 - Using OTP, recording, resource monitoring, auto-upload, AI assistance, cross-device config sync, and local encrypted backup in the same desktop app
-- Migrating existing configuration from Xshell, MobaXterm, WindTerm, or NyaTerm backup files
+- Migrating existing configuration from Xshell, MobaXterm, WindTerm, SecureCRT, FinalShell, Termius, or NyaTerm backup files
 
 ## Core capabilities
 
 ### Multiple session types
 
-NyaTerm supports more than SSH:
+NyaTerm currently supports six session types:
 
 - **SSH** — remote login, file transfer, resource monitoring, tunnels, OTP, and related workflows
 - **Local Terminal** — open a local shell inside the same workspace
 - **Telnet** — support for legacy systems and lab environments
-- **Serial** — useful for network gear, embedded boards, and debug ports
+- **Serial** — network gear, embedded boards, and debug ports
+- **RDP** — Windows Remote Desktop and graphical administration
+- **VNC** — traditional RFB/VNC services and VM consoles; real-server interoperability is still being validated
 
 ### Composable workspace
 
@@ -49,6 +50,7 @@ NyaTerm supports more than SSH:
 - Optional **action links** for IPv4 addresses, `host:port`, and archive names
 - Optional **keyword highlighting** with built-in presets and custom rules
 - Large-output protection, session recording, and SSH keep-alive
+- In-terminal **Zmodem** (`rz`/`sz`) and **trzsz** (`trz`/`tsz`) file transfer
 
 ### Remote file and transfer workflows
 
@@ -74,13 +76,13 @@ NyaTerm supports more than SSH:
 - OTP management with TOTP/HOTP, QR import, and SSH auto-fill support
 - SOCKS5, HTTP, ProxyCommand, validated jump-host chains, local / remote / dynamic tunnels, and SSH X11 forwarding
 - Screen lock, master password, and idle app lock support
-- Import **Xshell / MobaXterm / WindTerm** sessions
+- Import **Xshell / MobaXterm / WindTerm / SecureCRT / FinalShell / Termius** sessions, plus NyaTerm/Electerm JSON
 - Encrypted `.nya` import / export for NyaTerm configuration backups
 - Open log folders and export diagnostic bundles for troubleshooting and support
 
 ### Cloud Sync
 
-- Sync NyaTerm's portable configuration data through **WebDAV**, **S3-compatible** storage, Gist, or drive providers
+- Seven remote storage backends: **WebDAV**, **S3-compatible** storage, **Gitee Snippet**, **GitHub Gist**, **Google Drive**, **OneDrive**, and **AliyunDrive**
 - Configure a master password in **Settings → Security** before using **Settings → Cloud Sync**
 - Support startup checks, debounced auto-push after supported local changes, and manual push / pull
 - Resolve snapshot-level conflicts from the settings page or the in-workspace history panel when both local and remote state changed

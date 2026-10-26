@@ -55,6 +55,11 @@ export default function ChangelogPage(): React.ReactElement {
               <Heading as="h1" className={styles.title}>
                 <Translate>项目日志与版本演进</Translate>
               </Heading>
+              <p className={styles.description}>
+                {currentLocale === 'zh-CN'
+                  ? '早期版本记录包含 GPUI 迁移前的历史实现（包括 Tauri/WebView）；当前应用架构以 GPUI 原生实现为准。'
+                  : 'Earlier entries include pre-GPUI history such as Tauri/WebView implementation details; the current application architecture is native GPUI.'}
+              </p>
             </div>
           </div>
         </section>

@@ -1,229 +1,78 @@
----
-sidebar_position: 4
----
+# 运行时、传输与存储开发
 
-# 后端开发指南
-
-后端代码位于 `src-tauri/src/`，使用 Rust 编写，是 NyaTerm 的运行时核心：会话管理、SSH/SFTP、录制、翻译、AI、隧道、认证、同步备份、导入导出与配置持久化都在这里落地。
-
-## 命令入口与模块组织
-
-后端命令注册集中在 `src-tauri/src/lib.rs`：
-
-- 在这里创建共享 manager 状态
-- 在这里挂载 Tauri plugin
-- 在这里通过 `tauri::generate_handler![]` 注册所有 commands
+NyaTerm 没有独立的 Web 后端。原生应用的领域逻辑、协议运行时和持久化按职责拆分在多个 Rust crate 中，并通过有类型的接口与 GPUI 桌面层协作。
 
-当前命令模块位于：
-
-```text
-src-tauri/src/cmd/
-├── app.rs
-├── backup.rs
-├── clipboard.rs
-├── cloud_sync.rs
-├── connection.rs
-├── importer.rs
-├── log.rs
-├── otp.rs
-├── proxy.rs
-├── session.rs
-├── settings.rs
-├── sftp.rs
-├── stats.rs
-├── translate.rs
-├── tunnel.rs
-├── watcher.rs
-└── ai.rs
-```
+## Crate 边界
 
-如果你要新增一个 command，通常需要：
+| Crate | 放置的行为 |
+|------|------------|
+| `nyaterm-core` | 纯模型、解析、策略、兼容格式和 schema-neutral 序列化 |
+| `nyaterm-transport` | PTY、SSH、SFTP、Telnet、串口、隧道、远程操作和传输运行时 |
+| `nyaterm-store` | redb、事务、存储 worker、加密适配和兼容性读取 |
+| `nyaterm-terminal` | 终端状态机、快照、控制序列、编码和图形协议 |
+| `nyaterm-remote-desktop` | RDP/VNC 会话管理、framebuffer 与输入模型、证书策略、剪贴板状态和 helper IPC 合约 |
+| `nyaterm-rdp-helper` / `nyaterm-vnc-helper` | 隔离的 helper 进程，持有各自的协议解码器 |
+| `nyaterm-otp` | HOTP/TOTP 兼容实现 |
 
-1. 在对应 `cmd/*.rs` 中定义 `#[tauri::command]`
-2. 复用 `core/` 或 `config/` 层已有逻辑
-3. 回到 `src-tauri/src/lib.rs` 注册它
-4. 在前端通过 `src/lib/invoke.ts` 调用
+低层 crate 不导入 GPUI 或桌面呈现类型。需要跨边界时定义小型 typed adapter，不把 application-wide model 下沉到 transport 或 store。
 
-## 共享运行时状态
+解析服务器控制字节的协议解码器只放在 helper crate 里。`nyaterm-remote-desktop` 自己不含解码器，两个 helper 必须把解码器 panic 转换成致命 IPC 错误上报。详见 [架构说明 → RDP / VNC 的进程隔离](./architecture#rdp--vnc-的进程隔离)。
 
-`src-tauri/src/lib.rs` 会把这些共享对象注入 Tauri state：
+## 会话与传输运行时
 
-- `SessionManager`
-- `TunnelManager`
-- `RecordingManager`
-- `PendingAuthManager`
-- `QuickCommandsStore`
-- `CloudSyncManager`
+`nyaterm-transport` 的 `SessionManager` 管理活动会话，并为本地 PTY、SSH、Telnet、raw TCP、串口、RDP 和 VNC 提供统一生命周期入口。
 
-它们分别负责：
+会话输出通过 `SessionEvent` 返回：
 
-- 活动会话生命周期与命令历史
-- SSH 隧道状态
-- 录制状态
-- keyboard-interactive / OTP 等待中的认证请求
-- 快捷命令持久化与变更广播
-- 云同步 / 备份状态、远端快照操作与冲突处理
+- `Output` / `OutputDropped`
+- `CwdChanged`
+- `CommandAccepted`
+- `Exited`
+- `Error`
 
-## SessionManager
+事件队列按原始事件顺序限制高吞吐输出：单个大 `Output` 会拆成有界 chunk，8/4 MiB 高低水位通过 producer wait 提供正常运行期的无损背压，不合并相邻 raw output。桌面层批量 drain 事件，而不是让后台线程直接修改 GPUI state。新增会话事件时使用有类型的 enum variant，并同时测试正常顺序、队列上限和关闭路径。
 
-`src-tauri/src/core/session.rs` 中的 `SessionManager` 是会话中心：
+关闭单个 session 时，manager 必须先取消该 session 并唤醒 queue waiter，再关闭 transport 和 join reader；取消会清除该 session 的已排队事件并拒绝后续事件，但不能影响其他 session。manager 整体析构必须先全局关闭 queue、唤醒 producer 和 blocking consumer，再关闭并 join 全部 session。全局关闭后的空 blocking drain 立即返回；这些 shutdown 丢弃边界不改变正常过载的无损与 8/4 MiB 滞回契约。
 
-- 注册 / 移除活动会话
-- 向具体 session 的 I/O loop 发送 `Write` / `Resize` / `Close` / `AttachConfirmed` 命令
-- 管理命令历史与模糊搜索存储
-- 发出 `sessions-changed`、`command-history-changed` 等事件
+SSH、SFTP、隧道、远程进程和 Docker 等操作也应保持异步或运行在专用 worker 上。不要让 transport 依赖窗口、对话框或桌面 feature 类型。
 
-它暴露给前端的会话元信息中包含 `injection_active`（命令确认能力），并通过独立的 `dynamic_title_enabled`、`dynamic_title_integration_active` 和 `trusted_initial_title` 字段描述动态标签策略与运行时集成能力。
+## 终端运行时
 
-## 会话实现
+wire bytes 由 transport 送入 `nyaterm-terminal`。该 crate 维护网格、scrollback、模式、OSC 标记、搜索结果和图形协议状态，并生成 UI-neutral snapshot。
 
-具体会话类型分布在 `src-tauri/src/core/`：
+键盘和鼠标的协议编码中，与终端语义相关的部分留在 terminal/core 边界；像素尺寸、GPUI key event 和绘制逻辑留在 `nyaterm-terminal-gpui`。
 
-- `ssh/` — SSH 连接、认证、OSC/CWD、SFTP、隧道
-- `pty.rs` — 本地终端
-- `telnet.rs` — Telnet
-- `serial.rs` — 串口
-- `recording.rs` — 会话录制
-- `watcher.rs` — 本地文件监听与自动上传
-- `importer.rs` — 外部客户端会话导入
-- `ai.rs` — AI provider 调用、流式输出和命令卡片生成
+## StoreRuntime 与持久化
 
-## SSH 模块
+`nyaterm-store::StoreRuntime` 拥有数据库 worker。桌面层通过 `StoreUiClient` 或 `StoreBlockingClient` 提交实现 `StoreRequest` 的 typed request，再以 task result 更新 UI。
 
-`src-tauri/src/core/ssh/` 是最核心的一组模块：
+数据库实现集中在 `nyaterm-store/src/storage/`。修改存储时必须保持：
 
-- `client.rs` — russh client、known_hosts 校验、代理感知连接
-- `auth.rs` — 保存认证信息加载、keyboard-interactive / OTP 流程
-- `io.rs` — 终端 I/O 与 cwd 更新事件
-- `sftp.rs` — 远程文件操作与传输队列
-- `tunnel.rs` — 本地 / 远程 / 动态隧道
-- `session.rs` — SSH session 生命周期协作
+- 现有 redb table 名、key 和文档 key
+- 序列化字段名及未知字段处理
+- 主密钥 wrapping、加密前缀和 fallback 解密
+- `.nya` 备份、portable snapshot 和 Dragonfly 兼容读取
+- 验证成功前不覆盖用户现有数据
 
-典型 SSH 流程是：
+纯兼容模型和策略属于 `nyaterm-core`；数据库 transaction、文件 I/O 和兼容 reader 属于 `nyaterm-store`。
 
-1. 读取连接配置
-2. 解密密码 / 私钥 / 凭据
-3. 建立 TCP / 代理连接
-4. 做 host key policy 校验
-5. 完成认证（可能进入 OTP / interactive 流程）
-6. 打开 PTY 通道并进入异步 I/O 循环
-7. 在支持时注入 OSC/CWD 跟踪能力
+## AI、同步与原生 HTTP
 
-## SFTP 与传输队列
+AI provider、翻译、云同步和更新检查通过原生 HTTP adapter 运行。请求构造、风险策略和 schema-neutral provider 设置尽量保持在 `nyaterm-core`，桌面层负责凭据遮罩、交互状态和任务协调。
 
-`src-tauri/src/core/ssh/sftp.rs` 负责：
+云同步以 portable snapshot 为兼容合约。拉取数据必须先解密、解析和验证，再提交应用；冲突、重试和错误通过 typed result 返回 UI。
 
-- 列目录
-- 下载 / 上传单文件与目录
-- 删除 / 重命名 / 新建文件夹 / 符号链接 / 属性读取
-- 传输队列控制（pause / resume / cancel）
-- 向前端发出 `transfer-event`
+## 错误与安全
 
-前端传输面板与 `TransferContext` 就是基于这些事件构建的。
+低层库返回 typed error，桌面适配层再决定用户提示。不要在错误、日志或 `Debug` 输出中包含密码、私钥、OTP、API secret 或未脱敏的终端上下文。
 
-## watcher 与自动上传
+后台任务必须处理取消、窗口关闭和 runtime shutdown。退出时由 `AppShell` 请求 store flush/shutdown，避免 UI 已关闭后仍写入数据库。
 
-`src-tauri/src/core/watcher.rs` 负责本地文件监听。
+## 测试
 
-典型流程：
-
-1. 前端从远程文件浏览器中“打开”远程文件
-2. 后端下载到本地临时目录并开始 watch
-3. 本地文件保存后，发出 `file-modified` 事件
-4. 前端决定弹出自动上传窗口，或按“始终上传”策略直接回传
-
-这条链路涉及：
-
-- `cmd/watcher.rs`
-- `core/watcher.rs`
-- 前端 `FileUploadPage.tsx`
-
-## AI runtime
-
-`src-tauri/src/core/ai.rs` 负责 AI 功能的后端核心逻辑，包括：
-
-- provider 请求与模型能力适配
-- 流式文本输出与推理内容捕获
-- 结构化 JSON 输出解析
-- 命令卡片生成、风险等级和执行审计
-- AI 历史与审计记录持久化
-
-如果你修改 AI provider 行为或响应解析，重点留意：
-
-- 推理内容与主文本可能来自不同通道
-- 某些模型会把主要答案放在 reasoning 中
-- 前端依赖结构化命令卡片和风险字段做执行审批
-
-## Cloud sync / portable snapshot
-
-`src-tauri/src/core/cloud_sync.rs` 负责这条能力线的运行时行为，包括：
-
-- 启动时同步检查
-- 手动推送 / 拉取
-- 自动推送防抖
-- 冲突检测与事件广播
-
-它通过 `src-tauri/src/cmd/cloud_sync.rs` 暴露给前端的 commands 包括：
-
-- `test_cloud_sync_connection`
-- `get_cloud_sync_status`
-- `sync_push_now`
-- `sync_pull_now`
-- `list_cloud_sync_history`
-- `resolve_cloud_sync_conflict`
-
-`src-tauri/src/core/portable_snapshot.rs` 则定义了“哪些数据应该进入可移植快照”。这层很重要，因为它决定了：
-
-- 哪些设置适合跨设备同步
-- 哪些数据只应该保留在本机
-- 同步快照和本地 `.nya` 导出快照的范围差异
-
-当前实现里，portable snapshot 会覆盖连接、凭据配置、OTP、代理、隧道、快捷命令、大部分应用设置，以及必要的文本密钥材料；但设备本地的运行态 UI 状态不会被无差别漫游。
-
-## 导入、导出与诊断
-
-除了运行时会话能力，后端还负责几类数据管理命令：
-
-- `cmd::importer` — 导入 Xshell / MobaXterm / WindTerm 会话
-- `cmd::backup` — 导出 / 导入 NyaTerm 的加密 `.nya` 配置备份
-- `cmd::log` — 收集前端日志并导出诊断包
-- `cmd::app` — 应用级退出等控制命令
-
-如果你修改的是迁移、配置导入导出或故障排查工具链，这几组模块通常比 session / ssh 更关键。
-
-## 配置与加密
-
-配置和记录保存在 `~/.nyaterm/nyaterm.redb`，主要由 `src-tauri/src/storage.rs` 和 `src-tauri/src/config/` 管理。从 Dragonfly 升级时会复制 `~/.dragonfly/dragonfly.redb`；如果旧环境只有 `.dragonfly` JSON / 文本文件，也会复制后迁入 redb。旧目录不会被删除。
-
-主要 redb 文档包括：
-
-- JSON 文档：`settings`、`sessions`、`keys`、`passwords`、`otp`、`quick-command`、`tunnels`、`proxies`、`history`、`cloud-sync`、`cloud-sync-state`、`ai-history`、`ai-audit`
-- 文本文档：`known_hosts`、`master.key`
-
-敏感字段会在写盘前加密，因此新增配置时要确认是否属于敏感数据边界。
-
-对于 cloud sync，还要额外关注：
-
-- provider 配置中的凭据字段会经过加密 / mask / merge 处理
-- 运行时状态单独落在 `cloud-sync-state` 文档
-- 历史记录主要来自结构化日志，再被 `list_cloud_sync_history` 聚合读取
-
-## 事件模型
-
-后端大量依赖 Tauri 事件通知前端，典型事件包括：
-
-| 事件 | 说明 |
-|------|------|
-| `terminal-output-{id}` | 终端输出 |
-| `cwd-changed-{id}` | 工作目录变化 |
-| `session-closed-{id}` | 会话关闭 |
-| `sessions-changed` | 会话列表变化 |
-| `connections-changed` | 已保存连接变化 |
-| `transfer-event` | 传输进度 |
-| `otp-request` | 触发 OTP / keyboard-interactive 认证 |
-| `cloud-sync-status-changed` | 云同步 / 备份状态变化 |
-| `cloud-sync-history-changed` | 同步 / 备份历史变化 |
-| `cloud-sync-conflict` | 云同步冲突预览 |
-| AI 流式事件 | AI 响应、推理内容与执行状态 |
-
-设计新后端能力时，优先考虑是否应该通过已有事件流对前端暴露，而不是额外引入新的轮询接口。
+- pure parsing、策略和兼容格式测试放在 `nyaterm-core`。
+- PTY、SSH、SFTP、Telnet、串口、隧道和事件队列测试放在 `nyaterm-transport`。
+- 终端解析、快照、graphics 和 encoding 测试放在 `nyaterm-terminal`。
+- 存储修改需要新数据 round trip、代表性旧数据、错误密码和损坏数据测试。
+- RDP/VNC 的协议、framebuffer、输入映射、IPC、证书、剪贴板和重连测试放在 `nyaterm-remote-desktop`、`nyaterm-rdp-helper` 或 `nyaterm-vnc-helper`。两个 helper crate 的 `tests/lifecycle.rs` 覆盖握手、正常断开和崩溃 / 挂起回收，IPC 合约变更时同步更新两边。
+- 跨 crate 行为优先测试小型 adapter，不依赖真实凭据或生产服务。

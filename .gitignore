@@ -14,10 +14,6 @@ docs-site/.docusaurus
 dist
 dist-ssr
 *.local
-target/
-src-tauri/binaries/nyaterm-mcp-*
-src-tauri/resources/windows/conpty/
-temp/
 
 # Editor directories and files
 .vscode/*
@@ -39,18 +35,20 @@ temp/
 .claude
 .codex
 .trae
+.kiro
 
-# Web runtime secrets and data
-.env
-.env.*
-nyaterm-web-data/
-web-test-data/
+# Also holds read-only copies of the sources that used to be vendored. Not part
+# of the build: those dependencies come from pinned fork revisions in Cargo.toml.
+temp/
 
-# Isolated deployment test traces and container logs
-artifacts/web-e2e/
-artifacts/web-local-e2e/
-artifacts/web-release-smoke/
-playwright-report/
-
-# Python release helper caches
+# Python automation
 __pycache__/
+*.py[cod]
+
+# Rust / native app
+target/
+/artifacts/
+/data/
+nyaterm-portable
+/gen/schemas
+/src-tauri

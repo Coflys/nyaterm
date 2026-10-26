@@ -1,7 +1,3 @@
----
-sidebar_position: 5
----
-
 # Tunnels, Proxy, and Jump Hosts
 
 NyaTerm separates network-related features into three layers:
@@ -33,7 +29,7 @@ Each proxy configuration can store:
 
 ### ProxyCommand
 
-ProxyCommand is useful when you already have a command-line proxy, gateway, or corporate network helper. NyaTerm replaces OpenSSH-style placeholders in the command template:
+ProxyCommand reuses an existing command-line proxy, gateway, or corporate network helper. NyaTerm replaces OpenSSH-style placeholders in the command template:
 
 | Placeholder | Meaning |
 |-------------|---------|
@@ -86,7 +82,7 @@ NyaTerm provides a dedicated tunnel management area in the Network panel, so por
 
 ### Local tunnel
 
-A local tunnel binds a local listening port and forwards traffic to a remote target. It is useful for:
+A local tunnel binds a local listening port and forwards traffic to a remote target. Use it to:
 
 - Accessing internal databases
 - Opening web consoles that are only reachable from the remote host
@@ -94,14 +90,14 @@ A local tunnel binds a local listening port and forwards traffic to a remote tar
 
 ### Remote tunnel
 
-A remote tunnel binds a port on the remote side and forwards it back to a local service. It is useful for:
+A remote tunnel binds a port on the remote side and forwards it back to a local service. Use it to:
 
 - Temporarily exposing a local service to the remote environment
 - Reverse debugging or temporary integration work
 
 ### Dynamic tunnel
 
-A dynamic tunnel creates a local SOCKS5 proxy port. It is useful for:
+A dynamic tunnel creates a local SOCKS5 proxy port. Use it to:
 
 - Pointing a browser or tool at an SSH-backed proxy temporarily
 - Quickly building an outbound path through SSH
@@ -150,10 +146,3 @@ This turns network setup into something reusable and visible instead of a collec
 - Create the SSH connection
 - Save a local tunnel such as `localhost:15432 -> db.internal:5432`
 - Then access the database locally via `127.0.0.1:15432`
-
-:::tip Screenshot suggestion
-- Suggested image path: `/img/docs/network/network-panel.png`
-- Show the proxy and tunnel tabs in the Network panel
-- Another good image path: `/img/docs/network/tunnel-dialog.png`
-- Show tunnel type, local listening port, target host, and auto-open options
-:::

@@ -1,171 +1,73 @@
----
-sidebar_position: 3
----
+# GPUI Desktop Development
 
-# Frontend Development
+NyaTerm's native interface lives in `crates/nyaterm-desktop`, while shared controls live in `crates/nyaterm-ui`. The desktop layer includes GPUI state, views, window interaction, platform adapters, and integration points for background-job results.
 
-Frontend code lives in `src/` and uses React 19 + TypeScript.
+## Entry point and windows
 
-## Entry points and window model
+`nyaterm-app` creates the root window and `AppShell`. After storage bootstrap completes, `AppShell` creates the `NyaTermApp` Entity and starts workspace restoration.
 
-The frontend entry point is `src/main.tsx`. It decides which app tree to load based on the `?window=` query parameter in the URL:
+Independent settings, connection editor, quick-command, and remote-text-editor windows are created with GPUI `open_window`. Windows exchange Entities, typed state, or explicit callbacks rather than URL routing or message bridges.
 
-- **Main window** — `AppProvider` + `App.tsx`
-- **Child windows** — `ChildAppProvider` + `ChildWindowRouter`
-
-Current child-window flows include:
-
-- settings
-- new-session
-- quick-command
-- auto-upload
-
-If you are changing these flows, start with:
-
-- `src/main.tsx`
-- `src/ChildWindowRouter.tsx`
-- `src/lib/windowManager.ts`
-
-## Component and directory structure
+## Module structure
 
 ```text
-src/
-├── components/          # UI components
-│   ├── dialog/          # Dialog and child-window related components
-│   ├── panel/           # Left/right sidebar and bottom helper panels
-│   ├── terminal/        # xterm workspace and terminal-related components
-│   ├── layout/          # Outer layout, title bar, activity bars
-│   └── ui/              # Shared base UI components (shadcn/ui)
-├── context/             # React Context providers
-├── hooks/               # Custom hooks
-├── i18n/                # Internationalization
-├── lib/                 # invoke wrapper, window manager, workspace helpers
-├── pages/               # Child-window pages
-├── types/               # Shared type definitions
-├── App.tsx              # Main application shell
-└── main.tsx             # Frontend entry point
+crates/nyaterm-desktop/src/
+├── app_shell/       # Root shell, startup/recovery/quit lifecycle, native menus
+├── entities/        # Authoritative window runtime, startup restore, quick switch Entities
+├── features/        # Focused feature state, runtime adapters, and views
+├── i18n/            # Locale loading and translation
+├── models/          # Desktop presentation models
+├── http/            # Native HTTP adapters
+└── terminal.rs      # Terminal presentation entry point
 ```
+
+`features/` groups connections, sessions, terminal behavior, settings, security, transfers, tunnels, sync, AI, remote operations, layout, and panels by domain. Add behavior to the domain that owns it instead of creating a general migration bucket or shared prelude.
 
 ## State management
 
-### AppContext
+`NyaTermApp` composes focused feature-state structs. A method that only changes one domain should generally live on that state. Keep a thin `NyaTermApp` adapter when GPUI notification, window access, or cross-domain coordination is required.
 
-`src/context/AppContext.tsx` is the main state container for the primary window. It manages:
+Follow these ownership rules:
 
-- Tabs and pane trees
-- Active tab and active pane
-- Saved connections and group refreshes
-- App settings and UI settings
-- Startup restoration of the workspace
+- Each mutable value has one authoritative owner.
+- Do not keep writable mirrors in both `NyaTermApp`/feature state and an Entity store.
+- Views read current state directly; they do not publish and read back snapshots during render.
+- Cross-thread work returns through typed events or typed task results in a GPUI update.
 
-### ChildAppProvider
+## Views and controls
 
-`src/context/ChildAppProvider.tsx` is the lightweight provider for child windows:
+Helpers that build GPUI elements remain with views or desktop features. Do not move view construction onto pure state merely to reduce the number of `impl NyaTermApp` blocks.
 
-- Loads and saves settings only
-- Does not hold the full workspace state
-- Syncs settings changes back to the main window through events
+Ordinary inputs, selects, menus, switches, and dialogs use the stable component API exposed by `nyaterm-ui`. Desktop features do not depend directly on `gpui-kit`. Ordinary text fields use `NyaInput`/`NyaInputState` or the id registry in `features/text_inputs.rs`, with definite dimensions around the input.
 
-### TransferContext
+Terminal input, paste review, and `RemoteTextEditor` are full editing surfaces and must not be replaced by ordinary single-line inputs.
 
-`src/context/TransferContext.tsx` listens to `transfer-event` and centrally manages:
+## Input and native window interaction
 
-- Transfer queue items
-- Progress, paused, canceled, and error state
-- Pause / resume / cancel / retry actions
+Global shortcuts and pointer events route from the root view into the active feature. Event handlers should deliberately choose when to call `cx.stop_propagation()` and must avoid parent click handlers that steal focus from text fields.
 
-## Calling Tauri commands
+Platform-specific window, clipboard, drag-and-drop, PTY, and IME behavior requires validation on the affected operating system. New child windows should reuse the established window lifecycle and modal coordination patterns.
 
-Frontend code should prefer the shared wrapper in `src/lib/invoke.ts` rather than scattering raw `@tauri-apps/api/core` `invoke()` calls everywhere.
+## Terminal presentation
 
-```ts
-import { invoke } from '@/lib/invoke';
+Terminal responsibilities are split across two layers:
 
-const sessionId = await invoke<string>('create_ssh_session', {
-  connectionId: 'uuid-here',
-});
-```
+- `nyaterm-terminal` owns the grid, scrollback, control-sequence state, search, and graphics protocols.
+- `nyaterm-terminal-gpui` owns pixel layout, key-event conversion, selection, highlighting, images, and painting.
 
-This wrapper centralizes error logging and makes future call behavior easier to change.
-
-## Listening to backend events
-
-Many frontend features rely on Tauri events, for example:
-
-- `terminal-output-{id}`
-- `cwd-changed-{id}`
-- `session-closed-{id}`
-- `transfer-event`
-- `sessions-changed`
-- `connections-changed`
-- `otp-request`
-- `cloud-sync-status-changed`
-- `cloud-sync-history-changed`
-- `cloud-sync-conflict`
-
-Terminal rendering, file browsing, resource monitoring, transfer queues, and the Cloud Sync status / history / conflict UI all sit on top of these events.
-
-## Workspace model
-
-The workspace has two layers.
-
-### `workspaceTabs.ts`
-
-This file manages the persisted logical workspace:
-
-- Tabs
-- Pane trees
-- In-tab splits
-- Serialization / restoration of `ui.open_tabs`
-
-### `tabWindows.ts`
-
-This file manages the live runtime terminal layout:
-
-- Which tabs are attached to which leaf
-- The active tab for each leaf
-- Runtime split ratios
-
-When editing tabs, splits, or multi-area terminal layout behavior, first decide which layer you are actually changing.
-
-## Terminal integration
-
-`src/components/terminal/XTerminal.tsx` is the main xterm.js integration point. It handles:
-
-- Search / Fit / WebLinks addons
-- Shell integration and command suggestions
-- Gutter rendering for line numbers and timestamps
-- Action links and keyword highlighting
-- Large-output protection
-- Reconnect-related behavior
-
-If you are changing terminal presentation, this is usually the first file to inspect.
-
-## Cloud Sync frontend entry points
-
-If you are changing Cloud Sync UI flows, start with these files:
-
-- `src/pages/SettingsPage.tsx` — settings-tab structure, save blocking, and master-password prerequisites
-- `src/components/settings/SyncBackupTab.tsx` — provider config, automatic strategies, manual actions, and conflict handling
-- `src/components/panel/SyncBackupHistoryPanel.tsx` — workspace history panel and quick conflict actions
-- `src/App.tsx` — how the Cloud Sync panel is wired into the main workspace
-- `src/lib/cloudSync.ts` — frontend defaults, formatting helpers, and provider validation utilities
-
-Together these files define the full user flow through settings state, Tauri commands, and cloud-sync events.
+The desktop feeds session output into terminal state, then provides snapshots and interaction state to the GPUI terminal element. Do not reimplement control-sequence parsing or wire protocols in views.
 
 ## Internationalization
 
-User-facing UI text uses `react-i18next`. Locale files are in:
+Application locale files are stored at:
 
-- `src/i18n/locales/zh-CN.json`
-- `src/i18n/locales/zh-TW.json`
-- `src/i18n/locales/en.json`
-- `src/i18n/locales/ko.json`
+- `crates/nyaterm-desktop/src/i18n/locales/zh-CN.json`
+- `crates/nyaterm-desktop/src/i18n/locales/en.json`
 
-When adding or modifying user-visible text, update all locale files, and run `pnpm i18n:check` before committing to validate the JSON format.
+Update both languages for new or changed user-facing text and follow the existing translation-key conventions.
 
-## UI component conventions
+## Background work and tests
 
-The project uses shadcn/ui as its base component layer. Shared UI components live in `src/components/ui/`.
+Render paths and long GPUI update callbacks must not perform database, filesystem, network, SSH, SFTP, subprocess, or image-decoding work. Use GPUI executors, dedicated runtimes, or an existing job coordinator, then update authoritative state when the result returns.
 
-If you need a new reusable UI piece, prefer existing components and project style patterns over building a parallel base component system.
+Test state transitions through pure methods where possible. GPUI interaction tests use adjacent `#[gpui::test]` modules or the existing test context. Window, clipboard, drag-and-drop, and IME changes also require a platform smoke test.

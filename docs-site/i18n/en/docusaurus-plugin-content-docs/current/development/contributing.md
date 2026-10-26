@@ -1,79 +1,98 @@
----
-sidebar_position: 5
----
-
 # Contributing
 
-Thank you for your interest in contributing to NyaTerm!
+Thank you for your interest in contributing to NyaTerm.
 
-## Before You Start
+## Before you start
 
-1. Read the [Development Setup](./setup) documentation
-2. Check the [Issues](https://github.com/nyakang/nyaterm/issues) list
+1. Read `AGENTS.md` and `CONTRIBUTING.md` at the repository root.
+2. Follow [Development Setup](./setup) to configure Rust and platform dependencies.
+3. Check [Issues](https://github.com/nyakang/nyaterm/issues) for the expected behavior and current work.
 
-## Contribution Workflow
+## Choose the owning crate
 
-1. **Fork the repository**
-2. **Create a branch** from `main`
-   ```bash
-   git checkout -b feat/my-feature
-   ```
-3. **Develop** — Write code and test
-4. **Commit** — Use conventional commit messages
-5. **Push** — Push to your fork
-6. **Create PR** — Submit a Pull Request
+- Pure models, parsing, compatibility formats, and policies belong in `nyaterm-core`.
+- Database execution and compatibility readers belong in `nyaterm-store`.
+- PTY, SSH, SFTP, Telnet, Serial, tunnel, and transfer runtimes belong in `nyaterm-transport`.
+- Terminal state and snapshots belong in `nyaterm-terminal`; GPUI terminal painting belongs in `nyaterm-terminal-gpui`.
+- GPUI state, views, and background coordination belong in `nyaterm-desktop`.
+- Shared GPUI controls and theme integration belong in `nyaterm-ui`.
+- RDP/VNC session management, input models, and IPC contracts belong in `nyaterm-remote-desktop`; protocol decoders belong only in `nyaterm-rdp-helper` and `nyaterm-vnc-helper`.
 
-## Commit Convention
+Cross-crate changes keep adapters small and explicit, with one authoritative owner for each value.
 
-Use [Conventional Commits](https://www.conventionalcommits.org/):
+## Contribution workflow
 
+1. Fork the repository and create a branch from `main`.
+2. Implement the change in the owning crate and add adjacent tests.
+3. Run checks for the affected crate, then the relevant workspace checks.
+4. Commit with a Conventional Commit-style subject.
+5. Push the branch and open a Pull Request.
+
+```bash
+git checkout -b feat/my-feature
+cargo check -p <crate-name>
+cargo test -p <crate-name>
 ```
-<type>(<scope>): <description>
-```
 
-| Type | Description |
-|------|-------------|
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `docs` | Documentation |
-| `style` | Code formatting (no logic change) |
-| `refactor` | Code refactoring |
-| `perf` | Performance improvement |
-| `chore` | Build/tooling changes |
+## Commit convention
+
+Use this subject format:
+
+```text
+<type>(<scope>): <imperative summary>
+```
 
 Examples:
 
+```text
+feat(terminal): add search result navigation
+fix(transport): handle closed SSH channels
+docs: update development setup
 ```
-feat(sftp): add batch file download support
-fix(ssh): handle connection timeout correctly
-docs: update installation guide
+
+Common types include `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, and `chore`. Common scopes include `terminal`, `transport`, `desktop`, `storage`, `ui`, `ai`, and `sync`.
+
+## Code and tests
+
+```bash
+cargo check --workspace
+cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets
 ```
 
-## Code Standards
+- Use Rust 2024 idioms, standard rustfmt formatting, and explicit imports.
+- Do not add `#[path = "..."]`, `use super::*`, or a shared feature prelude.
+- Do not perform database, filesystem, network, or other blocking work in render paths.
+- Storage, credential, encryption, backup, and sync changes include new-data round trips and representative legacy-data tests.
+- Platform-specific window, PTY, Serial, clipboard, and input behavior is verified on the target operating system.
 
-### Frontend
+## Internationalization and documentation
 
-- TypeScript strict mode
-- Run `pnpm lint` to pass checks
-- Run `pnpm format` to format code
-- Use functional components and Hooks
+When adding or changing application UI text, update both:
 
-### Backend
+- `crates/nyaterm-desktop/src/i18n/locales/zh-CN.json`
+- `crates/nyaterm-desktop/src/i18n/locales/en.json`
 
-- Follow standard Rust coding style
-- Run `cargo clippy` for linting
-- Run `cargo fmt` for formatting
-- Use proper error handling, avoid `unwrap()`
+For docs-site changes, keep the Chinese source under `docs-site/docs/` and the English pages under `docs-site/i18n/en/docusaurus-plugin-content-docs/current/` in sync, add any new page to `docs-site/sidebars.ts`, then run:
 
-## Internationalization
+```bash
+python3 scripts/ci/check_docs_translations.py
+pnpm --dir docs-site build
+```
 
-When adding or modifying UI text, update all:
+## Changing third-party dependencies
 
-- `src/i18n/locales/zh-CN.json` — Simplified Chinese
-- `src/i18n/locales/zh-TW.json` — Traditional Chinese
-- `src/i18n/locales/en.json` — English
-- `src/i18n/locales/ko.json` — Korean
+The third-party dependencies NyaTerm patches are not in this repository. Each is a patch series on a fork under [github.com/nyakang](https://github.com/nyakang) on branch `nyaterm`. The workflow is documented in [Development Setup → Changing third-party dependencies](./setup#changing-third-party-dependencies).
+
+In short: commit to the fork branch and push, then bump the pinned revision in the root `Cargo.toml`; keep the patch series split by concern; record the reason and the validation performed on the patch commit and in that branch's `NYATERM.md`. Note the fork branch and revision in your PR description.
+
+**Do not edit `temp/`.** Those are read-only copies that are never compiled — editing them has no effect and produces no error.
+
+## Security and compatibility
+
+Never commit or log passwords, private keys, OTP values, API secrets, or unredacted terminal context. Persistence changes preserve existing tables, keys, field names, encryption prefixes, backup formats, and fallback behavior unless they include a tested migration.
 
 ## License
 
-Contributions are licensed under the project's [MIT License](https://github.com/nyakang/nyaterm/blob/main/LICENSE).
+Contributions are licensed under the project's [Apache License 2.0](https://github.com/nyakang/nyaterm/blob/main/LICENSE).

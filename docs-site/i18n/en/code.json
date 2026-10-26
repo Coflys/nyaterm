@@ -14,9 +14,6 @@
   "多标签终端界面": {
     "message": "Multi-Tab Terminal"
   },
-  "同时管理多个 SSH 和本地终端会话。支持 WebGL 硬件加速渲染、自定义字体、关键词高亮、命令历史模糊搜索。": {
-    "message": "Manage multiple SSH and local terminal sessions simultaneously. WebGL hardware-accelerated rendering, custom fonts, keyword highlighting, and fuzzy command history search."
-  },
   "加密同步与备份": {
     "message": "Encrypted Cloud Sync"
   },
@@ -32,17 +29,11 @@
   "现代高性能 SSH 客户端": {
     "message": "Modern, High-Performance SSH Client"
   },
-  "基于 Tauri 和 React 构建，跨平台、安全、快速": {
-    "message": "Built with Tauri and React — cross-platform, secure, and fast"
-  },
   "快速开始": {
     "message": "Get Started"
   },
   "首页": {
     "message": "Home"
-  },
-  "现代高性能 SSH 客户端，基于 Tauri 和 React 构建": {
-    "message": "A modern, high-performance SSH client built with Tauri and React"
   },
   "下载": {
     "message": "Download"
@@ -119,9 +110,6 @@
   "按功能查阅使用说明": {
     "message": "Browse guides by feature"
   },
-  "查看 SSH、SFTP、终端操作、OTP、主题、代理和同步备份的具体用法。": {
-    "message": "See detailed guides for SSH, SFTP, terminal operations, OTP, themes, proxies, and cloud sync."
-  },
   "查看文档": {
     "message": "View docs"
   },
@@ -166,9 +154,6 @@
   },
   "在一个工作区中组织多种会话": {
     "message": "Organize multiple session types in one workspace"
-  },
-  "SSH、本地 shell、Telnet 和串口会话使用同一套标签页与分屏布局，便于同时查看不同主机、设备或任务。": {
-    "message": "SSH, local shell, Telnet, and serial sessions share the same tab and split-pane layout, making it easy to view different hosts, devices, or tasks side by side."
   },
   "用标签页区分不同连接、任务或环境": {
     "message": "Use tabs to separate different connections, tasks, or environments"
@@ -272,9 +257,6 @@
   "加载预览中": {
     "message": "Loading preview"
   },
-  "支持 SSH、串口、本地 shell、SFTP 和配置备份的桌面终端客户端": {
-    "message": "A desktop terminal client for SSH, serial, local shell, SFTP, and cloud-synced configuration"
-  },
   "更新日志": {
     "message": "Changelog"
   },
@@ -283,5 +265,17 @@
   },
   "项目日志与版本演进": {
     "message": "Project changelog and release evolution"
+  },
+  "SSH、本地 shell、Telnet、串口、RDP 和 VNC 会话使用同一套标签页与分屏布局，便于同时查看不同主机、设备或任务。": {
+    "message": "SSH, local shell, Telnet, serial, RDP, and VNC sessions share the same tab and split-pane layout, making it easy to view different hosts, devices, or tasks side by side."
+  },
+  "查看 SSH、RDP/VNC、SFTP、终端操作、AI 助手、OTP、代理和云同步的具体用法。": {
+    "message": "See detailed guides for SSH, RDP/VNC, SFTP, terminal operations, the AI assistant, OTP, proxies, and cloud sync."
+  },
+  "支持 SSH、RDP、VNC、串口、本地 shell、SFTP 和加密配置同步的原生桌面终端客户端": {
+    "message": "A native desktop terminal client for SSH, RDP, VNC, serial, local shell, SFTP, and encrypted configuration sync"
+  },
+  "home.migrationV2": {
+    "message": "Upgrading from 1.x to 2.0: read the manual migration guide for portable and MSI installations"
   }
 }

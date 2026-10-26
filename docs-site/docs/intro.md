@@ -1,31 +1,32 @@
 ---
-sidebar_position: 1
 slug: /
 ---
 
 # 项目介绍
 
-**NyaTerm** 是一个围绕远程终端工作流设计的桌面客户端。它以 Tauri + React 构建前端界面，以 Rust 负责 SSH、SFTP、会话管理、隧道、认证、AI 能力、云同步与配置持久化，让你在同一个工作区中处理远程服务器、本地 shell、串口设备和网络辅助能力。
+**NyaTerm** 是一个围绕远程终端工作流设计、基于 GPUI 构建的原生桌面客户端。它通过 Rust workspace 统一实现桌面界面、终端渲染、SSH、SFTP、会话管理、隧道、认证、AI 能力、云同步与配置持久化，让你在同一个工作区中处理远程服务器、本地 shell、串口设备和网络辅助能力。
 
-## 适合哪些场景
+## 使用场景
 
 - 同时维护多台 SSH 主机
 - 在本地终端、Telnet、串口设备之间切换排障
 - 边看终端输出边操作远程文件
 - 为常用运维命令、登录流程和跳板机链路做标准化配置
 - 需要 OTP、录制、资源监控、自动上传、AI 辅助、跨设备配置同步或本地加密备份等增强能力
-- 想从 Xshell、MobaXterm、WindTerm 或 NyaTerm 备份文件快速迁移现有配置
+- 想从 Xshell、MobaXterm、WindTerm、SecureCRT、FinalShell、Termius 或 NyaTerm 备份文件快速迁移现有配置
 
 ## 核心能力
 
 ### 多种会话类型
 
-NyaTerm 不只支持 SSH，还支持：
+NyaTerm 当前支持六类会话：
 
 - **SSH** — 远程登录、文件传输、资源监控、隧道、OTP 等完整能力
 - **本地终端** — 在同一套 UI 中打开本地 shell
 - **Telnet** — 兼容旧设备或实验环境
-- **串口** — 适合网络设备、嵌入式板卡、调试口场景
+- **串口** — 网络设备、嵌入式板卡、调试口
+- **RDP** — Windows 远程桌面和图形化运维
+- **VNC** — 传统 RFB/VNC 服务和虚拟机控制台；真实服务器互通范围仍在持续验证
 
 ### 可组合的工作区
 
@@ -43,13 +44,13 @@ NyaTerm 不只支持 SSH，还支持：
 - 命令历史与模糊建议，可在交互式程序中自动抑制建议干扰
 - 可配置命令建议的历史命令长度上下限，减少超长命令带来的噪音
 - 终端搜索、搜索历史、结果计数、复制/粘贴、上下文菜单
-- 支持终端缩放、字体粗细、工作区间距、macOS IME 兼容和图片路径粘贴
+- 支持终端缩放、字体粗细、工作区间距、原生输入法和图片路径粘贴
 - 选中文本后可直接做**在线搜索**或按 provider **翻译**
 - 可选的**行号 / 时间戳 gutter**
 - 可选的**动作链接**（如 IPv4、`host:port`、压缩包文件名）
 - 可选的**关键词高亮**与自定义规则
 - 大输出场景下的保护机制、会话录制与 SSH Keep-Alive
-- 支持直接在终端中使用 **Zmodem** 进行文件传输
+- 支持直接在终端中使用 **Zmodem**（`rz`/`sz`）和 **trzsz**（`trz`/`tsz`）进行文件传输
 - 支持自定义终端与界面操作的**键盘快捷键**
 
 ### 远程文件与传输队列
@@ -82,20 +83,20 @@ NyaTerm 不只支持 SSH，还支持：
 - OTP 管理（TOTP / HOTP）、二维码导入、SSH 自动填充
 - 支持 SOCKS5、HTTP、ProxyCommand、跳板机链路校验、本地 / 远程 / 动态隧道和 SSH X11 转发
 - 锁屏、主密码与空闲应用锁定能力
-- 支持导入 **Xshell / MobaXterm / WindTerm** 会话
+- 支持导入 **Xshell / MobaXterm / WindTerm / SecureCRT / FinalShell / Termius** 会话，以及 NyaTerm/Electerm JSON
 - 支持导入 / 导出 NyaTerm 自身的加密 `.nya` 配置备份
 - 可打开日志目录并导出诊断包，便于问题排查与支持协作
 
 ### 云同步
 
-- 通过 **WebDAV**、**S3 兼容**存储、Gist 或网盘 provider 同步 NyaTerm 的可移植配置数据
+- 支持 **WebDAV**、**S3 兼容**存储、**Gitee 代码片段**、**GitHub Gist**、**Google Drive**、**OneDrive** 和 **AliyunDrive** 七类远程存储
 - 在 **设置 → 安全** 配置主密码后，才能启用 **设置 → 云同步** 中的相关能力
 - 支持启动检查、保存后的防抖自动推送和手动推送 / 拉取
 - 当本地和云端都发生变化时，可在设置页或工作区历史面板中手动处理冲突
 
 ## 文档导航建议
 
-如果你是第一次使用，建议按下面顺序阅读：
+第一次使用时按下面顺序阅读：
 
 1. [安装指南](./getting-started/installation)
 2. [快速开始](./getting-started/quick-start)

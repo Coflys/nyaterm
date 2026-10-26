@@ -1,81 +1,98 @@
----
-sidebar_position: 5
----
-
 # 贡献指南
 
-感谢你有兴趣为 NyaTerm 做出贡献！
+感谢你有兴趣为 NyaTerm 做出贡献。
 
 ## 开始之前
 
-1. 确保你已经阅读了 [开发环境搭建](./setup) 文档
-2. 查看 [Issues](https://github.com/nyakang/nyaterm/issues) 列表，了解当前的任务和 Bug
+1. 阅读仓库根目录的 `AGENTS.md` 和 `CONTRIBUTING.md`。
+2. 按照 [开发环境搭建](./setup) 配置 Rust 和平台依赖。
+3. 查看 [Issues](https://github.com/nyakang/nyaterm/issues)，确认问题和预期行为。
+
+## 选择正确的 crate
+
+- 纯模型、解析、兼容格式和策略放在 `nyaterm-core`。
+- 数据库执行和兼容性读取放在 `nyaterm-store`。
+- PTY、SSH、SFTP、Telnet、串口、隧道和传输运行时放在 `nyaterm-transport`。
+- 终端状态机与快照放在 `nyaterm-terminal`；GPUI 终端绘制放在 `nyaterm-terminal-gpui`。
+- GPUI 状态、视图和后台任务协调放在 `nyaterm-desktop`。
+- 共享 GPUI 控件和主题集成放在 `nyaterm-ui`。
+- RDP/VNC 会话管理、输入模型和 IPC 合约放在 `nyaterm-remote-desktop`；协议解码器只放在 `nyaterm-rdp-helper` 和 `nyaterm-vnc-helper`。
+
+跨 crate 修改应保持 adapter 小而明确，并确保每份状态只有一个权威 owner。
 
 ## 贡献流程
 
-1. **Fork 仓库** — 在 Git 平台上 Fork 项目
-2. **创建分支** — 基于 `main` 创建功能分支
-   ```bash
-   git checkout -b feat/my-feature
-   ```
-3. **开发** — 编写代码并测试
-4. **提交** — 使用规范的提交信息
-5. **推送** — 推送到你的 Fork
-6. **创建 PR** — 提交 Pull Request
+1. Fork 仓库并从 `main` 创建分支。
+2. 在正确的 crate 中实现修改并添加相邻测试。
+3. 运行受影响 crate 的检查，再运行相关 workspace 检查。
+4. 使用 Conventional Commit 风格提交。
+5. 推送分支并创建 Pull Request。
+
+```bash
+git checkout -b feat/my-feature
+cargo check -p <crate-name>
+cargo test -p <crate-name>
+```
 
 ## 提交规范
 
-使用 [Conventional Commits](https://www.conventionalcommits.org/) 格式：
+提交主题使用：
 
+```text
+<type>(<scope>): <imperative summary>
 ```
-<type>(<scope>): <description>
-```
-
-常用类型：
-
-| 类型 | 说明 |
-|------|------|
-| `feat` | 新功能 |
-| `fix` | Bug 修复 |
-| `docs` | 文档更新 |
-| `style` | 代码格式（不影响逻辑） |
-| `refactor` | 代码重构 |
-| `perf` | 性能优化 |
-| `chore` | 构建/工具变更 |
 
 示例：
 
+```text
+feat(terminal): add search result navigation
+fix(transport): handle closed SSH channels
+docs: update development setup
 ```
-feat(sftp): add batch file download support
-fix(ssh): handle connection timeout correctly
-docs: update installation guide
+
+常用类型包括 `feat`、`fix`、`docs`、`refactor`、`perf`、`test` 和 `chore`。常用 scope 包括 `terminal`、`transport`、`desktop`、`storage`、`ui`、`ai` 和 `sync`。
+
+## 代码与测试
+
+```bash
+cargo check --workspace
+cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets
 ```
 
-## 代码规范
+- 使用 Rust 2024 idiom、标准 rustfmt 和显式 import。
+- 不要增加 `#[path = "..."]`、`use super::*` 或共享 feature prelude。
+- render 路径中不执行数据库、文件系统、网络或其他阻塞操作。
+- 存储、凭据、加密、备份和同步修改需要新数据 round trip 与代表性旧数据测试。
+- 平台相关窗口、PTY、串口、剪贴板和输入行为需在目标系统验证。
 
-### 前端
+## 国际化与文档
 
-- 使用 TypeScript 严格模式
-- 运行 `pnpm lint` 确保通过代码检查
-- 运行 `pnpm format` 格式化代码
-- 使用函数组件和 Hooks
+新增或修改应用 UI 文本时同步更新：
 
-### 后端
+- `crates/nyaterm-desktop/src/i18n/locales/zh-CN.json`
+- `crates/nyaterm-desktop/src/i18n/locales/en.json`
 
-- 遵循 Rust 标准编码风格
-- 使用 `cargo clippy` 检查代码
-- 使用 `cargo fmt` 格式化代码
-- 合理使用错误处理，避免 `unwrap()`
+修改 docs-site 时同步维护 `docs-site/docs/` 中文源文档和 `docs-site/i18n/en/docusaurus-plugin-content-docs/current/` 英文页面，新增页面还要加入 `docs-site/sidebars.ts`，并运行：
 
-## 国际化
+```bash
+python3 scripts/ci/check_docs_translations.py
+pnpm --dir docs-site build
+```
 
-添加或修改 UI 文本时，请同时更新：
+## 修改第三方依赖
 
-- `src/i18n/locales/zh-CN.json` — 简体中文
-- `src/i18n/locales/zh-TW.json` — 繁體中文
-- `src/i18n/locales/en.json` — English
-- `src/i18n/locales/ko.json` — 한국어
+打了补丁的第三方依赖不在仓库里，而是 [github.com/nyakang](https://github.com/nyakang) 下 fork 的 `nyaterm` 分支上的补丁序列。改动流程见 [开发环境搭建 → 修改第三方依赖](./setup#修改第三方依赖)。
+
+要点：提交到 fork 分支并推送，再在根 `Cargo.toml` 里 bump revision；补丁按关注点拆分；在提交信息和该分支的 `NYATERM.md` 里记录原因和验证方式。PR 描述中需注明改动的 fork 分支和 revision。
+
+**不要改 `temp/`。** 那里是只读副本，不参与编译，改动既不生效也不报错。
+
+## 安全与兼容性
+
+不要提交或记录密码、私钥、OTP、API secret 或未脱敏的终端上下文。持久化修改必须保留现有 table、key、字段名、加密前缀、备份格式和 fallback 行为，除非同时提供经过测试的迁移。
 
 ## 许可证
 
-贡献的代码将遵循项目的 [MIT 许可证](https://github.com/nyakang/nyaterm/blob/main/LICENSE)。
+贡献代码遵循项目的 [Apache License 2.0](https://github.com/nyakang/nyaterm/blob/main/LICENSE)。

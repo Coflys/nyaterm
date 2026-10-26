@@ -1,7 +1,3 @@
----
-sidebar_position: 4
----
-
 # Quick Commands
 
 Quick Commands let you save common commands as reusable actions, then send them to the current terminal from inside the workspace.
@@ -62,6 +58,38 @@ docker exec -it {{container_name}} bash
 
 When you run the command, NyaTerm opens a variable input dialog so the template can be completed before sending it.
 
+## Escape sequences and pauses
+
+These sequences in a command script are interpreted when it is sent:
+
+| Script | Sent |
+|--------|------|
+| `\r` | carriage return |
+| `\n` | line feed |
+| `\t` | tab |
+| `\p` | one second pause before the text that follows |
+| `\\` | a literal backslash |
+
+Any other backslash sequence is left alone, so `\d` in a regular expression and `C:\Users` in a Windows path arrive as typed. Write `\\` when you want one literal backslash.
+
+Device logins, serial menus, and older systems often need "send a chunk, wait a second, send the next one". Put `\p` between the chunks:
+
+```text
+admin\r\psecret\r\pdisplay version
+```
+
+This script sends `admin` and Enter, waits one second, sends `secret` and Enter, then waits another second before sending `display version`. `\p` only pauses; use `\r` to submit each login response. Stacking `\p\p` waits two seconds.
+
+Targets are fixed when the script starts sending (after submitting any variables). Switching tabs during a pause keeps the same targets. New quick commands, typing, or pasting into a target cancel the remaining steps for that session; other targets continue. Disconnecting or closing a session also cancels its remaining steps.
+
+Cancellation only stops content that has not been sent. A prefix already sent to the remote terminal remains there, and new input may be appended to it. For example, replacing `old\pobsolete` with `new command` during the pause may send `oldnew command` to the terminal. Check the remote prompt and existing input before continuing, especially during login interactions. NyaTerm does not automatically send Ctrl+C or clear input because control characters have different meanings across devices and interactive programs.
+
+With synchronized input, or with **Send to all sessions**, every session receives the same staged writes.
+
+`\n` and `\t` only affect the script itself: the execution mode still decides whether the last chunk gets a carriage return, and a script that already ends in `\r` or `\n` does not get another one.
+
+Values you fill into the variable prompt are sent literally: their backslashes are never interpreted as escapes or pauses. Only a `\p` written in the template pauses.
+
 ## Categories, search, sorting, and view modes
 
 The Quick Commands panel supports these management patterns:
@@ -74,7 +102,7 @@ The Quick Commands panel supports these management patterns:
 - Switch between compact and regular views to fit different panel widths
 - Reuse existing categories when creating new commands; imports also try to preserve the category structure from the external file
 
-That makes it useful for organizing sets like:
+Common ways to categorize:
 
 - Kubernetes
 - Docker
@@ -84,7 +112,7 @@ That makes it useful for organizing sets like:
 
 ## Export quick commands
 
-Click **Export Commands** in the upper-right corner of the Quick Commands panel to export the current commands and categories as a NyaTerm JSON file. The exported file is useful for:
+Click **Export Commands** in the upper-right corner of the Quick Commands panel to export the current commands and categories as a NyaTerm JSON file. The exported file can be used to:
 
 - Merging into another device with **Import Quick Commands**
 - Sharing a team template

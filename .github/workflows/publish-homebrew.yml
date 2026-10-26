@@ -2,17 +2,17 @@ name: Publish Homebrew tap
 
 on:
   workflow_run:
-    workflows: ["Build and Release"]
+    workflows: ['Release']
     types: [completed]
-
   workflow_dispatch:
     inputs:
       version:
-        description: "Version without v, e.g. 1.1.13"
+        description: Stable version, with or without v prefix
         required: true
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -22,132 +22,102 @@ concurrency:
 env:
   TAP_REPO: nyakang/homebrew-nyaterm
   TAP_WORKFLOW: update-cask.yml
-  APP_NAME: NyaTerm
 
 jobs:
-  publish-homebrew:
-    name: Trigger Homebrew tap update
-    runs-on: ubuntu-latest
-
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
-
+  publish:
+    name: Update Homebrew cask
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Resolve version
-        id: version
+      - name: Resolve stable release tag
+        id: release
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           INPUT_VERSION: ${{ inputs.version }}
-          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-
-          PUBLISH="true"
-
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            VERSION="${INPUT_VERSION#v}"
+          publish='true'
+          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
+            version="${INPUT_VERSION#v}"
           else
-            REF="${WORKFLOW_HEAD_BRANCH}"
-
-            if [ -z "${REF}" ]; then
-              echo "Cannot resolve workflow_run head_branch."
-              PUBLISH="false"
-              VERSION=""
-            elif [[ "${REF}" != v* ]]; then
-              echo "Skip: triggering workflow was not a version tag: ${REF}"
-              PUBLISH="false"
-              VERSION=""
+            r2_success="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")] | length')"
+            if [[ "${r2_success}" == '1' ]]; then
+              tag="$(git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v*' | awk -v sha="${HEAD_SHA}" '$1 == sha {sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2}' | sort -V | tail -n 1)"
+              version="${tag#v}"
             else
-              VERSION="${REF#v}"
+              version=''
             fi
           fi
-
-          if [ "${PUBLISH}" = "true" ]; then
-            if [[ "${VERSION}" == *-* ]]; then
-              echo "Skip prerelease version for Homebrew stable cask: ${VERSION}"
-              PUBLISH="false"
-            fi
-
-            if ! [[ "${VERSION}" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
-              echo "Skip invalid stable version: ${VERSION}"
-              PUBLISH="false"
-            fi
+          if [[ -z "${version}" || "${version}" == *-* || ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            publish='false'
           fi
-
           {
-            echo "publish=${PUBLISH}"
-            echo "version=${VERSION}"
-            echo "tag=v${VERSION}"
-          } >> "$GITHUB_OUTPUT"
+            echo "publish=${publish}"
+            echo "version=${version}"
+            echo "tag=v${version}"
+          } >> "${GITHUB_OUTPUT}"
 
-          echo "publish=${PUBLISH}"
-          echo "version=${VERSION}"
+      - name: Skip non-stable release
+        if: steps.release.outputs.publish != 'true'
+        run: echo 'No stable Homebrew release to publish.'
 
-      - name: Stop when not publishable
-        if: steps.version.outputs.publish != 'true'
-        run: |
-          echo "Nothing to publish to Homebrew."
-
-      - name: Verify GitHub release assets
-        if: steps.version.outputs.publish == 'true'
+      - name: Verify macOS release assets
+        if: steps.release.outputs.publish == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-
-          gh release view "${TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json tagName,isPrerelease,assets \
-            --jq '.'
-
-          assets="$(gh release view "${TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json assets \
-            --jq '.assets[].name')"
-
-          echo "${assets}"
-
-          required_assets=(
-            "NyaTerm_${VERSION}_macos_x64.dmg"
-            "NyaTerm_${VERSION}_macos_arm64.dmg"
-          )
-
-          for asset in "${required_assets[@]}"; do
-            if ! grep -Fxq "${asset}" <<< "${assets}"; then
-              echo "Missing required Homebrew asset: ${asset}"
+          mkdir verified-dmgs
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir verified-dmgs \
+            --pattern SHA256SUMS --pattern "NyaTerm_${VERSION}_macos_*.dmg" --clobber
+          for arch in x64 arm64; do
+            test -s "verified-dmgs/NyaTerm_${VERSION}_macos_${arch}.dmg" || {
+              echo "missing Homebrew DMG for ${arch}" >&2
               exit 1
-            fi
+            }
           done
+          grep -E "  NyaTerm_${VERSION}_macos_(x64|arm64)\.dmg$" \
+            verified-dmgs/SHA256SUMS > verified-dmgs/DMG-SHA256SUMS
+          [[ "$(wc -l < verified-dmgs/DMG-SHA256SUMS)" -eq 2 ]] || {
+            echo 'SHA256SUMS does not cover both Homebrew DMGs' >&2
+            exit 1
+          }
+          (cd verified-dmgs && sha256sum --check DMG-SHA256SUMS)
 
-      - name: Trigger Homebrew tap workflow
-        if: steps.version.outputs.publish == 'true'
+      - name: Trigger tap workflow
+        if: steps.release.outputs.publish == 'true'
+        id: dispatch
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
+          [[ -n "${GH_TOKEN:-}" ]] || { echo 'HOMEBREW_TAP_TOKEN is required' >&2; exit 1; }
+          echo "dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+          gh workflow run "${TAP_WORKFLOW}" --repo "${TAP_REPO}" -f version="${VERSION}"
 
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "HOMEBREW_TAP_TOKEN secret is required."
-            exit 1
-          fi
-
-          run_url="$(gh workflow run "${TAP_WORKFLOW}" \
-            --repo "${TAP_REPO}" \
-            -f version="${VERSION}")"
-
-          echo "Triggered ${TAP_REPO}/${TAP_WORKFLOW} for version ${VERSION}: ${run_url}"
-
-          run_id="${run_url##*/}"
-          if ! [[ "${run_id}" =~ ^[0-9]+$ ]]; then
-            echo "Cannot resolve Homebrew tap run ID from: ${run_url}"
-            exit 1
-          fi
-
+      - name: Wait for tap update
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          DISPATCHED_AT: ${{ steps.dispatch.outputs.dispatched_at }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_id=''
+          for _ in {1..30}; do
+            run_id="$(gh run list --repo "${TAP_REPO}" --workflow "${TAP_WORKFLOW}" --event workflow_dispatch --limit 20 --json databaseId,createdAt --jq ".[] | select(.createdAt >= \"${DISPATCHED_AT}\") | .databaseId" | head -n 1)"
+            [[ -n "${run_id}" ]] && break
+            sleep 5
+          done
+          [[ -n "${run_id}" ]] || { echo 'timed out locating Homebrew tap run' >&2; exit 1; }
           gh run watch "${run_id}" --repo "${TAP_REPO}" --exit-status
