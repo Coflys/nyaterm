@@ -914,3 +914,64 @@ fn posix_local_shell_cwds_are_translated_for_the_windows_file_browser() {
         });
     });
 }
+
+#[cfg(windows)]
+#[test]
+fn wsl_internal_cwds_navigate_the_browser_through_wsl_localhost() {
+    with_browser(|app, cx, _root| {
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                let SessionLaunchConfig::Local(config) =
+                    &mut app.session.metadata_mut(SESSION).unwrap().launch_config
+                else {
+                    panic!("local session");
+                };
+                config.shell_path = Some("wsl.exe".into());
+                config.shell_args = vec!["-d".into(), "Ubuntu".into()];
+            })
+        });
+        report(app, cx, "/mnt/d/Projects".into());
+        let id = latest_request(app, cx);
+        finish(app, cx, &id, Ok("nyaterm"));
+        assert_directory(app, cx, r"D:\Projects", "nyaterm");
+
+        report(app, cx, "/home/user/notes".into());
+        let id = latest_request(app, cx);
+        finish(app, cx, &id, Ok("nyaterm"));
+        assert_directory(
+            app,
+            cx,
+            r"\\wsl.localhost\Ubuntu\home\user\notes",
+            "nyaterm",
+        );
+
+        // The WSL automount root has no drive-letter form and lands on the 9P
+        // namespace too.
+        report(app, cx, "/mnt".into());
+        let id = latest_request(app, cx);
+        finish(app, cx, &id, Ok("nyaterm"));
+        assert_directory(app, cx, r"\\wsl.localhost\Ubuntu\mnt", "nyaterm");
+
+        // A cwd Windows cannot represent (`:` in a component) must not send the
+        // browser to a POSIX path it would resolve against the current drive.
+        let before = request_count(app, cx);
+        report(app, cx, "/home/user/keep:notes".into());
+        assert_eq!(request_count(app, cx), before);
+
+        // Without a distribution selection there is nothing to navigate to and
+        // the browser keeps its current directory.
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                let SessionLaunchConfig::Local(config) =
+                    &mut app.session.metadata_mut(SESSION).unwrap().launch_config
+                else {
+                    panic!("local session");
+                };
+                config.shell_args = Vec::new();
+            })
+        });
+        let before = request_count(app, cx);
+        report(app, cx, "/home/user/notes".into());
+        assert_eq!(request_count(app, cx), before);
+    });
+}

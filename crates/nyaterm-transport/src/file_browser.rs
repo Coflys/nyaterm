@@ -550,6 +550,45 @@ fn windows_path_for_drive(path: &str) -> Option<String> {
     Some(mapped)
 }
 
+/// Map a WSL cwd that has no drive-letter form (`/mnt`, `/home`, ...) onto the
+/// `\\wsl.localhost\<distro>` namespace the Windows host can actually list.
+/// Paths that are not absolute POSIX paths, or that carry characters a Windows
+/// path cannot represent (`:` is a drive/stream separator, `\` a separator,
+/// NUL terminates the string), are left unmapped rather than silently
+/// reshaped into a different directory.
+fn wsl_unc_browser_path(distro: &str, path: &str) -> Option<String> {
+    if distro.is_empty() {
+        return None;
+    }
+    let rest = path.strip_prefix('/')?;
+    if rest.contains([':', '\\', '\0']) {
+        return None;
+    }
+    let mut mapped = String::with_capacity(distro.len() + path.len() + 16);
+    mapped.push_str(r"\\wsl.localhost\");
+    mapped.push_str(distro);
+    if !rest.is_empty() {
+        mapped.push('\\');
+        mapped.push_str(&rest.replace('/', "\\"));
+    }
+    Some(mapped)
+}
+
+/// Drive-letter translation first, then the WSL UNC namespace for paths the
+/// drive mapping cannot represent. Callers on non-Windows hosts must keep the
+/// original cwd (`/mnt` and `/home` are ordinary directories there).
+pub fn local_shell_cwd_to_browser_path_with_distro(
+    style: LocalShellPathStyle,
+    path: &str,
+    wsl_distro: Option<&str>,
+) -> Option<String> {
+    match style {
+        LocalShellPathStyle::Wsl => local_shell_cwd_to_browser_path(style, path)
+            .or_else(|| wsl_unc_browser_path(wsl_distro.unwrap_or_default(), path)),
+        _ => local_shell_cwd_to_browser_path(style, path),
+    }
+}
+
 pub fn file_browser_path_is_root(kind: FileBrowserBackendKind, path: &str) -> bool {
     file_browser_path_eq(kind, path, &file_browser_root(kind, path))
 }
@@ -631,7 +670,8 @@ mod tests {
     use super::{
         FileBrowserBackendKind, LocalShellPathStyle, file_browser_copy_destination_invalid,
         file_browser_join, file_browser_name, file_browser_parent, file_browser_path_is_root,
-        file_browser_root, local_shell_cwd_to_browser_path, valid_file_browser_child_name,
+        file_browser_root, local_shell_cwd_to_browser_path,
+        local_shell_cwd_to_browser_path_with_distro, valid_file_browser_child_name,
     };
 
     #[test]
@@ -856,6 +896,71 @@ mod tests {
             local_shell_cwd_to_browser_path(
                 LocalShellPathStyle::Msys,
                 "//wsl.localhost/Debian/home"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn wsl_cwd_translation_falls_back_to_the_wsl_localhost_namespace() {
+        fn mapped(path: &str, distro: Option<&str>) -> Option<String> {
+            local_shell_cwd_to_browser_path_with_distro(LocalShellPathStyle::Wsl, path, distro)
+        }
+
+        // Drive-letter forms keep their native Windows mapping.
+        assert_eq!(
+            mapped("/mnt/d/Projects", Some("Debian")),
+            Some(r"D:\Projects".to_string())
+        );
+        assert_eq!(mapped("/mnt/c", Some("Debian")), Some(r"C:\".to_string()));
+
+        // WSL-internal directories land on the 9P namespace the host can list.
+        assert_eq!(
+            mapped("/mnt", Some("Debian")),
+            Some(r"\\wsl.localhost\Debian\mnt".to_string())
+        );
+        assert_eq!(
+            mapped("/home/user/notes", Some("Debian")),
+            Some(r"\\wsl.localhost\Debian\home\user\notes".to_string())
+        );
+        assert_eq!(
+            mapped("/", Some("Debian")),
+            Some(r"\\wsl.localhost\Debian".to_string())
+        );
+        // A user-mounted non-drive directory under /mnt stays browsable.
+        assert_eq!(
+            mapped("/mnt/backup/data", Some("Arch")),
+            Some(r"\\wsl.localhost\Arch\mnt\backup\data".to_string())
+        );
+
+        // Without a distribution name there is nothing to map onto.
+        assert_eq!(mapped("/mnt", None), None);
+        assert_eq!(mapped("/home/user", Some("")), None);
+
+        // Paths that are not absolute POSIX paths, or that carry characters
+        // illegal in a Windows path component, stay unmapped.
+        assert_eq!(mapped("relative/path", Some("Debian")), None);
+        assert_eq!(mapped(r"D:\Projects", Some("Debian")), None);
+        assert_eq!(mapped("/mnt/d:/x", Some("Debian")), None);
+        // A literal backslash would turn into a separator and point at a
+        // different directory, so it stays unmapped too.
+        assert_eq!(mapped(r"/home/user/a\b", Some("Debian")), None);
+
+        // Only the WSL style may fall back: MSYS and native `/` roots are not
+        // the WSL filesystem.
+        assert_eq!(
+            local_shell_cwd_to_browser_path_with_distro(
+                LocalShellPathStyle::Msys,
+                "/home/user",
+                Some("Debian")
+            ),
+            None
+        );
+        assert_eq!(
+            local_shell_cwd_to_browser_path_with_distro(
+                LocalShellPathStyle::Native,
+                "/home/user",
+                Some("Debian")
             ),
             None
         );

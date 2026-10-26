@@ -1,6 +1,9 @@
 use crate::local_shell::ResolvedLocalShell;
 
-use super::{LocalShellIntegration, interactive_args, startup_script, wsl_target};
+use super::{
+    LocalShellIntegration, interactive_args, startup_script, wsl_distro, wsl_distro_from_args,
+    wsl_target,
+};
 
 fn shell(program: &str, args: &[&str]) -> ResolvedLocalShell {
     ResolvedLocalShell {
@@ -119,4 +122,44 @@ fn startup_script_fits_windows_command_line_and_enables_only_cwd() {
     assert!(!script.contains("133;"));
     assert!(!script.contains("NyaTermCommand"));
     assert!(!script.contains('\r'));
+}
+
+#[test]
+fn wsl_distro_uses_explicit_selectors_then_the_host_default() {
+    assert_eq!(
+        wsl_distro_from_args(&["-d".into(), "Ubuntu".into()]),
+        Some("Ubuntu".into())
+    );
+    assert_eq!(
+        wsl_distro_from_args(&["--distribution".into(), "Debian".into()]),
+        Some("Debian".into())
+    );
+    assert_eq!(
+        wsl_distro_from_args(&["--distribution=Arch".into()]),
+        Some("Arch".into())
+    );
+    assert_eq!(
+        wsl_distro_from_args(&["--cd".into(), "/mnt/c".into(), "-d".into(), "NixOS".into()]),
+        Some("NixOS".into())
+    );
+    // Selector flags end at `--exec`; a missing or flag-like value is not a
+    // distribution name.
+    assert_eq!(
+        wsl_distro_from_args(&["--exec".into(), "bash".into()]),
+        None
+    );
+    assert_eq!(wsl_distro_from_args(&["-d".into()]), None);
+    assert_eq!(
+        wsl_distro_from_args(&["-d".into(), "-u".into(), "root".into()]),
+        None
+    );
+    assert_eq!(wsl_distro_from_args(&[]), None);
+
+    // Only WSL launchers carry a distribution.
+    assert_eq!(wsl_distro(&shell("bash.exe", &[])), None);
+    assert_eq!(wsl_distro(&shell("cmd.exe", &[])), None);
+    assert_eq!(
+        wsl_distro(&shell("wsl.exe", &["-d", "Ubuntu"])),
+        Some("Ubuntu".into())
+    );
 }
