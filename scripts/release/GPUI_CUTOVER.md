@@ -147,7 +147,11 @@ not blockers to creating the draft cutover PR.
 4. Save the current root `latest.json` and `downloads.json` from the R2 bucket,
    their public responses and SHA-256 values, current GitHub Latest tag,
    Homebrew/AUR revisions and Gitee release state in a dated operator backup.
-   Keep URLs/configuration only in the record, never credentials.
+   Record object existence at the R2 origin as well: a public 404 alone does not
+   prove the object is absent. At preparation time the public `latest.json` was
+   1.3.1, while root `downloads.json` returned 404. If an origin object is absent,
+   record that fact rather than inventing a backup. Keep URLs/configuration only
+   in the record, never credentials.
 5. Only after all gates pass, create the matching formal tag on final main.
    Tag push automatically starts public publishing; it is not a dry run.
 6. Verify GitHub Latest, all signed update/download URLs, public manifests,
@@ -159,7 +163,9 @@ not blockers to creating the draft cutover PR.
 Stop/cancel the affected Release and downstream publishing runs first so that
 they cannot reapply the faulty channel. Preserve the failed run and evidence.
 Restore **both** root R2 manifests from the saved pre-release copies, with JSON
-content type and `public, max-age=60, must-revalidate`. Verify origin bytes and
+content type and `public, max-age=60, must-revalidate`. If an origin manifest
+was absent before publication, remove only that newly created root manifest to
+restore its recorded absence; do not delete versioned assets. Verify origin bytes and
 public responses, allowing for cache expiration or explicitly purge those URLs.
 Recheck the website's download redirects and manifest-driven links.
 
