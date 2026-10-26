@@ -255,6 +255,7 @@ impl NyaTermApp {
                             .child(
                                 div()
                                     .min_w_0()
+                                    .flex_1()
                                     .flex()
                                     .flex_col()
                                     .gap_1()
