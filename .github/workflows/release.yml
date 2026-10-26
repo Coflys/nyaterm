@@ -414,32 +414,22 @@ jobs:
             fi
           fi
           echo "published_at=$(git show -s --format=%cI HEAD)" >> "${GITHUB_OUTPUT}"
-      - name: Prepare updater signing key
+      - name: Sign and verify legacy updater artifacts
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TAURI_UPDATER_PUBLIC_KEY_B64: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyQUYxQTA2NTYyQTNEOTkKUldTWlBTcFdCaHF2Z29pS0pEdE13U3ZUMVZVTlpGVmQ0YlU2cWlORkdNWU1BY005MU01YjFiU2IK
         run: |
           set -euo pipefail
           if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_B64:-}" || -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
             echo 'Tauri updater signing key and password are required' >&2
             exit 1
           fi
-          key_text="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_B64}" | base64 --decode)"
-          delimiter="TAURI_KEY_$(openssl rand -hex 12)"
-          {
-            echo "TAURI_SIGNING_PRIVATE_KEY<<${delimiter}"
-            printf '%s\n' "${key_text}"
-            echo "${delimiter}"
-          } >> "${GITHUB_ENV}"
-      - name: Sign and verify legacy updater artifacts
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-          TAURI_UPDATER_PUBLIC_KEY_B64: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyQUYxQTA2NTYyQTNEOTkKUldTWlBTcFdCaHF2Z29pS0pEdE13U3ZUMVZVTlpGVmQ0YlU2cWlORkdNWU1BY005MU01YjFiU2IK
-        run: |
-          set -euo pipefail
+          # Keep the decoded key inside this shell; GITHUB_ENV is printed in later steps.
+          TAURI_SIGNING_PRIVATE_KEY="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_B64}" | base64 --decode)"
+          export TAURI_SIGNING_PRIVATE_KEY
           printf '%s' "${TAURI_UPDATER_PUBLIC_KEY_B64}" | base64 --decode > "${RUNNER_TEMP}/nyaterm-updater.pub"
           files=(
             "dist-release/NyaTerm_${VERSION}_macos_arm64.app.tar.gz"
@@ -454,6 +444,7 @@ jobs:
           for file in "${files[@]}"; do
             npx --yes @tauri-apps/cli@2.10.0 signer sign --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" "${file}"
           done
+          unset TAURI_SIGNING_PRIVATE_KEY
           python3 scripts/release/verify_updater_signatures.py \
             --dist dist-release --version "${VERSION}" \
             --public-key "${RUNNER_TEMP}/nyaterm-updater.pub"

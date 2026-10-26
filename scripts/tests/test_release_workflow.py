@@ -59,6 +59,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertNotIn(forbidden, preparation)
         self.assertIn("needs: [preflight, prepare_release]", jobs()["release"])
 
+    def test_decoded_signing_key_is_not_persisted_in_step_environment(self) -> None:
+        preparation = jobs()["prepare_release"]
+        self.assertNotIn('>> "${GITHUB_ENV}"', preparation)
+        self.assertIn("unset TAURI_SIGNING_PRIVATE_KEY", preparation)
+
     def test_later_checkouts_cannot_follow_a_moving_branch(self) -> None:
         for name in ("package", "prepare_release", "r2"):
             self.assertIn("ref: ${{ needs.preflight.outputs.source_sha }}", jobs()[name])
