@@ -2,7 +2,47 @@
 
 审查日期：2026-10-27。本报告记录独立 worktree 中的修复与验证结果；后续提交和推送状态以 PR 历史为准。未执行 PR 评论或合并。
 
-## 工作区与依据
+## 后续审查：作者新增剪贴板改动与 main 集成
+
+本节为 2026-10-27 对当前 PR 的追加审查。下文“首次审查”记录保留为历史证据；其中旧依赖版本、4323 项通过及 GUI 冒烟结果不代表本轮重新验证。
+
+- 本轮获取 PR HEAD：`56d21a5fcf17a0956b120d626aacbfbaaa65d0f3`，来源 `Coflys/nyaterm:main`。
+- 合入 main：`a2479c898b36d3e5fd22f452991d8241ec8e8c79`，包含已合并的 IronRDP 适配 PR #1003。
+- 集成提交：`b3cd4c7a8`；剪贴板超时修复：`549674c35`；代理测试修正：`91d243fcc`；滚动句柄架构说明：`74ba8984e`。保留作者新增的 OLE 剪贴板清理与远端取值串行化。
+
+| 问题 | 证据与修复 | 位置 |
+| --- | --- | --- |
+| PR 固定的 IronRDP 提交无法获取 | `git fetch` 对 `167abe383bab79e5c9017b4a8932930341a39ed9` 返回 `not our ref`。沿用 main 的 `nyakang/IronRDP:nyaterm` 固定版本 `b10cd243bc9442a07fcd776568a5fdaf1c64492f`，统一 crate 版本和锁文件，不编辑缓存或 temp/vendor。 | [Cargo.toml](../../Cargo.toml)、[helper manifest](../../crates/nyaterm-rdp-helper/Cargo.toml)、Cargo.lock |
+| 创建/访问时间扩展不符合 CLIPRDR 文件描述符定义 | 主规范 MS-RDPECLIP §2.2.5.2.3.1 定义 `reserved2` 为 16 字节，要求发送时置零；只定义 `lastWriteTime`。去掉两个未经协商的扩展，保留修改时间和 FILETIME 换算。用实际编码字节断言 reserved2 为零、对应标志未设置、修改时间正确；不能按 Win32 FILEDESCRIPTORW 的本地布局推断协议允许扩展。 | [files.rs](../../crates/nyaterm-rdp-helper/src/clipboard/files.rs)、[protocol_tests.rs](../../crates/nyaterm-rdp-helper/src/clipboard/protocol_tests.rs) |
+| 超时后的迟到响应仍可能覆盖新剪贴板 | 原逻辑超时后丢弃旧请求并立即发送最新请求；不带请求编号的响应会被配给错误代次。先加入回归测试，确认旧逻辑在“迟到响应不得成为新剪贴板”断言失败；改为保留未应答请求，最多排队最新一项，旧响应排空后再发送下一项。每次超时仅通过 typed IPC 报告一次非致命 Clipboard 错误。 | [fetch.rs](../../crates/nyaterm-rdp-helper/src/clipboard/fetch.rs)、[clipboard.rs](../../crates/nyaterm-rdp-helper/src/clipboard.rs)、协议测试 |
+| #1003 macOS CI 的代理测试 WouldBlock | job `122045658160` 日志定位到代理测试接受连接后直接 read。macOS 可继承非阻塞监听模式；测试夹具接受连接后显式恢复 blocking，再设置读取超时。保留监听 deadline 与原有断言，不修改生产代理逻辑。 | [proxy.rs](../../crates/nyaterm-desktop/src/http/ai/proxy.rs) |
+
+CI 的架构检查还发现会话信息窗口缺少 raw-scroll 允许项。该窗口按仓库规则使用 feature state 自持的 ScrollHandle，滚动条挂在非滚动父容器；在 `scripts/ci/architecture_allowlist.json` 为这个路径补充 `max_count=1` 和具体理由，未放宽检测规则。架构检查和其 3 项测试通过。
+
+认证、证书端点隔离和 RDPEGFX 禁用策略继续保留，相关 main 回归测试通过。IPC 仍为 11；无需再次迁移磁盘数据。相较作者新增时间戳提交，创建/访问时间不再传输；修改时间继续传输。这里没有修改 IronRDP fork，本轮依赖变化来自已合并的 #1003。
+
+本轮验证平台：Windows x86_64 MSVC，rustc / cargo 1.99.0。所有日志位于当前 worktree 的 `target/`，未提交。
+
+| 实际命令 | 结果 | 日志 |
+| --- | --- | --- |
+| `cargo test -p nyaterm-rdp-helper -p nyaterm-remote-desktop -p nyaterm-vnc-helper --locked` | 164 passed，0 failed | pr999-current-targeted-final.log |
+| `cargo fmt --all -- --check` | exit 0 | pr999-current-fmt.log |
+| `cargo check --workspace --locked` | exit 0 | pr999-current-check.log |
+| `cargo test --workspace --locked` | exit 0；4396 passed，0 failed，30 ignored，46 suites | pr999-current-tests.log |
+| `cargo clippy --workspace --all-targets --locked` | exit 0，无 warning | pr999-current-clippy.log |
+| `cargo build -p nyaterm-rdp-helper -p nyaterm-vnc-helper --locked` | exit 0 | pr999-current-helpers.log |
+| `python scripts/ci/check_architecture.py` | exit 0 | pr999-current-architecture.log |
+| `python -m unittest scripts.tests.test_check_architecture` | exit 0，3 tests | pr999-current-architecture-tests.log |
+
+每条命令的退出码另存同名 `.exit`；workspace 数量见 `pr999-current-test-summary.json`。有意失败的修复前回归测试见 `pr999-current-timeout-red.log`；修复后的同项测试及新增编码协议回归均已通过。代理测试在本轮 workspace 中通过，尚未取得本修复的 macOS CI 结果。
+
+额外限制：若对端永远不回应未完成的 FormatData 请求，后续取值会继续等待，需要重连恢复；不能在同一无编号通道上直接重试并声称配对安全。文本请求与文件列表共用此串行状态；现有文件 watcher 负责超时提示，关闭文件剪贴板时不启动该 watcher。
+
+本轮没有可用真实 RDP/VNC 服务端，也未执行 macOS/Linux 实机、系统剪贴板交互或硬件/WARP 切换。首次审查的 GUI 冒烟未在本轮重复；不得将协议模拟测试等同真实服务端验证。
+
+当前建议：本轮代码可进入复审，仍应等待 PR 跨平台 CI 并补做真实服务端剪贴板与认证/重连验证。PR 原说明仍提及自定义日志桥接及可启用 RDPEGFX，应以修复后代码和本报告为准；本轮不发表评论或执行合并。
+
+## 首次审查：工作区与依据
 
 - 原仓库：`E:\Projects\Rust\nyaterm`。本次不修改原工作区的其他进行中改动。
 - 修复 worktree：`E:\Projects\Rust\nyaterm-pr-999`。
