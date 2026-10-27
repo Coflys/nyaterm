@@ -5278,6 +5278,151 @@ fn cloud_sync_settings_encrypt_and_merge_masked_provider_secrets() {
 }
 
 #[test]
+fn ai_headers_without_api_key_encrypt_roundtrip_and_reject_invalid_updates() {
+    let dir = unique_temp_dir("ai-header-only");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = AiSettings::default();
+    settings.provider_credentials[0].extra_headers = vec![nyaterm_core::AiHttpHeader {
+        id: "header-fixture".into(),
+        name: "Authorization".into(),
+        value: "Bearer header-only-fixture".into(),
+    }];
+    assert!(settings.provider_credentials[0].api_key.is_none());
+    let saved = store.save_ai_settings(settings).unwrap();
+    let raw = store
+        .read_json_table::<serde_json::Value>(SETTINGS_TABLE, SETTINGS_DEFAULT)
+        .unwrap()
+        .unwrap();
+    assert!(!raw.to_string().contains("header-only-fixture"));
+    assert!(store.load_master_key_token().unwrap().is_some());
+    assert_eq!(store.load_ai_settings().unwrap(), saved);
+    assert_eq!(
+        store
+            .save_ai_settings(nyaterm_core::mask_ai_settings(saved.clone()))
+            .unwrap(),
+        saved
+    );
+
+    let restore_dir = unique_temp_dir("ai-header-only-restore");
+    let restore = ConnectionStore::open(&restore_dir).unwrap();
+    for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "fixture", "2.0.0")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        assert!(!snapshot.entities["settings"].contains("header-only-fixture"));
+        restore.apply_raw_portable_snapshot(&snapshot).unwrap();
+        assert_eq!(restore.load_ai_settings().unwrap(), saved);
+    }
+    for (name, value) in [
+        ("Host", "test"),
+        ("X-Token", "line\r\nbreak"),
+        ("X-Token", "中文"),
+        ("X-Token", ""),
+    ] {
+        let mut next = saved.clone();
+        next.provider_credentials[0].extra_headers[0].name = name.into();
+        next.provider_credentials[0].extra_headers[0].value = value.into();
+        assert!(store.save_ai_settings(next).is_err());
+        assert_eq!(store.load_ai_settings().unwrap(), saved);
+    }
+    let mut duplicate = saved.clone();
+    let mut header = duplicate.provider_credentials[0].extra_headers[0].clone();
+    header.id = "other".into();
+    header.name = "AUTHORIZATION".into();
+    duplicate.provider_credentials[0].extra_headers.push(header);
+    assert!(store.save_ai_settings(duplicate).is_err());
+    assert_eq!(store.load_ai_settings().unwrap(), saved);
+
+    store
+        .save_master_password(Some("header-sync-password"))
+        .unwrap();
+    let mut snapshot = store
+        .build_raw_portable_snapshot(PortableSnapshotKind::Sync, "fixture", "2.0.0")
+        .unwrap();
+    snapshot.recalculate_hash().unwrap();
+    restore
+        .save_master_password(Some("header-local-password"))
+        .unwrap();
+    assert!(
+        restore
+            .apply_cloud_sync_snapshot(&restore_dir, &snapshot, "wrong-fixture-password")
+            .is_err()
+    );
+    restore
+        .apply_cloud_sync_snapshot(&restore_dir, &snapshot, "header-sync-password")
+        .unwrap();
+    assert_eq!(restore.load_ai_settings().unwrap(), saved);
+
+    let mut corrupted = store.load_settings_value().unwrap();
+    corrupted["ai"]["provider_credentials"][0]["extra_headers"][0]["value"] =
+        serde_json::json!("enc:v1:deliberately-corrupted-fixture");
+    store.save_settings_value(&corrupted).unwrap();
+    assert!(store.load_ai_settings().is_err());
+    assert!(store.save_ai_settings(saved).is_err());
+    assert_eq!(store.load_settings_value().unwrap(), corrupted);
+}
+
+#[test]
+fn repaired_ai_header_ids_preserve_encrypted_values_and_unknown_extensions() {
+    let dir = unique_temp_dir("ai-header-import-ids");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = AiSettings::default();
+    for credential in settings.provider_credentials.iter_mut().take(2) {
+        credential.extra_headers = vec![
+            nyaterm_core::AiHttpHeader {
+                id: "first".into(),
+                name: "X-First".into(),
+                value: "first-fixture".into(),
+            },
+            nyaterm_core::AiHttpHeader {
+                id: "second".into(),
+                name: "X-Second".into(),
+                value: "second-fixture".into(),
+            },
+        ];
+    }
+    store.save_ai_settings(settings).unwrap();
+    let mut imported = store.load_settings_value().unwrap();
+    for credential in imported["ai"]["provider_credentials"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .take(2)
+    {
+        let headers = credential["extra_headers"].as_array_mut().unwrap();
+        headers[0]["id"] = serde_json::json!("shared");
+        headers[0]["future_header"] = serde_json::json!({"keep": "first-extension"});
+        headers[1]["id"] = serde_json::json!("shared");
+        headers[1]["future_header"] = serde_json::json!({"keep": "second-extension"});
+    }
+    store.save_settings_value(&imported).unwrap();
+    let loaded = store.load_ai_settings().unwrap();
+    let saved = store
+        .save_ai_settings(nyaterm_core::mask_ai_settings(loaded.clone()))
+        .unwrap();
+    assert_eq!(saved, loaded);
+    let raw = store.load_settings_value().unwrap();
+    for credential in raw["ai"]["provider_credentials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(2)
+    {
+        assert_eq!(
+            credential["extra_headers"][0]["future_header"]["keep"],
+            "first-extension"
+        );
+        assert_eq!(
+            credential["extra_headers"][1]["future_header"]["keep"],
+            "second-extension"
+        );
+    }
+    assert!(!raw.to_string().contains("first-fixture"));
+    assert!(!raw.to_string().contains("second-fixture"));
+}
+
+#[test]
 fn ai_settings_encrypt_and_merge_masked_provider_secrets() {
     let dir = unique_temp_dir("ai-settings");
     let store = ConnectionStore::open(&dir).expect("store");
@@ -5401,7 +5546,7 @@ fn ai_settings_loads_and_normalizes_legacy_embedded_settings() {
     store.save_settings_value(&raw).expect("save raw settings");
 
     let loaded = store.load_ai_settings().expect("load ai");
-    assert_eq!(loaded.schema_version, 6);
+    assert_eq!(loaded.schema_version, 7);
     assert_eq!(loaded.active_profile_id, "ollama");
     assert_eq!(loaded.default_model_id.as_deref(), Some("ollama:llama3"));
     assert!(!loaded.provider_credentials.is_empty());
@@ -5461,7 +5606,7 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
     store.save_settings_value(&raw).expect("seed settings");
 
     let mut loaded = store.load_ai_settings().expect("load settings");
-    assert_eq!(loaded.schema_version, 6);
+    assert_eq!(loaded.schema_version, 7);
     assert_eq!(
         loaded.external_mcp.terminal_display_mode,
         nyaterm_core::McpTerminalDisplayMode::Inline
