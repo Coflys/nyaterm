@@ -277,10 +277,12 @@ pub(super) fn connection_editor_ssh_section(
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::Div {
     let content = match section.editor.section {
-        ConnectionEditorSection::Basic => ssh_basic(section, cx),
-        ConnectionEditorSection::Authentication => {
-            ssh_authentication(section, labels.otp, options.auth, cx)
-        }
+        ConnectionEditorSection::Basic => div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(ssh_basic(section, cx))
+            .child(ssh_authentication(section, labels.otp, options.auth, cx)),
         ConnectionEditorSection::Network => ssh_network(section, labels.proxy, labels.jump, cx),
         ConnectionEditorSection::Forwarding => ssh_forwarding(section, cx),
         ConnectionEditorSection::PostLogin => ssh_post_login(section, cx),

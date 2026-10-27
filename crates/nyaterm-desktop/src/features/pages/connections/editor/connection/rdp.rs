@@ -64,8 +64,12 @@ pub(super) fn connection_editor_rdp_section(
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::Div {
     let content = match section.editor.section {
-        ConnectionEditorSection::Basic => rdp_basic(section, cx),
-        ConnectionEditorSection::Authentication => rdp_authentication(section, cx),
+        ConnectionEditorSection::Basic => div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(rdp_basic(section, cx))
+            .child(rdp_authentication(section, cx)),
         ConnectionEditorSection::Security => rdp_security(section, cx),
         ConnectionEditorSection::Network => rdp_network(section, cx),
         ConnectionEditorSection::Display => rdp_display(section, cx),

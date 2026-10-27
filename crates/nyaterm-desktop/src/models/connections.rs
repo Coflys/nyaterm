@@ -50,7 +50,6 @@ impl ConnectionKindTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionEditorSection {
     Basic,
-    Authentication,
     Network,
     Terminal,
     Sftp,
@@ -71,7 +70,6 @@ impl ConnectionEditorSection {
         match kind {
             ConnectionKindTab::Ssh => &[
                 Self::Basic,
-                Self::Authentication,
                 Self::Network,
                 Self::Terminal,
                 Self::Sftp,
@@ -81,14 +79,12 @@ impl ConnectionEditorSection {
             ],
             ConnectionKindTab::Telnet => &[
                 Self::Basic,
-                Self::Authentication,
                 Self::AutoLogin,
                 Self::Terminal,
                 Self::Compatibility,
             ],
             ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => &[
                 Self::Basic,
-                Self::Authentication,
                 Self::Network,
                 Self::Security,
                 Self::Display,
@@ -102,7 +98,6 @@ impl ConnectionEditorSection {
     pub(crate) fn id(self) -> &'static str {
         match self {
             Self::Basic => "basic",
-            Self::Authentication => "authentication",
             Self::Network => "network",
             Self::Terminal => "terminal",
             Self::Sftp => "sftp",
@@ -122,7 +117,6 @@ impl ConnectionEditorSection {
     pub(crate) fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
             Self::Basic => t!("dialog.editorSections.basic"),
-            Self::Authentication => t!("dialog.editorSections.authentication"),
             Self::Network => t!("dialog.editorSections.network"),
             Self::Terminal => t!("dialog.editorSections.terminal"),
             Self::Sftp => t!("dialog.editorSections.sftp"),
@@ -265,12 +259,12 @@ impl ConnectionEditorField {
             | Self::NewGroupName
             | Self::Description
             | Self::Host
-            | Self::Port => ConnectionEditorSection::Basic,
-            Self::Username
+            | Self::Port
+            | Self::Username
             | Self::Domain
             | Self::Password
             | Self::AgentEnvironmentVariable
-            | Self::AgentUnixSocket => ConnectionEditorSection::Authentication,
+            | Self::AgentUnixSocket => ConnectionEditorSection::Basic,
             Self::AgentForwardingEnvironmentVariable | Self::AgentForwardingSocketPath => {
                 ConnectionEditorSection::Forwarding
             }
