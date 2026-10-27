@@ -60,6 +60,11 @@ impl DesktopController {
         let Some(runtime_store) = self.startup.shared_store_runtime() else {
             return;
         };
+        if let Some(at) =
+            crate::features::sync::io_runtime::CloudSyncIoRuntime::shared().last_check()
+        {
+            self.auto_sync.observed_remote_check(at);
+        }
         let now = Instant::now();
         let generation = runtime_store.sync_mutation_generation();
         let windows = &self.windows;

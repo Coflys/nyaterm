@@ -193,3 +193,57 @@ the preview instead of selecting a substitute. A new commit arriving after the
 publication check remains concurrent and is reported on the next check. Existing
 master-password guards, checked local apply, session restrictions, safety backup
 and causal resolution commits remain in force. There is no field-level merge.
+
+
+## Bounded checks and application-body traffic
+
+The desktop process shares an in-memory I/O runtime across windows and provider
+instances. S3 conditionally reads `latest.redb` and device heads with opaque
+ETags. Every effective check still lists device heads: an unchanged compatibility
+pointer does not prove the absence of a concurrent device commit. Fresh LIST
+validators can reuse unchanged head bytes. Missing validators require reads;
+unsupported conditionals fall back to GET without bypassing auth or rate limits.
+Metadata uses a 16 MiB / 1,024-entry LRU. Writes and deletes invalidate before
+I/O, so upload readback cannot be satisfied by pre-write cached bytes.
+
+All providers can reuse authenticated snapshot summaries for automatic checks
+for at most 24 hours. Receipts match the complete pointer, including causal clock;
+only a successful full validation advances their timestamp. Changed pointers,
+remote configuration, credentials, master passwords, cold startup or cache
+eviction require full reads. Receipts and secret-free conflict differences are
+memory-only; decrypted entity bodies are not retained. Conflict summaries also
+match the full branch set and local content hash. Unreadable branches and failed
+validations never become successful cache entries. Actual push, pull, recovery
+and conflict confirmation still validate snapshots; an already decoded snapshot
+from the same check can be reused. GC retains its full authentication and
+pre-deletion checks, daily throttle and existing retention policy.
+
+Providers without conditional metadata capabilities still transfer their pointer
+and directory API responses. Gist/Snippet container responses can include file
+contents, so avoiding an explicit snapshot read does not imply that the provider
+transfers metadata alone. The S3 traffic fixture does not predict those APIs.
+
+Pure local-change notifications whose entity hash equals the synchronized
+baseline can skip network I/O when no remote state is pending. Startup, periodic,
+settings and retry requests are not discarded by local notifications. Periodic
+inspection still runs during continuous changes while upload debounce remains
+in force. Successful device-head inspections, including manual synchronization,
+reset the 15-minute timer and suppress focus checks for 120 seconds; connection
+tests and local no-ops do not count as inspections. Disabling startup checks
+continues to leave periodic checks enabled.
+
+Controlled operation summaries report requests, submitted upload-body bytes,
+received download-body bytes (including error bodies and retries), 304 responses,
+cache hits and full-validation attempts. All providers count at their HTTP
+boundary, including authentication retries and consumed error bodies. Upload
+bytes are the buffered body submitted for each attempt; download bytes include
+partial reads before a failure. Statistics omit headers, TLS and billing-specific
+accounting.
+No URLs, paths, ETags, credentials or entity data appear in these summaries.
+
+The deterministic regression models three devices, 1 MiB snapshots, the existing
+1,056,768-byte pointer, 64 checks/day for 30 days, and unchanged data. Warm checks
+receive no object bodies until daily validation; modeled object-body downloads
+must decrease by at least 95%. This is a simulation, not a real-provider billing
+measurement. No remote filenames, serialization/encryption formats, database
+keys or persisted sync-state fields change for this optimization.

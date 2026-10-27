@@ -1,3 +1,4 @@
+use super::metrics::{CountedRequest, CountedResponse};
 use std::time::Duration;
 
 use nyaterm_core::{
@@ -43,20 +44,17 @@ impl SnippetHttpClient for NativeSnippetHttpClient {
         }
 
         let response = builder
-            .send()
+            .send_counted()
             .map_err(|error| super::helpers::safe_http_error(provider, error))?;
         let status = response.status().as_u16();
+        let retry = super::helpers::retry_after_seconds(response.headers());
         if matches!(status, 401 | 403 | 429 | 500..=599) {
+            let _ = response.bytes_counted();
             return Err(super::helpers::http_failure(
-                provider,
-                "request",
-                status,
-                super::helpers::retry_after_seconds(response.headers()),
+                provider, "request", status, retry,
             ));
         }
-        let body = response
-            .text()
-            .map_err(|error| super::helpers::safe_http_error(provider, error))?;
+        let body = response.text_counted()?;
         Ok(SnippetHttpResponse { status, body })
     }
 }

@@ -7,6 +7,7 @@ pub(in crate::app_shell::controller) struct AutoSyncCoordinator {
     next_due: Instant,
     next_periodic: Instant,
     last_focus: Option<Instant>,
+    last_remote_check: Option<Instant>,
     mutation_generation: u64,
     in_flight_generation: u64,
     change_since: Option<Instant>,
@@ -36,12 +37,14 @@ impl AutoSyncCoordinator {
             return None;
         }
         self.record_sync_mutation(generation);
-        if now >= self.next_periodic {
-            self.next_periodic = now + Duration::from_secs(15 * 60);
-            if self.pending.is_none() {
-                self.pending = Some(AutoSyncTrigger::Periodic);
-                self.next_due = now;
-            }
+        if now >= self.next_periodic
+            && matches!(
+                self.pending,
+                None | Some(AutoSyncTrigger::Change | AutoSyncTrigger::Focus)
+            )
+        {
+            self.pending = Some(AutoSyncTrigger::Periodic);
+            self.next_due = now;
         }
         if self.paused || self.retry_not_before.is_some_and(|deadline| now < deadline) {
             return None;
@@ -66,9 +69,13 @@ impl AutoSyncCoordinator {
         Some(AutoSyncJob {
             trigger,
             pull_safe,
-            change_elapsed: self
-                .change_since
-                .map_or(Duration::ZERO, |since| now.saturating_duration_since(since)),
+            change_elapsed: self.change_since.map_or(Duration::ZERO, |since| {
+                // Zero means there is no pending mutation. A generation
+                // first observed during this tick still needs debounce,
+                // even when `now` was captured just before its timestamp.
+                now.saturating_duration_since(since)
+                    .max(Duration::from_nanos(1))
+            }),
         })
     }
 
@@ -85,10 +92,34 @@ impl AutoSyncCoordinator {
         }
         let now = Instant::now();
         self.running = false;
+        if matches!(
+            result,
+            Ok(AutoSyncResult::RemoteAvailable { .. }
+                | AutoSyncResult::Synced(_)
+                | AutoSyncResult::UpToDate(_))
+        ) || (trigger != AutoSyncTrigger::Change
+            && matches!(result, Ok(AutoSyncResult::Debouncing(_))))
+            || matches!(result, Err(nyaterm_core::CloudSyncError::Conflict(_)))
+        {
+            self.observed_remote_check(now);
+        }
         match result {
             Ok(AutoSyncResult::Debouncing(remaining)) => {
-                self.pending = Some(AutoSyncTrigger::Change);
-                self.next_due = now + *remaining;
+                if matches!(
+                    self.pending,
+                    None | Some(AutoSyncTrigger::Change | AutoSyncTrigger::Focus)
+                ) {
+                    self.pending = Some(AutoSyncTrigger::Change);
+                    self.next_due = now + *remaining;
+                }
+            }
+            Ok(AutoSyncResult::Skipped) if trigger == AutoSyncTrigger::Change => {
+                if self.mutation_generation == self.in_flight_generation {
+                    self.change_since = None;
+                    if self.pending == Some(AutoSyncTrigger::Change) {
+                        self.pending = None;
+                    }
+                }
             }
             Ok(AutoSyncResult::Busy) => {
                 self.pending = Some(trigger);
@@ -132,7 +163,8 @@ impl AutoSyncCoordinator {
                     .unwrap_or(now + Duration::from_secs(86_400 * 365 * 100));
                 self.retry_not_before = Some(self.next_due);
             }
-            _ => {}
+            Ok(AutoSyncResult::Disabled) => self.paused = true,
+            Ok(AutoSyncResult::Skipped) => {}
         }
     }
 
@@ -233,8 +265,13 @@ impl AutoSyncCoordinator {
         self.mutation_generation = generation;
         let now = Instant::now();
         self.change_since = Some(now);
-        self.pending = Some(AutoSyncTrigger::Change);
-        self.next_due = now + Duration::from_secs(1);
+        if matches!(
+            self.pending,
+            None | Some(AutoSyncTrigger::Change | AutoSyncTrigger::Focus)
+        ) {
+            self.pending = Some(AutoSyncTrigger::Change);
+            self.next_due = now + Duration::from_secs(1);
+        }
     }
 
     pub(in crate::app_shell::controller) fn new(mutation_generation: u64) -> Self {
@@ -245,6 +282,7 @@ impl AutoSyncCoordinator {
             next_due: now + Duration::from_secs(3),
             next_periodic: now + Duration::from_secs(15 * 60),
             last_focus: None,
+            last_remote_check: None,
             mutation_generation,
             in_flight_generation: mutation_generation,
             change_since: None,
@@ -262,14 +300,32 @@ impl AutoSyncCoordinator {
         self.paused = false;
         self.failures = 0;
         self.retry_not_before = None;
-        if self.pending != Some(AutoSyncTrigger::Change) {
-            self.pending = Some(AutoSyncTrigger::Settings);
-            self.next_due = Instant::now();
+        self.pending = Some(AutoSyncTrigger::Settings);
+        self.next_due = Instant::now();
+    }
+
+    pub(in crate::app_shell::controller) fn observed_remote_check(&mut self, at: Instant) {
+        if self.last_remote_check.is_none_or(|old| at > old) {
+            self.last_remote_check = Some(at);
+            self.next_periodic = at + Duration::from_secs(15 * 60);
+            if self.pending == Some(AutoSyncTrigger::Focus) {
+                self.pending = None;
+            }
+            if self.pending == Some(AutoSyncTrigger::Periodic) {
+                self.pending = self.change_since.map(|_| AutoSyncTrigger::Change);
+                self.next_due = at + Duration::from_secs(1);
+            }
         }
     }
 
     pub(in crate::app_shell::controller) fn focused(&mut self) {
         let now = Instant::now();
+        if self
+            .last_remote_check
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(120))
+        {
+            return;
+        }
         if self
             .last_focus
             .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(120))

@@ -1,3 +1,4 @@
+use super::metrics::{CountedRequest, CountedResponse};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -78,7 +79,7 @@ fn run_device_flow(
             .post(GITHUB_DEVICE_CODE_URL)
             .header("Accept", "application/json")
             .form(&[("client_id", client_id), ("scope", GITHUB_GIST_SCOPE)])
-            .send()
+            .send_counted()
             .map_err(map_http_error)?,
         "GitHub device authorization",
     )?;
@@ -110,7 +111,7 @@ fn run_device_flow(
                     ("device_code", device.device_code.as_str()),
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                 ])
-                .send()
+                .send_counted()
                 .map_err(map_http_error)?,
             "GitHub access token",
         )?;
@@ -177,7 +178,7 @@ fn fetch_github_login(client: &Client, access_token: &str) -> Result<String, Str
             client.get(format!("{GITHUB_API_ENDPOINT}/user")),
             access_token,
         )
-        .send()
+        .send_counted()
         .map_err(map_http_error)?,
         "GitHub user",
     )?;
@@ -198,7 +199,7 @@ fn resolve_github_gist_id(
             client.get(format!("{GITHUB_API_ENDPOINT}/gists/{gist_id}")),
             access_token,
         )
-        .send()
+        .send_counted()
         .map_err(map_http_error)?;
         if response.status().is_success() {
             return Ok(gist_id.to_string());
@@ -222,7 +223,7 @@ fn resolve_github_gist_id(
                 }
             }
         }))
-        .send()
+        .send_counted()
         .map_err(map_http_error)?,
         "GitHub Gist creation",
     )?;
@@ -244,7 +245,7 @@ fn decode_json<T: serde::de::DeserializeOwned>(
     operation: &str,
 ) -> Result<T, String> {
     let status = response.status();
-    let body = response.text().map_err(map_http_error)?;
+    let body = response.text_counted().map_err(|error| error.to_string())?;
     if !status.is_success() {
         return Err(format!("{operation} failed ({status})"));
     }
@@ -253,7 +254,7 @@ fn decode_json<T: serde::de::DeserializeOwned>(
 
 fn response_error(response: Response, operation: &str) -> String {
     let status = response.status();
-    let _body = response.text().unwrap_or_default();
+    let _body = response.text_counted().unwrap_or_default();
     format!("{operation} failed ({status})")
 }
 

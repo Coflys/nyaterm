@@ -64,6 +64,36 @@ pub(crate) fn run_auto_sync(
     before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
     controls: &AutoSyncOperationControls,
 ) -> Result<AutoSyncResult, CloudSyncError> {
+    let mut scope = super::io_runtime::IoScope::new(trigger.history_name());
+    let result = run_auto_sync_inner(
+        store,
+        runtime,
+        trigger,
+        change_elapsed,
+        pull_safe,
+        before_apply,
+        controls,
+    );
+    scope.finish(&result);
+    match &result {
+        Ok(AutoSyncResult::Disabled) => scope.skipped("disabled"),
+        Ok(AutoSyncResult::Skipped) => scope.skipped("skipped"),
+        Ok(AutoSyncResult::Busy) => scope.skipped("busy"),
+        Ok(AutoSyncResult::Debouncing(_)) => scope.skipped("debouncing"),
+        _ => {}
+    }
+    result
+}
+
+fn run_auto_sync_inner(
+    store: &StoreBlockingClient,
+    runtime: &AppRuntime,
+    trigger: AutoSyncTrigger,
+    change_elapsed: Duration,
+    pull_safe: bool,
+    before_apply: &dyn Fn() -> Result<(), CloudSyncError>,
+    controls: &AutoSyncOperationControls,
+) -> Result<AutoSyncResult, CloudSyncError> {
     controls.sync.checkpoint()?;
     let _operation = match crate::features::cloud_sync_operation_lock().try_lock() {
         Ok(guard) => guard,
@@ -94,10 +124,34 @@ pub(crate) fn run_auto_sync(
         master_password: password,
         enabled: true,
     };
+    if trigger == AutoSyncTrigger::Change {
+        let caches = super::io_runtime::CloudSyncIoRuntime::shared().caches(
+            store,
+            &settings,
+            Some(&options),
+        )?;
+        if !caches
+            .pending_remote
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            use nyaterm_core::cloud_sync::CloudLocalStore;
+            let local = store.build_sync_snapshot(&options)?;
+            if state.last_synced_content_hash.as_deref()
+                == Some(local.sync_content_hash()?.as_str())
+            {
+                controls.sync.checkpoint()?;
+                return Ok(AutoSyncResult::Skipped);
+            }
+        }
+    }
     let checked = check_provider_snapshot(store, &settings, &options, &state, &controls.sync)?;
     let revision = checked.pointer.as_ref().map(|p| p.revision_id.clone());
     match checked.decision {
         CloudRemoteCheckDecision::LocalChanged if settings.auto_push_on_change => {
+            let debounce = Duration::from_secs(settings.sync_debounce_seconds.clamp(1, 3_600));
+            if !change_elapsed.is_zero() && change_elapsed < debounce {
+                return Ok(AutoSyncResult::Debouncing(debounce - change_elapsed));
+            }
             let result = push_checked_provider_snapshot(
                 store,
                 &settings,
@@ -274,6 +328,85 @@ mod tests {
     use super::{AutoSyncResult, AutoSyncTrigger, auto_sync_skip};
     use nyaterm_core::CloudSyncSettings;
     use std::time::Duration;
+
+    #[test]
+    fn cloud_sync_unchanged_local_notification_skips_all_network_requests() {
+        use crate::features::sync::io_runtime::IoScope;
+        use crate::features::sync::operation::AutoSyncOperationControls;
+        use crate::test_support::{TestConfigDir, blocking_test_store};
+        use nyaterm_core::cloud_sync::CloudLocalStore;
+        use nyaterm_core::{AppRuntime, LocalCloudSyncOptions, RuntimeMode};
+        use nyaterm_store::StoreDomain;
+        let dir = TestConfigDir::new("nyaterm-cloud-sync-unchanged-notification");
+        let store = blocking_test_store(dir.path());
+        store
+            .request_fn(StoreDomain::CloudSync, |s| {
+                s.save_master_password(Some("fixture-password"))?;
+                let settings = CloudSyncSettings {
+                    enabled: true,
+                    provider: "s3".into(),
+                    ..Default::default()
+                };
+                // Invalid storage configuration makes any accidental connection fail.
+                s.save_cloud_sync_settings(settings)?;
+                Ok(())
+            })
+            .unwrap();
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            dir.path().into(),
+            dir.join("config"),
+            dir.join("logs"),
+            dir.join("cache"),
+            None,
+        );
+        let mut state = store
+            .request_fn(StoreDomain::CloudSync, |s| s.load_cloud_sync_state())
+            .unwrap();
+        let options = LocalCloudSyncOptions {
+            config_dir: dir.join("config"),
+            portable_key_path: None,
+            remote_dir: dir.join("cloud-sync-local"),
+            remote_root: "nyaterm".into(),
+            device_id: state.device_id.clone(),
+            device_name: None,
+            app_version: "test".into(),
+            master_password: "fixture-password".into(),
+            enabled: true,
+        };
+        state.last_synced_content_hash = Some(
+            store
+                .build_sync_snapshot(&options)
+                .unwrap()
+                .sync_content_hash()
+                .unwrap(),
+        );
+        store
+            .request_fn(StoreDomain::CloudSync, move |s| {
+                s.save_cloud_sync_state(&state)
+            })
+            .unwrap();
+        let scope = IoScope::new("fixture");
+        // Other unit tests may briefly own the process operation lock.
+        let mut result = Ok(AutoSyncResult::Busy);
+        for _ in 0..200 {
+            result = super::run_auto_sync(
+                &store,
+                &runtime,
+                AutoSyncTrigger::Change,
+                Duration::from_secs(61),
+                true,
+                &|| Ok(()),
+                &AutoSyncOperationControls::default(),
+            );
+            if !matches!(result, Ok(AutoSyncResult::Busy)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(result, Ok(AutoSyncResult::Skipped)));
+        assert_eq!(scope.stats.lock().unwrap().requests, 0);
+    }
 
     #[test]
     fn github_gist_uses_every_background_trigger_and_the_same_switches_and_debounce() {

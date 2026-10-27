@@ -337,3 +337,39 @@ checks do not add entries. Identical classification/trigger/revision failures ar
 deduplicated for 15 minutes. HTTP diagnostics contain controlled classifications,
 provider, operation and status, without URLs, signed addresses or response bodies.
 History write failures do not change an already successful sync outcome.
+
+
+## Background checks and traffic
+
+Automatic checks inspect the pointer and every device head. An authenticated,
+unchanged snapshot is fully downloaded and validated at most once per 24-hour
+receipt lifetime; lightweight checks do not extend that lifetime. When S3
+supports ETags, unchanged pointers return 304 and fresh listing validators allow
+head metadata reuse. Services without conditional support fall back to GET.
+
+Windows share memory-only caches within one process. Restarting, changing remote
+configuration/accounts/credentials/master passwords, eviction and changed
+branches may require full reads. Actual push, pull, recovery and conflict
+confirmation still validate snapshots. Daily cleanup, upload readback and the
+compatibility snapshot also consume traffic.
+
+Local notifications with unchanged synchronized content can skip networking.
+Continuous editing does not delay periodic remote checks, while upload debounce
+still applies. Successful manual or automatic inspections postpone the next
+periodic check and suppress duplicate focus checks for 120 seconds. Connection
+tests do not count as inspections. Disabling startup checks does not disable the
+15-minute periodic checks.
+
+Other providers still transfer their pointer and directory API responses.
+Gist/Snippet container responses may also include file contents. The daily limit
+applies to explicit snapshot reads and validation; it does not guarantee that
+every provider sends only metadata during a lightweight check.
+
+Controlled logs summarize request counts, upload/download body bytes, 304s,
+cache hits and full validations. All providers count at the HTTP boundary,
+including authentication retries and consumed error bodies. Upload bytes measure
+the buffered body submitted for each attempt; downloads include partial reads
+before failure. These exclude headers and TLS and are not billing figures.
+Summaries contain no addresses, object
+paths, ETags, credentials or synchronized content. Actual traffic depends on
+uptime, device count, snapshot size, edits, retries and storage capabilities.

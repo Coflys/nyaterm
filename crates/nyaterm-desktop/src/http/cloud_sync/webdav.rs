@@ -1,3 +1,4 @@
+use super::metrics::{CountedRequest, CountedResponse};
 use std::time::Duration;
 
 use nyaterm_core::{CloudSyncError, CloudSyncRemote, WebdavSyncSettings};
@@ -93,6 +94,7 @@ impl NativeWebdavRemote {
             &webdav_cnonce(),
             "00000001",
         )?;
+        let _ = response.bytes_counted();
         self.send_once(method, url, body, Some(auth), headers)
     }
 
@@ -116,7 +118,7 @@ impl NativeWebdavRemote {
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
-        request.send().map_err(map_webdav_http_error)
+        request.send_counted().map_err(map_webdav_http_error)
     }
 }
 
@@ -140,12 +142,14 @@ impl CloudSyncRemote for NativeWebdavRemote {
                 CloudSyncError::Remote(format!("failed to build WebDAV MKCOL method: {error}"))
             })?;
             let response = self.send(method, &url, None)?;
-            match response.status() {
+            let status = response.status();
+            let retry = super::helpers::retry_after_seconds(response.headers());
+            let _ = response.bytes_counted();
+            match status {
                 StatusCode::CREATED | StatusCode::OK | StatusCode::METHOD_NOT_ALLOWED => {}
                 status if status.as_u16() == 409 => {}
                 status if status.is_success() => {}
                 status => {
-                    let retry = super::helpers::retry_after_seconds(response.headers());
                     return Err(super::helpers::http_failure(
                         "WebDAV",
                         "create directory",
@@ -164,15 +168,13 @@ impl CloudSyncRemote for NativeWebdavRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
+            let _ = response.bytes_counted();
             return Ok(None);
         }
         if status.is_success() {
-            return response
-                .bytes()
-                .map(|bytes| Some(bytes.to_vec()))
-                .map_err(map_webdav_http_error);
+            return response.bytes_counted().map(|bytes| Some(bytes.to_vec()));
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "WebDAV",
             "request",
@@ -194,9 +196,10 @@ impl CloudSyncRemote for NativeWebdavRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status.is_success() {
+            let _ = response.bytes_counted();
             return Ok(());
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "WebDAV",
             "request",
@@ -208,11 +211,12 @@ impl CloudSyncRemote for NativeWebdavRemote {
     fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
         let response = self.send(Method::DELETE, &self.url_for(path), None)?;
         if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
+            let _ = response.bytes_counted();
             return Ok(());
         }
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "WebDAV",
             "request",
@@ -234,9 +238,10 @@ impl CloudSyncRemote for NativeWebdavRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
+            let _ = response.bytes_counted();
             return Ok(Vec::new());
         }
-        let body = response.text().map_err(map_webdav_http_error)?;
+        let body = response.text_counted()?;
         if !status.is_success() && status.as_u16() != 207 {
             return Err(super::helpers::http_failure(
                 "WebDAV",

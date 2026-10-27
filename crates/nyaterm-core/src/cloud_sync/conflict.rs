@@ -180,6 +180,26 @@ pub(super) fn with_details<T>(
     remote: &dyn CloudSyncRemote,
     options: &LocalCloudSyncOptions,
 ) -> Result<T, CloudSyncError> {
+    details(result, store, remote, options, None)
+}
+
+pub(super) fn with_cached_details<T>(
+    result: Result<T, CloudSyncError>,
+    store: &dyn CloudLocalStore,
+    remote: &dyn CloudSyncRemote,
+    options: &LocalCloudSyncOptions,
+    cache: &mut super::cache::CloudSyncCheckCache,
+) -> Result<T, CloudSyncError> {
+    details(result, store, remote, options, Some(cache))
+}
+
+fn details<T>(
+    result: Result<T, CloudSyncError>,
+    store: &dyn CloudLocalStore,
+    remote: &dyn CloudSyncRemote,
+    options: &LocalCloudSyncOptions,
+    mut cache: Option<&mut super::cache::CloudSyncCheckCache>,
+) -> Result<T, CloudSyncError> {
     result.map_err(|error| {
         let CloudSyncError::Conflict(mut preview) = error else {
             return error;
@@ -190,16 +210,34 @@ pub(super) fn with_details<T>(
         ) {
             preview.local_content_hash = local.sync_content_hash().ok();
             preview.observed_revisions = heads.observed_revisions();
-            preview.branches = heads
-                .maximal()
+            let pointers = heads.maximal();
+            if let Some(cache) = cache.as_deref_mut() {
+                cache.prepare_preview(&pointers);
+            }
+            preview.branches = pointers
                 .into_iter()
                 .map(|pointer| {
+                    if let Some(branch) = cache.as_deref_mut().and_then(|cache| {
+                        cache.branch(
+                            &pointer,
+                            preview.local_content_hash.as_deref().unwrap_or_default(),
+                        )
+                    }) {
+                        remote.observe(super::io::CloudSyncIoEvent::CacheHit);
+                        return branch;
+                    }
+                    if let Some(cache) = cache.as_deref_mut() {
+                        cache.remove(&pointer);
+                    }
                     let decoded =
                         protocol::read_snapshot_for_pointer(store, remote, options, &pointer);
                     if let Err(error) = &decoded {
                         preview.overwrite_blocked |= blocks_overwrite(error);
                     }
                     let snapshot = decoded.ok();
+                    if let (Some(snapshot), Some(cache)) = (&snapshot, cache.as_deref_mut()) {
+                        let _ = cache.record(&pointer, snapshot, &local);
+                    }
                     CloudConflictBranch {
                         revision: pointer.revision_id,
                         device_id: pointer.device_id,
@@ -285,6 +323,10 @@ impl CloudSyncRemote for ResolutionRemote<'_> {
     fn provider(&self) -> &'static str {
         self.inner.provider()
     }
+    fn observe(&self, event: super::io::CloudSyncIoEvent) {
+        self.inner.observe(event);
+    }
+
     fn file_capacity(&self) -> Result<Option<RemoteFileCapacity>, CloudSyncError> {
         self.inner.file_capacity()
     }

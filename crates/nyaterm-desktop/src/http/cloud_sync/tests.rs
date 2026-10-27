@@ -96,7 +96,7 @@ fn s3_list_parser_reads_keys_and_continuation_token() {
     let page = parse_s3_list_page(body).expect("parse S3 list");
 
     assert_eq!(
-        page.keys,
+        page.objects.into_iter().map(|e| e.path).collect::<Vec<_>>(),
         vec![
             "root/sync/snapshots/r1.redb.enc",
             "root/sync/snapshots/r2.redb.enc"

@@ -232,6 +232,7 @@ pub(super) fn read(
         })
         .or_else(|| maximal.last().copied())
         .cloned();
+    remote.observe(super::io::CloudSyncIoEvent::HeadsChecked);
     Ok(RemoteHeads {
         compatibility,
         selected,

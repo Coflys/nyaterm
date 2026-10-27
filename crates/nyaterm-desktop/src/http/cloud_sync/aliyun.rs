@@ -1,3 +1,4 @@
+use super::metrics::{CountedRequest, CountedResponse};
 use nyaterm_core::cloud_sync::credentials::{CloudCredentialUpdate, DriveProvider};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -131,11 +132,11 @@ impl NativeAliyunDriveRemote {
             .post(format!("{ALIYUN_DRIVE_BASE_URL}/oauth/access_token"))
             .header(CONTENT_TYPE, "application/json;charset=UTF-8")
             .json(&body)
-            .send()
+            .send_counted()
             .map_err(map_aliyun_drive_http_error)?;
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-        let body = response.text().map_err(map_aliyun_drive_http_error)?;
+        let body = response.text_counted()?;
         if !status.is_success() {
             return Err(super::helpers::oauth_failure(
                 "Aliyun Drive",
@@ -186,20 +187,23 @@ impl NativeAliyunDriveRemote {
         if auth {
             request = request.header(AUTHORIZATION, format!("Bearer {}", self.bearer_token()));
         }
-        let response = request.send().map_err(map_aliyun_drive_http_error)?;
+        let response = request
+            .send_counted()
+            .map_err(map_aliyun_drive_http_error)?;
         if response.status() != StatusCode::UNAUTHORIZED
             || !auth
             || !self.can_refresh_access_token()
         {
             return Ok(response);
         }
+        let _ = response.bytes_counted();
         self.refresh_access_token()?;
         self.client
             .post(&url)
             .header(CONTENT_TYPE, "application/json;charset=UTF-8")
             .header(AUTHORIZATION, format!("Bearer {}", self.bearer_token()))
             .json(body)
-            .send()
+            .send_counted()
             .map_err(map_aliyun_drive_http_error)
     }
 
@@ -212,7 +216,7 @@ impl NativeAliyunDriveRemote {
         let response = self.send_json(endpoint, body, true)?;
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-        let body = response.text().map_err(map_aliyun_drive_http_error)?;
+        let body = response.text_counted()?;
         if !status.is_success() {
             return Err(aliyun_drive_remote_error(
                 status,
@@ -277,7 +281,7 @@ impl NativeAliyunDriveRemote {
         )?;
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-        let body = response.text().map_err(map_aliyun_drive_http_error)?;
+        let body = response.text_counted()?;
         if status.is_success() {
             return aliyun_drive_item_from_body(&body).map(Some);
         }
@@ -393,14 +397,15 @@ impl NativeAliyunDriveRemote {
             .client
             .put(upload_url)
             .body(bytes.to_vec())
-            .send()
+            .send_counted()
             .map_err(map_aliyun_drive_http_error)?;
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status.is_success() {
+            let _ = response.bytes_counted();
             return Ok(());
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "Aliyun Drive",
             "request",
@@ -460,17 +465,14 @@ impl CloudSyncRemote for NativeAliyunDriveRemote {
         let response = self
             .client
             .get(download_url)
-            .send()
+            .send_counted()
             .map_err(map_aliyun_drive_http_error)?;
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status.is_success() {
-            return response
-                .bytes()
-                .map(|bytes| Some(bytes.to_vec()))
-                .map_err(map_aliyun_drive_http_error);
+            return response.bytes_counted().map(|bytes| Some(bytes.to_vec()));
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "Aliyun Drive",
             "request",

@@ -6,12 +6,15 @@ use thiserror::Error;
 
 use crate::{PortableSnapshotError, RawPortableSnapshot};
 
+pub mod cache;
 pub mod conflict;
 pub mod control;
 pub mod credentials;
 mod gc;
 mod heads;
 mod history;
+pub mod io;
+pub mod metadata_cache;
 mod protocol;
 mod remote;
 mod s3;
@@ -574,6 +577,28 @@ pub trait CloudSyncRemote {
     fn file_capacity(&self) -> Result<Option<RemoteFileCapacity>, CloudSyncError> {
         Ok(None)
     }
+
+    fn read_conditional(
+        &self,
+        path: &str,
+        _etag: Option<&str>,
+    ) -> Result<io::CloudObjectRead, CloudSyncError> {
+        Ok(match self.read_if_exists(path)? {
+            Some(bytes) => io::CloudObjectRead::Modified { bytes, etag: None },
+            None => io::CloudObjectRead::Missing,
+        })
+    }
+    fn list_metadata(&self, path: &str) -> Result<Vec<io::CloudObjectMetadata>, CloudSyncError> {
+        Ok(self
+            .list_files(path)?
+            .into_iter()
+            .map(|path| io::CloudObjectMetadata {
+                path,
+                ..Default::default()
+            })
+            .collect())
+    }
+    fn observe(&self, _event: io::CloudSyncIoEvent) {}
 
     fn provider(&self) -> &'static str;
     fn create_dir(&self, path: &str) -> Result<(), CloudSyncError>;
@@ -1278,11 +1303,32 @@ pub fn check_snapshot_with_remote_state(
     allow_auto_pull: bool,
 ) -> Result<CloudSyncCheck, CloudSyncError> {
     conflict::with_details(
-        check_snapshot_inner(local_store, options, remote, state, allow_auto_pull),
+        check_snapshot_inner(local_store, options, remote, state, allow_auto_pull, None),
         local_store,
         remote,
         options,
     )
+}
+
+/// Cached inspection never authorizes a write or local application by itself.
+pub fn check_snapshot_with_remote_cached(
+    local_store: &dyn CloudLocalStore,
+    options: &LocalCloudSyncOptions,
+    remote: &dyn CloudSyncRemote,
+    state: &CloudSyncState,
+    allow_auto_pull: bool,
+    cache: &mut cache::CloudSyncCheckCache,
+) -> Result<CloudSyncCheck, CloudSyncError> {
+    cache.scope(options, remote.provider());
+    let result = check_snapshot_inner(
+        local_store,
+        options,
+        remote,
+        state,
+        allow_auto_pull,
+        Some(cache),
+    );
+    conflict::with_cached_details(result, local_store, remote, options, cache)
 }
 
 fn check_snapshot_inner(
@@ -1291,6 +1337,7 @@ fn check_snapshot_inner(
     remote: &dyn CloudSyncRemote,
     state: &CloudSyncState,
     allow_auto_pull: bool,
+    mut cache: Option<&mut cache::CloudSyncCheckCache>,
 ) -> Result<CloudSyncCheck, CloudSyncError> {
     ensure_enabled(options)?;
     let mut local = local_store.build_sync_snapshot(options)?;
@@ -1298,6 +1345,9 @@ fn check_snapshot_inner(
     let mut checked_state = state.clone();
     checked_state.last_checked_at_ms = Some(current_time_ms());
     let heads = heads::read(local_store, remote, &options.remote_root)?;
+    if let Some(cache) = cache.as_deref_mut() {
+        cache.prepare_preview(&heads.maximal());
+    }
     heads.require_single(options, remote.provider(), &local.meta.payload_hash)?;
     let pointer = heads.selected.clone();
     let Some(pointer) = pointer else {
@@ -1319,6 +1369,53 @@ fn check_snapshot_inner(
         remote.provider(),
         &local.meta.payload_hash,
     )?;
+    if let Some(receipt) = cache.as_deref_mut().and_then(|cache| cache.get(&pointer)) {
+        remote.observe(io::CloudSyncIoEvent::CacheHit);
+        let local_hash = local.sync_content_hash()?;
+        let decision = if local_hash == receipt.content_hash {
+            CloudRemoteCheckDecision::UpToDate
+        } else {
+            let local_changed = local_content_changed(state, &local_hash);
+            let remote_changed =
+                state.last_applied_remote_revision.as_deref() != Some(&pointer.revision_id);
+            match (remote_changed, local_changed, allow_auto_pull) {
+                (true, true, _) => CloudRemoteCheckDecision::Conflict,
+                (true, false, true) => CloudRemoteCheckDecision::AutoPull,
+                (true, false, false) => CloudRemoteCheckDecision::RemoteAvailable,
+                (false, true, _) => CloudRemoteCheckDecision::LocalChanged,
+                _ => CloudRemoteCheckDecision::UpToDate,
+            }
+        };
+        if decision == CloudRemoteCheckDecision::Conflict {
+            return Err(CloudSyncError::Conflict(Box::new(conflict_preview(
+                options,
+                remote.provider(),
+                &local.meta.payload_hash,
+                &pointer,
+            ))));
+        }
+        if decision == CloudRemoteCheckDecision::UpToDate {
+            checked_state.last_synced_content_hash = Some(local_hash);
+            checked_state.last_synced_payload_hash = Some(local.meta.payload_hash.clone());
+            checked_state.last_synced_clock = pointer.sync_clock.clone();
+            checked_state.last_applied_remote_revision = Some(pointer.revision_id.clone());
+        }
+        checked_state.last_validated_remote_revision = Some(pointer.revision_id.clone());
+        checked_state.last_full_validation_at_ms = Some(receipt.validated_at_ms);
+        return Ok(CloudSyncCheck {
+            decision,
+            pointer: Some(pointer),
+            state: checked_state,
+            prepared: PreparedSync {
+                local,
+                heads,
+                remote: None,
+            },
+        });
+    }
+    if let Some(cache) = cache.as_deref_mut() {
+        cache.remove(&pointer);
+    }
     let remote_snapshot =
         match protocol::resolve_remote_snapshot(local_store, remote, options, &pointer)? {
             protocol::RemoteSnapshotResolution::Current(snapshot)
@@ -1339,6 +1436,9 @@ fn check_snapshot_inner(
                 )));
             }
         };
+    if let Some(cache) = cache {
+        cache.record(&pointer, &remote_snapshot, &local)?;
+    }
     let decision =
         decide_snapshot_check(state, &local, &remote_snapshot, &pointer, allow_auto_pull)?;
     if decision == CloudRemoteCheckDecision::Conflict {

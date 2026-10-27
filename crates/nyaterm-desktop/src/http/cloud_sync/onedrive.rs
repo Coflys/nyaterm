@@ -1,3 +1,4 @@
+use super::metrics::{CountedRequest, CountedResponse};
 use nyaterm_core::cloud_sync::credentials::{CloudCredentialUpdate, DriveProvider};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -123,11 +124,11 @@ impl NativeOneDriveRemote {
             .post(MICROSOFT_OAUTH_TOKEN_URL)
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(form_urlencoded(&fields))
-            .send()
+            .send_counted()
             .map_err(map_onedrive_http_error)?;
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-        let body = response.text().map_err(map_onedrive_http_error)?;
+        let body = response.text_counted()?;
         if !status.is_success() {
             return Err(super::helpers::oauth_failure(
                 "OneDrive",
@@ -179,14 +180,15 @@ impl NativeOneDriveRemote {
             self.refresh_access_token()?;
         }
         let response = build(&self.client, &self.bearer_token())
-            .send()
+            .send_counted()
             .map_err(map_onedrive_http_error)?;
         if response.status() != StatusCode::UNAUTHORIZED || !self.can_refresh_access_token() {
             return Ok(response);
         }
+        let _ = response.bytes_counted();
         self.refresh_access_token()?;
         build(&self.client, &self.bearer_token())
-            .send()
+            .send_counted()
             .map_err(map_onedrive_http_error)
     }
 
@@ -238,9 +240,10 @@ impl NativeOneDriveRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
+            let _ = response.bytes_counted();
             return Ok(false);
         }
-        let body = response.text().map_err(map_onedrive_http_error)?;
+        let body = response.text_counted()?;
         if !status.is_success() {
             return Err(super::helpers::http_failure(
                 "OneDrive",
@@ -275,12 +278,14 @@ impl NativeOneDriveRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::CONFLICT {
+            let _ = response.bytes_counted();
             return Ok(());
         }
         if status.is_success() {
+            let _ = response.bytes_counted();
             return Ok(());
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "OneDrive",
             "request",
@@ -326,15 +331,13 @@ impl CloudSyncRemote for NativeOneDriveRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status == StatusCode::NOT_FOUND {
+            let _ = response.bytes_counted();
             return Ok(None);
         }
         if status.is_success() {
-            return response
-                .bytes()
-                .map(|bytes| Some(bytes.to_vec()))
-                .map_err(map_onedrive_http_error);
+            return response.bytes_counted().map(|bytes| Some(bytes.to_vec()));
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "OneDrive",
             "request",
@@ -364,9 +367,10 @@ impl CloudSyncRemote for NativeOneDriveRemote {
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
         if status.is_success() {
+            let _ = response.bytes_counted();
             return Ok(());
         }
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "OneDrive",
             "request",
@@ -383,11 +387,12 @@ impl CloudSyncRemote for NativeOneDriveRemote {
                 .header(AUTHORIZATION, format!("Bearer {token}"))
         })?;
         if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
+            let _ = response.bytes_counted();
             return Ok(());
         }
         let status = response.status();
         let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-        let _body = response.text().unwrap_or_default();
+        let _body = response.text_counted().unwrap_or_default();
         Err(super::helpers::http_failure(
             "OneDrive",
             "request",
@@ -414,7 +419,7 @@ impl CloudSyncRemote for NativeOneDriveRemote {
             })?;
             let status = response.status();
             let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-            let body = response.text().map_err(map_onedrive_http_error)?;
+            let body = response.text_counted()?;
             if status == StatusCode::NOT_FOUND {
                 return Ok(Vec::new());
             }
