@@ -45,6 +45,10 @@ pub fn effective_protocol(credential: &AiProviderCredential) -> AiProviderApiPro
 }
 
 pub fn provider_requires_api_key(credential: &AiProviderCredential) -> bool {
+    // Gateways may authenticate exclusively through a custom business header.
+    if custom_header_pairs(credential).is_ok_and(|headers| !headers.is_empty()) {
+        return false;
+    }
     match effective_protocol(credential) {
         AiProviderApiProtocol::Ollama => false,
         AiProviderApiProtocol::OpenaiCompatible => !matches!(
@@ -312,7 +316,7 @@ fn canonical_custom_header_name(name: &str) -> &str {
 
 /// HTTP token characters (RFC 9110 tchar) for custom header names.
 pub fn is_valid_custom_header_name(name: &str) -> bool {
-    let name = name.trim();
+    let name = name.trim_matches([' ', '\t']);
     !name.is_empty()
         && name.len() <= MAX_AI_CUSTOM_HEADER_NAME_LEN
         && name.bytes().all(|byte| {
@@ -339,8 +343,8 @@ pub fn is_valid_custom_header_name(name: &str) -> bool {
         })
 }
 
-fn is_valid_custom_header_value(value: &str) -> bool {
-    let value = value.trim();
+pub fn is_valid_custom_header_value(value: &str) -> bool {
+    let value = value.trim_matches([' ', '\t']);
     !value.is_empty()
         && value.len() <= MAX_AI_CUSTOM_HEADER_VALUE_LEN
         && value
@@ -348,65 +352,110 @@ fn is_valid_custom_header_value(value: &str) -> bool {
             .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
 }
 
-/// Validated `(name, value)` pairs for a credential: rows are trimmed, blank
-/// rows are skipped, and later rows win on case-insensitive name conflicts.
-pub fn custom_header_pairs(credential: &AiProviderCredential) -> Vec<(String, String)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CustomHeaderError {
+    #[error("Custom header name must be an HTTP token of at most 256 bytes")]
+    InvalidName,
+    #[error("This header is controlled by the HTTP client and cannot be customized")]
+    ManagedName,
+    #[error("Custom header value is required")]
+    EmptyValue,
+    #[error("Custom header value exceeds the size limit")]
+    ValueTooLong,
+    #[error("Custom header value must contain only printable ASCII characters or tabs")]
+    InvalidValue,
+    #[error("Custom header names must be unique (case insensitive)")]
+    DuplicateName,
+    #[error("Too many custom headers")]
+    TooMany,
+}
+
+pub fn validate_custom_header(name: &str, value: &str) -> Result<(), CustomHeaderError> {
+    if !is_valid_custom_header_name(name) {
+        return Err(CustomHeaderError::InvalidName);
+    }
+    // Routing, framing, connection management and proxy authentication belong
+    // to the client. Application auth (Authorization, x-api-key, etc.) may be overridden.
+    if matches!(
+        name.trim_matches([' ', '\t']).to_ascii_lowercase().as_str(),
+        "host"
+            | "content-length"
+            | "transfer-encoding"
+            | "connection"
+            | "proxy-authorization"
+            | "proxy-authenticate"
+            | "proxy-connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "upgrade"
+    ) {
+        return Err(CustomHeaderError::ManagedName);
+    }
+    let value = value.trim_matches([' ', '\t']);
+    if value.is_empty() {
+        return Err(CustomHeaderError::EmptyValue);
+    }
+    if value.len() > MAX_AI_CUSTOM_HEADER_VALUE_LEN {
+        return Err(CustomHeaderError::ValueTooLong);
+    }
+    if !is_valid_custom_header_value(value) {
+        return Err(CustomHeaderError::InvalidValue);
+    }
+    Ok(())
+}
+
+/// Validate before constructing a request; errors never include secret material.
+/// Completely empty editor rows are inert and may survive saves.
+pub fn custom_header_pairs(
+    credential: &AiProviderCredential,
+) -> Result<Vec<(String, String)>, CustomHeaderError> {
+    if credential.extra_headers.len() > MAX_AI_CUSTOM_HEADERS {
+        return Err(CustomHeaderError::TooMany);
+    }
     let mut headers: Vec<(String, String)> = Vec::new();
-    let mut index_by_name: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut names = std::collections::HashSet::new();
     for header in &credential.extra_headers {
-        let name = header.name.trim();
-        let value = header.value.expose_secret().trim();
-        if !is_valid_custom_header_name(name) || !is_valid_custom_header_value(value) {
+        let name = header.name.trim_matches([' ', '\t']);
+        let value = header.value.expose_secret().trim_matches([' ', '\t']);
+        if name.is_empty() && value.is_empty() {
             continue;
         }
+        validate_custom_header(name, value)?;
         let pair = (
             canonical_custom_header_name(name).to_string(),
             value.to_string(),
         );
-        let key = name.to_ascii_lowercase();
-        if let Some(&index) = index_by_name.get(&key) {
-            headers[index] = pair;
-        } else {
-            index_by_name.insert(key, headers.len());
-            headers.push(pair);
+        if !names.insert(name.to_ascii_lowercase()) {
+            return Err(CustomHeaderError::DuplicateName);
         }
+        headers.push(pair);
     }
-    headers.truncate(MAX_AI_CUSTOM_HEADERS);
-    headers
+    Ok(headers)
 }
 
-/// Trims custom headers, drops blank/invalid rows, assigns missing ids, and
-/// deduplicates case-insensitive names (last row wins).
-pub fn normalize_custom_headers(headers: &mut Vec<super::AiHttpHeader>) {
-    let mut normalized: Vec<super::AiHttpHeader> = Vec::with_capacity(headers.len());
-    let mut index_by_name: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    for header in headers.drain(..) {
-        let name = header.name.trim();
-        let value = header.value.expose_secret().trim();
-        if !is_valid_custom_header_name(name) || !is_valid_custom_header_value(value) {
-            continue;
-        }
-        let row = super::AiHttpHeader {
-            id: if header.id.trim().is_empty() {
-                super::uuid()
+/// Repair editor identities without discarding invalid/imported configuration.
+/// Validation at save/request boundaries reports rows requiring correction.
+pub fn normalize_custom_headers(headers: &mut [super::AiHttpHeader]) {
+    let mut ids = std::collections::HashSet::new();
+    for (index, header) in headers.iter_mut().enumerate() {
+        if header.id.trim().is_empty() || !ids.insert(header.id.clone()) {
+            // Stable repairs are needed when loading the same imported document
+            // again to merge masked values. Random IDs would lose that match.
+            let base = if header.id.trim().is_empty() {
+                format!("header-{index}")
             } else {
-                header.id
-            },
-            name: name.to_string(),
-            value: value.to_string().into(),
-        };
-        let key = name.to_ascii_lowercase();
-        if let Some(&index) = index_by_name.get(&key) {
-            normalized[index] = row;
-        } else {
-            index_by_name.insert(key, normalized.len());
-            normalized.push(row);
+                header.id.clone()
+            };
+            for suffix in 0_u64.. {
+                header.id = format!("{base}-{suffix}");
+                if ids.insert(header.id.clone()) {
+                    break;
+                }
+            }
         }
+        header.name = header.name.trim_matches([' ', '\t']).to_string();
     }
-    normalized.truncate(MAX_AI_CUSTOM_HEADERS);
-    *headers = normalized;
 }
 
 /// A blank custom header row with a fresh id, for settings editors.
@@ -459,38 +508,83 @@ mod tests {
     }
 
     #[test]
-    fn custom_header_pairs_canonicalize_auth_and_dedupe_last_wins() {
+    fn custom_headers_validate_without_silently_dropping_rows() {
+        use super::{CustomHeaderError, validate_custom_header};
         let mut credential = credential("custom", "openai_compatible");
         credential.extra_headers = vec![
-            header("h1", "X-Custom-Token", "secret"),
+            header("h1", "X-Custom-Token", " secret "),
             header("h2", "authorization", "Bearer override"),
-            header("h3", "X-CUSTOM-TOKEN", "newer"),
-            header("h4", "", "dropped"),
-            header("h5", "X Bad", "dropped"),
-            header("h6", "X-Empty", ""),
+            header("h3", "", ""),
         ];
         assert_eq!(
-            custom_header_pairs(&credential),
+            custom_header_pairs(&credential).unwrap(),
             vec![
-                ("X-CUSTOM-TOKEN".to_string(), "newer".to_string()),
-                ("Authorization".to_string(), "Bearer override".to_string()),
+                ("X-Custom-Token".into(), "secret".into()),
+                ("Authorization".into(), "Bearer override".into()),
             ]
         );
+        credential
+            .extra_headers
+            .push(header("h4", "X-CUSTOM-TOKEN", "newer"));
+        assert_eq!(
+            custom_header_pairs(&credential),
+            Err(CustomHeaderError::DuplicateName)
+        );
+        for name in [
+            "Host",
+            "CONTENT-LENGTH",
+            "Transfer-Encoding",
+            "Connection",
+            "Proxy-Authorization",
+            "TE",
+            "Trailer",
+            "Upgrade",
+            "Keep-Alive",
+            "Proxy-Connection",
+        ] {
+            assert_eq!(
+                validate_custom_header(name, "test"),
+                Err(CustomHeaderError::ManagedName)
+            );
+        }
+        for value in ["中文", "test\r\n", "\nsecret", "test\0", "test\u{7f}"] {
+            assert_eq!(
+                validate_custom_header("X-Token", value),
+                Err(CustomHeaderError::InvalidValue)
+            );
+        }
+        assert_eq!(
+            validate_custom_header("X-Token", " "),
+            Err(CustomHeaderError::EmptyValue)
+        );
+        assert_eq!(
+            validate_custom_header("X-Token", &"a".repeat(8193)),
+            Err(CustomHeaderError::ValueTooLong)
+        );
+        for name in ["Authorization", "x-api-key", "x-goog-api-key", "X-Tenant"] {
+            assert!(validate_custom_header(name, "test").is_ok());
+        }
+        assert!(validate_custom_header("X-Token", "test\tvalue").is_ok());
+        assert!(!super::is_valid_custom_header_name("X-Token\r\n"));
     }
 
     #[test]
-    fn custom_headers_normalize_in_place_for_settings() {
+    fn header_normalization_repairs_ids_and_preserves_invalid_rows() {
         let mut headers = vec![
-            header("", "  X-Foo  ", "  one  "),
+            header("keep", "  X-Foo  ", "  one  "),
             header("keep", "x-foo", "two"),
-            header("", "", "dropped"),
+            header("", "", "unfinished"),
         ];
         normalize_custom_headers(&mut headers);
-        assert_eq!(headers.len(), 1);
+        assert_eq!(headers.len(), 3);
         assert_eq!(headers[0].id, "keep");
-        assert_eq!(headers[0].name, "x-foo");
-        assert_eq!(headers[0].value.expose_secret(), "two");
-
+        assert_eq!(headers[0].name, "X-Foo");
+        assert_ne!(headers[1].id, headers[0].id);
+        assert!(!headers[2].id.is_empty());
+        assert_eq!(headers[2].value.expose_secret(), "unfinished");
+        let original = headers.clone();
+        normalize_custom_headers(&mut headers);
+        assert_eq!(headers, original);
         let fresh = new_custom_header();
         assert!(!fresh.id.is_empty());
         assert!(fresh.name.is_empty());

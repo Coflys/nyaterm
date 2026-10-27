@@ -31,7 +31,7 @@ pub(in crate::features) struct ProviderSettingsView {
     pub model_order: Vec<String>,
     pub reveal_generation: u64,
     pub revealed_id: Option<String>,
-    pub revealed_header_id: Option<String>,
+    pub revealed_header_id: Option<(String, String)>,
     pub message: Option<String>,
     pub generation: u64,
     pub revision: u64,

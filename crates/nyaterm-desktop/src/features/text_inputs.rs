@@ -924,4 +924,52 @@ mod tests {
             assert!(app.ai.provider_view().revealed_id.is_none());
         });
     }
+
+    #[test]
+    fn header_secret_toggle_and_provider_switch_preserve_only_the_owning_draft() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use gpui::TestAppContext;
+        use nyaterm_core::test_support::TestTempDir;
+        let root = TestTempDir::new("nyaterm-header-secret-lifecycle");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "header-secret-toggle");
+        app.update(&mut cx, |app, cx| {
+            for credential in &mut app.ai.settings_config_mut().provider_credentials[..2] {
+                credential.extra_headers = vec![nyaterm_core::AiHttpHeader {
+                    id: "shared-id".into(),
+                    name: "X-Token".into(),
+                    value: Default::default(),
+                }];
+            }
+            let other_id = app.ai.settings_config().provider_credentials[1].id.clone();
+            app.ai.apply_settings_credential_input(
+                "openai.header.shared-id.value",
+                "first-fixture".into(),
+            );
+            app.ai.apply_settings_credential_input(
+                &format!("{other_id}.header.shared-id.value"),
+                "second-fixture".into(),
+            );
+            app.select_ai_provider("openai".into(), cx);
+            let first = app
+                .existing_text_input("ai.credential.openai.header.shared-id.value")
+                .unwrap();
+            app.toggle_ai_provider_header_secret("openai".into(), "shared-id".into(), cx);
+            assert!(!first.read(cx).is_masked());
+            assert_eq!(first.read(cx).value(cx), "first-fixture");
+            app.select_ai_provider(other_id.clone(), cx);
+            assert!(first.read(cx).is_masked());
+            assert_eq!(first.read(cx).value(cx), "first-fixture");
+            let second = app
+                .existing_text_input(format!("ai.credential.{other_id}.header.shared-id.value"))
+                .unwrap();
+            app.toggle_ai_provider_header_secret(other_id.clone(), "shared-id".into(), cx);
+            assert!(!second.read(cx).is_masked());
+            assert_eq!(second.read(cx).value(cx), "second-fixture");
+            app.toggle_ai_provider_header_secret(other_id, "shared-id".into(), cx);
+            assert!(second.read(cx).is_masked());
+            assert!(app.ai.provider_view().revealed_header_id.is_none());
+        });
+    }
 }

@@ -9,8 +9,8 @@ use gpui::{
 };
 use nyaterm_core::MAX_AI_CUSTOM_HEADERS;
 use nyaterm_core::ai::provider_settings::{
-    DEFAULT_MODEL_REASONING_EFFORTS, MODEL_REASONING_EFFORTS, is_valid_custom_header_name,
-    protocol_value, provider_label, provider_name_taken, provider_requires_api_key,
+    CustomHeaderError, DEFAULT_MODEL_REASONING_EFFORTS, MODEL_REASONING_EFFORTS, protocol_value,
+    provider_label, provider_name_taken, provider_requires_api_key,
 };
 use nyaterm_core::ai::{AiModelSource, AiProviderKind};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaSelectOption};
@@ -350,8 +350,7 @@ impl SettingsPanel {
             let header_id = header.id.clone();
             let name_id = format!("ai.credential.{id}.header.{header_id}.name");
             let value_id = format!("ai.credential.{id}.header.{header_id}.value");
-            let name_invalid =
-                !header.name.trim().is_empty() && !is_valid_custom_header_name(&header.name);
+            let header_error = self.ai.header_errors.get(&(id.clone(), header_id.clone()));
             let name_duplicate = header_name_counts
                 .get(&header.name.trim().to_lowercase())
                 .is_some_and(|count| *count > 1);
@@ -410,14 +409,30 @@ impl SettingsPanel {
                                 })),
                             ),
                     )
-                    .when(name_invalid, |body| {
-                        body.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.danger))
-                                .child(t!("ai.customHeaderNameInvalid")),
-                        )
-                    })
+                    .when_some(
+                        header_error.filter(|error| **error != CustomHeaderError::DuplicateName),
+                        |body, error| {
+                            body.child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.danger))
+                                    .child(t!(match error {
+                                        CustomHeaderError::InvalidName =>
+                                            "ai.customHeaderNameInvalid",
+                                        CustomHeaderError::ManagedName => "ai.customHeaderManaged",
+                                        CustomHeaderError::EmptyValue =>
+                                            "ai.customHeaderValueRequired",
+                                        CustomHeaderError::ValueTooLong =>
+                                            "ai.customHeaderValueTooLong",
+                                        CustomHeaderError::InvalidValue =>
+                                            "ai.customHeaderValueInvalid",
+                                        CustomHeaderError::DuplicateName =>
+                                            "ai.customHeaderNameDuplicate",
+                                        CustomHeaderError::TooMany => "ai.customHeaderTooMany",
+                                    })),
+                            )
+                        },
+                    )
                     .when(name_duplicate, |body| {
                         body.child(
                             div()

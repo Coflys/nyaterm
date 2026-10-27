@@ -89,9 +89,8 @@ impl NyaTermApp {
             },
             ai: AiSettingsPresentation {
                 providers: self.ai.provider_view().clone(),
-                config: Arc::new(nyaterm_core::mask_ai_settings(
-                    self.ai.settings_config().clone(),
-                )),
+                config: Arc::new(nyaterm_core::mask_ai_settings(self.ai.pending_settings())),
+                header_errors: Arc::new(self.ai.settings_header_errors()),
                 manual_model_drafts: Arc::new(self.ai.settings_manual_model_drafts().clone()),
                 credential_draft_key_ids: Arc::new(
                     self.ai

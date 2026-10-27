@@ -82,31 +82,22 @@ fn merge_custom_header_values(
     let current = current.unwrap_or_default();
     let mut merged = Vec::with_capacity(incoming.len());
     for header in incoming {
-        let name = header.name.trim();
-        if name.is_empty() {
-            continue;
-        }
+        let name = header.name.trim_matches([' ', '\t']);
         let stored = if header.id.is_empty() {
-            None
-        } else {
-            current.iter().find(|item| item.id == header.id)
-        }
-        .or_else(|| {
             current
                 .iter()
                 .find(|item| item.name.eq_ignore_ascii_case(name))
-        });
+        } else {
+            current.iter().find(|item| item.id == header.id)
+        };
         let incoming_value = header.value.expose_secret();
         let value = if incoming_value == MASKED_SECRET_VALUE {
             stored
                 .map(|item| item.value.expose_secret().to_string())
                 .unwrap_or_default()
         } else {
-            incoming_value.trim().to_string()
+            incoming_value.to_string()
         };
-        if value.is_empty() {
-            continue;
-        }
         merged.push(AiHttpHeader {
             id: if header.id.is_empty() {
                 stored.map(|item| item.id.clone()).unwrap_or_default()
@@ -144,6 +135,7 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
             .map(credential_from_profile)
             .collect();
     }
+    let mut header_ids = HashSet::new();
     for credential in &mut settings.provider_credentials {
         if credential.api_protocol.is_none()
             && is_builtin_ollama_provider(&credential.id, &credential.provider_kind)
@@ -151,6 +143,15 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
             migrate_legacy_ollama_base_url(&mut credential.base_url);
         }
         normalize_custom_headers(&mut credential.extra_headers);
+        for header in &mut credential.extra_headers {
+            let base = header.id.clone();
+            for suffix in 0_u64.. {
+                if header_ids.insert(header.id.clone()) {
+                    break;
+                }
+                header.id = format!("{base}-{suffix}");
+            }
+        }
     }
 
     if settings.models.is_empty() {
@@ -645,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_headers_normalize_trims_dedupes_and_assign_ids() {
+    fn custom_headers_normalize_preserves_rows_and_assigns_unique_ids() {
         let mut settings = AiSettings::default();
         settings.provider_credentials[0].extra_headers = vec![
             test_header("", "  X-Custom  ", "  one  "),
@@ -658,7 +659,7 @@ mod tests {
         assert!(normalize_ai_settings(&mut settings));
 
         let headers = &settings.provider_credentials[0].extra_headers;
-        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.len(), 5);
         let custom = headers
             .iter()
             .find(|header| header.name == "x-custom")
@@ -674,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_caps_custom_header_count() {
+    fn normalize_preserves_excess_headers_for_validation() {
         use crate::ai::MAX_AI_CUSTOM_HEADERS;
         let mut settings = AiSettings::default();
         settings.provider_credentials[0].extra_headers = (0..MAX_AI_CUSTOM_HEADERS + 5)
@@ -685,7 +686,7 @@ mod tests {
 
         assert_eq!(
             settings.provider_credentials[0].extra_headers.len(),
-            MAX_AI_CUSTOM_HEADERS
+            MAX_AI_CUSTOM_HEADERS + 5
         );
     }
 
@@ -713,12 +714,64 @@ mod tests {
             .push(test_header("h3", "X-New", "secret-3"));
         let merged = merge_masked_ai_settings(&settings, next);
         let headers = &merged.provider_credentials[0].extra_headers;
-        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.len(), 3);
         assert_eq!(headers[0].id, "h1");
         assert_eq!(headers[0].name, "X-Token");
         assert_eq!(headers[0].value.expose_secret(), "secret-1");
-        assert_eq!(headers[1].id, "h3");
-        assert_eq!(headers[1].value.expose_secret(), "secret-3");
+        assert!(headers[1].value.is_empty());
+        assert_eq!(headers[2].id, "h3");
+        assert_eq!(headers[2].value.expose_secret(), "secret-3");
+    }
+
+    #[test]
+    fn imported_header_ids_normalize_stably_and_masked_values_keep_provider_ownership() {
+        let mut imported = AiSettings::default();
+        for (index, credential) in imported.provider_credentials.iter_mut().take(2).enumerate() {
+            credential.extra_headers = vec![
+                test_header("shared", "X-Token", &format!("fixture-{index}")),
+                test_header("shared", "X-Other", "other-fixture"),
+                test_header("", "X-Missing-Id", "missing-id-fixture"),
+            ];
+        }
+        let mut current = imported.clone();
+        let mut second_load = imported;
+        normalize_ai_settings(&mut current);
+        normalize_ai_settings(&mut second_load);
+        assert_eq!(current, second_load);
+        let ids: std::collections::HashSet<_> = current
+            .provider_credentials
+            .iter()
+            .flat_map(|credential| credential.extra_headers.iter().map(|header| &header.id))
+            .collect();
+        assert_eq!(ids.len(), 6);
+        assert_eq!(
+            merge_masked_ai_settings(&current, mask_ai_settings(second_load)),
+            current
+        );
+        let mut edited = mask_ai_settings(current.clone());
+        edited.provider_credentials[0].extra_headers[0].value = "replacement-fixture".into();
+        let merged = merge_masked_ai_settings(&current, edited);
+        assert_eq!(
+            merged.provider_credentials[1].extra_headers[0]
+                .value
+                .expose_secret(),
+            "fixture-1"
+        );
+    }
+
+    #[test]
+    fn masked_header_with_new_id_does_not_capture_an_existing_names_secret() {
+        let mut current = AiSettings::default();
+        current.provider_credentials[0].extra_headers =
+            vec![test_header("old", "X-Token", "fixture")];
+        let mut next = mask_ai_settings(current.clone());
+        next.provider_credentials[0].extra_headers[0].id = "new".into();
+        let merged = merge_masked_ai_settings(&current, next);
+        assert!(
+            merged.provider_credentials[0].extra_headers[0]
+                .value
+                .is_empty()
+        );
     }
 
     #[test]

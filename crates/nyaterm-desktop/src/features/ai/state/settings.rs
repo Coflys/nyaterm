@@ -247,10 +247,9 @@ impl AiFeatureState {
                 if let Some(secret) = self
                     .settings
                     .credential_header_secret_drafts
-                    .get(&header.id)
-                    .filter(|secret| !secret.is_empty())
+                    .get(&(credential.id.clone(), header.id.clone()))
                 {
-                    header.value = secret.clone().into();
+                    header.value = secret.clone();
                 }
             }
         }
@@ -449,7 +448,7 @@ impl AiFeatureState {
 
     pub(in crate::features) fn settings_credential_header_secret_drafts(
         &self,
-    ) -> &HashMap<String, String> {
+    ) -> &HashMap<(String, String), nyaterm_core::SecretString> {
         &self.settings.credential_header_secret_drafts
     }
 
@@ -498,14 +497,50 @@ impl AiFeatureState {
         }
         self.settings
             .credential_header_secret_drafts
-            .remove(header_id);
+            .remove(&(credential_id.to_string(), header_id.to_string()));
         self.invalidate_provider_jobs();
         self.panel.status = "AI custom header removed".to_string();
         true
     }
 
-    pub(in crate::features) fn accept_saved_settings(&mut self, saved: AiSettings) {
+    pub(in crate::features) fn accept_saved_settings(
+        &mut self,
+        saved: AiSettings,
+        submitted: &AiSettings,
+    ) {
+        // A save may finish after an input edit that did not enqueue another save.
+        if self.pending_settings() != *submitted {
+            return;
+        }
         self.settings.config = saved;
+        self.settings.credential_header_secret_drafts.clear();
+    }
+
+    pub(in crate::features) fn settings_header_errors(
+        &self,
+    ) -> HashMap<(String, String), nyaterm_core::ai::provider_settings::CustomHeaderError> {
+        use nyaterm_core::ai::provider_settings::{CustomHeaderError, validate_custom_header};
+        let mut errors = HashMap::new();
+        for credential in self.pending_settings().provider_credentials {
+            let mut names = HashSet::new();
+            for header in credential.extra_headers {
+                if header.name.trim_matches([' ', '\t']).is_empty()
+                    && header.value.trim_matches([' ', '\t']).is_empty()
+                {
+                    continue;
+                }
+                let error = validate_custom_header(&header.name, header.value.expose_secret())
+                    .err()
+                    .or_else(|| {
+                        (!names.insert(header.name.trim().to_ascii_lowercase()))
+                            .then_some(CustomHeaderError::DuplicateName)
+                    });
+                if let Some(error) = error {
+                    errors.insert((credential.id.clone(), header.id), error);
+                }
+            }
+        }
+        errors
     }
 
     pub(in crate::features) fn queue_settings_persistence(
@@ -1006,15 +1041,25 @@ impl AiFeatureState {
                 header.name = text;
             }
             "value" => {
-                if text.is_empty() {
-                    self.settings
-                        .credential_header_secret_drafts
-                        .remove(header_id);
-                } else {
-                    self.settings
-                        .credential_header_secret_drafts
-                        .insert(header_id.to_string(), text);
+                if !self
+                    .settings
+                    .config
+                    .provider_credentials
+                    .iter()
+                    .any(|credential| {
+                        credential.id == credential_id
+                            && credential
+                                .extra_headers
+                                .iter()
+                                .any(|header| header.id == header_id)
+                    })
+                {
+                    return false;
                 }
+                self.settings.credential_header_secret_drafts.insert(
+                    (credential_id.to_string(), header_id.to_string()),
+                    text.into(),
+                );
             }
             _ => return false,
         }
@@ -1043,10 +1088,9 @@ impl AiFeatureState {
                 if let Some(secret) = self
                     .settings
                     .credential_header_secret_drafts
-                    .get(&header.id)
-                    .filter(|secret| !secret.is_empty())
+                    .get(&(credential.id.clone(), header.id.clone()))
                 {
-                    header.value = secret.clone().into();
+                    header.value = secret.clone();
                 }
             }
             let name = credential.name.clone();
@@ -1081,7 +1125,7 @@ impl AiFeatureState {
             for header in &credential.extra_headers {
                 self.settings
                     .credential_header_secret_drafts
-                    .remove(&header.id);
+                    .remove(&(credential_id.to_string(), header.id.clone()));
             }
         }
         self.panel.status = "AI credential saved".to_string();
@@ -1125,7 +1169,7 @@ impl AiFeatureState {
         for header_id in removed_header_ids {
             self.settings
                 .credential_header_secret_drafts
-                .remove(&header_id);
+                .remove(&(credential_id.to_string(), header_id));
         }
         self.panel.status = "AI credential removed".to_string();
         AiSettingsMutation::Persist

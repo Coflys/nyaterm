@@ -77,7 +77,9 @@ impl NyaTermApp {
         header_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.hide_ai_provider_secret(cx);
         if self.ai.remove_settings_credential_header(&id, &header_id) {
+            self.forget_text_inputs(&format!("ai.credential.{id}.header.{header_id}."));
             self.request_settings_panel_refresh(cx);
         }
         self.persist_ai_settings_now(cx);
@@ -310,27 +312,16 @@ impl NyaTermApp {
                 });
             }
         }
-        if let Some(header_id) = self.ai.provider_view().revealed_header_id.clone()
-            && let Some(credential) =
-                self.ai
-                    .settings_config()
-                    .provider_credentials
-                    .iter()
-                    .find(|credential| {
-                        credential
-                            .extra_headers
-                            .iter()
-                            .any(|header| header.id == header_id)
-                    })
+        if let Some((credential_id, header_id)) = self.ai.provider_view().revealed_header_id.clone()
             && let Some(input) = self.existing_text_input(format!(
                 "ai.credential.{}.header.{}.value",
-                credential.id, header_id
+                credential_id, header_id
             ))
         {
             let draft = self
                 .ai
                 .settings_credential_header_secret_drafts()
-                .get(&header_id)
+                .get(&(credential_id.clone(), header_id.clone()))
                 .cloned()
                 .unwrap_or_default();
             input.update(cx, |input, cx| {
@@ -415,7 +406,9 @@ impl NyaTermApp {
         header_id: String,
         cx: &mut Context<Self>,
     ) {
-        if self.ai.provider_view().revealed_header_id.as_ref() == Some(&header_id) {
+        if self.ai.provider_view().revealed_header_id.as_ref()
+            == Some(&(credential_id.clone(), header_id.clone()))
+        {
             self.hide_ai_provider_secret(cx);
             self.request_settings_panel_refresh(cx);
             return;
@@ -424,7 +417,7 @@ impl NyaTermApp {
         if let Some(draft) = self
             .ai
             .settings_credential_header_secret_drafts()
-            .get(&header_id)
+            .get(&(credential_id.clone(), header_id.clone()))
             && !draft.is_empty()
         {
             if let Some(input) = self.existing_text_input(format!(
@@ -432,7 +425,7 @@ impl NyaTermApp {
             )) {
                 input.update(cx, |input, cx| input.set_masked(false, cx));
             }
-            self.ai.provider_view_mut().revealed_header_id = Some(header_id);
+            self.ai.provider_view_mut().revealed_header_id = Some((credential_id, header_id));
             self.request_settings_panel_refresh(cx);
             return;
         }
@@ -484,7 +477,8 @@ impl NyaTermApp {
                             input.set_masked(false, cx);
                         });
                     }
-                    app.ai.provider_view_mut().revealed_header_id = Some(header_id);
+                    app.ai.provider_view_mut().revealed_header_id =
+                        Some((credential_id, header_id));
                     app.request_settings_panel_refresh(cx);
                 }
             });
@@ -605,6 +599,11 @@ impl NyaTermApp {
     }
     pub(in crate::features) fn ai_provider_validation_error(&self) -> Option<String> {
         let settings = self.ai.pending_settings();
+        for credential in &settings.provider_credentials {
+            if let Err(error) = nyaterm_core::custom_header_pairs(credential) {
+                return Some(error.to_string());
+            }
+        }
         for credential in settings
             .provider_credentials
             .iter()

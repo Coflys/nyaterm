@@ -80,8 +80,8 @@ struct AiSettingsState {
     manual_model_edit_group: Option<String>,
     /// Per-credential API-key drafts; empty means keep the stored secret.
     credential_secret_drafts: HashMap<String, String>,
-    /// Per-header value drafts, keyed by header id; empty means keep stored.
-    credential_header_secret_drafts: HashMap<String, String>,
+    /// Secret drafts scoped to the credential and header identities.
+    credential_header_secret_drafts: HashMap<(String, String), nyaterm_core::SecretString>,
     action_edit: Option<(AiActionListKind, String, AiActionEditorField)>,
     persistence_generation: u64,
     persistence_in_flight: Option<u64>,

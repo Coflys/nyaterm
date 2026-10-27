@@ -725,7 +725,7 @@ impl NyaTermApp {
             let header_secret = self
                 .ai
                 .settings_credential_header_secret_drafts()
-                .get(&header.id)
+                .get(&(credential_id.to_string(), header.id.clone()))
                 .cloned()
                 .unwrap_or_default();
             self.ensure_text_input(
