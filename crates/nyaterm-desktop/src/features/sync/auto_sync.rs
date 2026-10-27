@@ -389,7 +389,10 @@ mod tests {
         let scope = IoScope::new("fixture");
         // Other unit tests may briefly own the process operation lock.
         let mut result = Ok(AutoSyncResult::Busy);
-        for _ in 0..200 {
+        // Other sync tests share the process-wide operation lock, including
+        // encrypted round trips and conflict resolution. Wait for that work.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
             result = super::run_auto_sync(
                 &store,
                 &runtime,

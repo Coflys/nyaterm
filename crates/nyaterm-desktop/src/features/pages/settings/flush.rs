@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::Context;
 
 use crate::features::{FontCatalogPresentation, NyaTermApp};
-use crate::models::{SettingsTab, SnapshotPasswordPromptKind};
+use crate::models::SettingsTab;
 
 use super::panel::{
     AiSettingsPresentation, CloudSyncPresentation, MasterPasswordPresentation, SettingsChrome,
@@ -44,12 +44,7 @@ impl NyaTermApp {
         surface: SettingsSurface,
     ) -> SettingsSnapshot {
         let active_tab = self.shell.settings_active_tab();
-        let backup_prompt = self.settings.snapshot_password_prompt().filter(|prompt| {
-            matches!(
-                prompt.kind,
-                SnapshotPasswordPromptKind::Export | SnapshotPasswordPromptKind::Import
-            )
-        });
+        let backup_prompt = self.settings.snapshot_password_prompt();
         let draft_dirty = self.settings_draft_dirty() || self.settings.theme_designer().dirty();
         SettingsSnapshot {
             chrome: SettingsChrome {

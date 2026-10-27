@@ -167,6 +167,28 @@ impl CloudSyncFeatureState {
         self.history_visible_limit = HISTORY_PAGE_SIZE;
     }
 
+    pub(in crate::features) fn navigate_history_filter(&mut self, key: &str) -> bool {
+        let filters = [
+            SyncHistoryFilter::All,
+            SyncHistoryFilter::Success,
+            SyncHistoryFilter::Failed,
+            SyncHistoryFilter::Conflict,
+        ];
+        let index = filters
+            .iter()
+            .position(|filter| *filter == self.history_filter)
+            .unwrap_or(0);
+        let index = match key {
+            "left" => (index + filters.len() - 1) % filters.len(),
+            "right" => (index + 1) % filters.len(),
+            "home" => 0,
+            "end" => filters.len() - 1,
+            _ => return false,
+        };
+        self.filter_history(filters[index]);
+        true
+    }
+
     pub(in crate::features) fn history_visible_limit(&self) -> usize {
         self.history_visible_limit
     }
