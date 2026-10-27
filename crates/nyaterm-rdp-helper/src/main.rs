@@ -494,6 +494,8 @@ fn build_config(
     output_tx: mpsc::SyncSender<Outbound>,
     certificate_gate: Arc<CertificateGate>,
 ) -> anyhow::Result<(ironrdp_client::config::Config, Arc<ClipboardBridge>)> {
+    let destination = Destination::new(format!("{}:{}", config.host, config.port))?;
+    let certificate_endpoint = destination.to_string();
     let port = config.port;
     let certificate_output_tx = output_tx.clone();
     let host = config.host.clone();
@@ -502,7 +504,11 @@ fn build_config(
     // already trusts is accepted without a prompt.
     let verifier: ironrdp_tls::CertificateValidationCallback =
         Arc::new(move |der, endpoint, validation_error| {
-            let _ = endpoint;
+            // Trust records and user prompts belong to the configured server. Upstream
+            // may now follow redirects; never label another endpoint as this host.
+            if endpoint != certificate_endpoint {
+                return false;
+            }
             let request_id = Uuid::new_v4().to_string();
             let fingerprint = Sha256::digest(der)
                 .iter()
@@ -562,7 +568,6 @@ fn build_config(
             certificate_gate.waiting.store(false, Ordering::Release);
             accepted
         });
-    let destination = Destination::new(format!("{}:{}", config.host, config.port))?;
     let platform = if cfg!(target_os = "windows") {
         MajorPlatformType::WINDOWS
     } else if cfg!(target_os = "macos") {
@@ -607,6 +612,9 @@ fn build_config(
         // `none` authentication must not submit a password or enter CredSSP.
         .with_credssp(use_credssp)
         .with_tls(!use_credssp)
+        // Upstream can now enable RDPEGFX when a platform H.264 decoder exists.
+        // Keep the existing bitmap path until the graphics pipeline is validated.
+        .with_graphics_pipeline(false)
         .with_codecs(Vec::new())
         .with_pointer_software_rendering(false)
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict)
@@ -1375,10 +1383,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        CertificateGate, DesktopOutputState, DesktopPayload, Outbound, classify_error,
-        convert_and_send_input, convert_input, desktop_update_payload, forward_full_frame_request,
-        forward_output, install_crypto_provider, output_channel, report_ironrdp_panic,
-        secure_attention_input, send_iron_input, send_reliable_iron_input,
+        CertificateGate, DesktopOutputState, DesktopPayload, Outbound, build_config,
+        classify_error, convert_and_send_input, convert_input, desktop_update_payload,
+        forward_full_frame_request, forward_output, install_crypto_provider, output_channel,
+        report_ironrdp_panic, secure_attention_input, send_iron_input, send_reliable_iron_input,
         validate_active_session_id, validate_input_events,
     };
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
@@ -1388,8 +1396,9 @@ mod tests {
     use ironrdp_pdu::input::mouse::PointerFlags;
     use ironrdp_pdu::input::mouse_x::PointerXFlags;
     use nyaterm_remote_desktop::{
-        RdpControlMessage, RdpErrorKind, RdpInputEvent, RemotePoint, RemotePointerButton,
-        RemotePointerEvent, RemoteWheelAxis,
+        RdpCertificatePolicy, RdpClipboardConfig, RdpControlMessage, RdpDisplayConfig,
+        RdpErrorKind, RdpInputEvent, RdpReconnectConfig, RdpSessionConfig, RemotePoint,
+        RemotePointerButton, RemotePointerEvent, RemoteWheelAxis,
     };
 
     #[test]
@@ -1400,6 +1409,122 @@ mod tests {
         let error = validate_active_session_id(Some("session-a"), "session-b")
             .expect_err("foreign session id must fail closed");
         assert!(error.to_string().contains("session id mismatch"));
+    }
+
+    fn helper_config() -> RdpSessionConfig {
+        RdpSessionConfig {
+            relay: None,
+            name: "test".to_string(),
+            host: "server.example".to_string(),
+            port: 3389,
+            username: "user".to_string(),
+            domain: String::new(),
+            password: None,
+            use_nla: false,
+            certificate_policy: RdpCertificatePolicy::Prompt,
+            display: RdpDisplayConfig::default(),
+            clipboard: RdpClipboardConfig::default(),
+            reconnect: RdpReconnectConfig::default(),
+        }
+    }
+
+    #[test]
+    fn helper_keeps_graphics_pipeline_disabled_with_platform_decoders_available() {
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let (config, _) = build_config(
+            "session",
+            &helper_config(),
+            output_tx,
+            Arc::new(CertificateGate::default()),
+        )
+        .unwrap();
+        assert!(!config.connector().support_dyn_vc_gfx_protocol);
+    }
+
+    #[test]
+    fn helper_preserves_authentication_and_certificate_policy_after_upgrade() {
+        for (use_nla, password_present) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let mut source = helper_config();
+            source.use_nla = use_nla;
+            source.password = password_present.then(|| "test-password".into());
+            let (output_tx, _output_rx) = mpsc::sync_channel(1);
+            let (config, _) = build_config(
+                "session",
+                &source,
+                output_tx,
+                Arc::new(CertificateGate::default()),
+            )
+            .unwrap();
+            assert_eq!(
+                config.connector().enable_credssp,
+                use_nla && password_present
+            );
+            assert_eq!(
+                config.connector().enable_tls,
+                !(use_nla && password_present)
+            );
+            assert_eq!(
+                config.certificate_validation(),
+                ironrdp_tls::CertificateValidation::Strict
+            );
+            assert!(config.certificate_validation_callback().is_some());
+            assert!(matches!(
+                config.channels().clipboard,
+                ironrdp_client::config::ClipboardType::Disable
+            ));
+        }
+    }
+
+    #[test]
+    fn certificate_exception_is_scoped_to_the_configured_endpoint() {
+        let (output_tx, output_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new(CertificateGate::default());
+        let (config, _) =
+            build_config("session", &helper_config(), output_tx, gate.clone()).unwrap();
+        let callback = config.certificate_validation_callback().unwrap().clone();
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let accepted = callback(b"test-certificate", "other.example:3389", "untrusted");
+            result_tx.send(accepted).unwrap();
+            accepted
+        });
+        // If a regression prompts for the foreign server, release the callback before
+        // failing so that the test never leaves a certificate-waiting thread behind.
+        let completed = result_rx.recv_timeout(Duration::from_secs(5));
+        let unexpected = output_rx.try_recv();
+        if let Ok(Outbound::Control(RdpControlMessage::CertificateRequest(request))) = &unexpected {
+            *gate.response.lock().unwrap() = Some((
+                request.request_id.clone(),
+                nyaterm_remote_desktop::RdpCertificateResponse::Reject,
+            ));
+            gate.changed.notify_all();
+        }
+        assert!(!worker.join().unwrap());
+        assert!(!completed.unwrap());
+        assert!(
+            unexpected.is_err(),
+            "a foreign endpoint must not create a prompt for the saved host"
+        );
+
+        let callback = config.certificate_validation_callback().unwrap().clone();
+        let worker = std::thread::spawn(move || {
+            callback(b"test-certificate", "server.example:3389", "untrusted")
+        });
+        let Outbound::Control(RdpControlMessage::CertificateRequest(request)) =
+            output_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("expected a certificate prompt for the configured host");
+        };
+        assert_eq!(request.host, "server.example");
+        assert_eq!(request.port, 3389);
+        *gate.response.lock().unwrap() = Some((
+            request.request_id,
+            nyaterm_remote_desktop::RdpCertificateResponse::Reject,
+        ));
+        gate.changed.notify_all();
+        assert!(!worker.join().unwrap());
     }
 
     #[test]
