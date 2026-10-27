@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
+use nyaterm_core::McpTerminalDisplayMode;
 use nyaterm_core::agent_capture::build_agent_capture_command;
 use nyaterm_core::models::connection::AiExecutionProfile;
 use nyaterm_core::raw_cli_capture::{RawCliCapture, RawCliEnd};
@@ -33,6 +34,20 @@ enum BackgroundTerminalTarget {
 pub(in crate::features) struct TerminalExecutionPolicy {
     pub background: bool,
     pub max_lines: u16,
+}
+
+fn external_mcp_terminal_policy(
+    integrated: Option<TerminalExecutionPolicy>,
+    display_mode: McpTerminalDisplayMode,
+    terminal_output_lines: u16,
+) -> TerminalExecutionPolicy {
+    integrated.unwrap_or(TerminalExecutionPolicy {
+        background: false,
+        max_lines: match display_mode {
+            McpTerminalDisplayMode::Inline => terminal_output_lines,
+            McpTerminalDisplayMode::Silent => 0,
+        },
+    })
 }
 
 pub(in crate::features) struct TerminalExecutionRequest {
@@ -389,14 +404,11 @@ impl NyaTermApp {
                         max_lines: self.ai.settings_config().terminal_output_lines,
                     })
             }
-            CapabilityCaller::Mcp => {
-                self.mcp
-                    .terminal_policy(&request.generation)
-                    .unwrap_or(TerminalExecutionPolicy {
-                        background: false,
-                        max_lines: self.ai.settings_config().terminal_output_lines,
-                    })
-            }
+            CapabilityCaller::Mcp => external_mcp_terminal_policy(
+                self.mcp.terminal_policy(&request.generation),
+                self.ai.settings_config().external_mcp.terminal_display_mode,
+                self.ai.settings_config().terminal_output_lines,
+            ),
         };
         let default_timeout = if matches!(&request.caller, CapabilityCaller::Native { .. }) {
             self.ai

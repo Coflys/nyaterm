@@ -6,8 +6,9 @@ use gpui::FocusHandle;
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAgentKind, AiCustomActionConfig, AiModelConfigItem,
     AiModelDiscovery, AiModelSource, AiPermissionMode, AiProviderCredential, AiProviderKind,
-    AiReasoningEffort, AiSettings, CodexThreadMode, ExternalMcpSessionScope, RiskLevel,
-    ai_model_id_for_credential, ai_model_id_for_provider, merge_model_discoveries, now_rfc3339,
+    AiReasoningEffort, AiSettings, CodexThreadMode, ExternalMcpSessionScope,
+    McpTerminalDisplayMode, RiskLevel, ai_model_id_for_credential, ai_model_id_for_provider,
+    merge_model_discoveries, now_rfc3339,
 };
 
 use crate::models::{AiActionEditorField, AiActionListKind};
@@ -191,6 +192,13 @@ impl AiFeatureState {
 
     pub(in crate::features) fn set_settings_mcp_scope(&mut self, scope: ExternalMcpSessionScope) {
         self.settings.config.external_mcp.session_scope = scope;
+    }
+
+    pub(in crate::features) fn set_settings_mcp_terminal_display_mode(
+        &mut self,
+        mode: McpTerminalDisplayMode,
+    ) {
+        self.settings.config.external_mcp.terminal_display_mode = mode;
     }
 
     pub(in crate::features) fn settings_enabled(&self) -> bool {

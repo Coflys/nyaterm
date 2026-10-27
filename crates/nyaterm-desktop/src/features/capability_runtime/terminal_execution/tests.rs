@@ -7,8 +7,54 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::{TerminalExecutionPolicy, TerminalExecutionRequest, TerminalExecutionState};
+use super::{
+    TerminalExecutionPolicy, TerminalExecutionRequest, TerminalExecutionState,
+    external_mcp_terminal_policy,
+};
 use crate::features::terminal::ai_execution::{TerminalExecutionEvent, TerminalExecutionStatus};
+
+#[test]
+fn external_mcp_terminal_display_mode_only_changes_regular_presentation() {
+    use nyaterm_core::McpTerminalDisplayMode;
+
+    let inline = external_mcp_terminal_policy(None, McpTerminalDisplayMode::Inline, 17);
+    assert_eq!(
+        inline,
+        TerminalExecutionPolicy {
+            background: false,
+            max_lines: 17
+        }
+    );
+    let silent = external_mcp_terminal_policy(None, McpTerminalDisplayMode::Silent, 17);
+    assert_eq!(
+        silent,
+        TerminalExecutionPolicy {
+            background: false,
+            max_lines: 0
+        }
+    );
+
+    for integrated in [
+        TerminalExecutionPolicy {
+            background: false,
+            max_lines: 9,
+        },
+        TerminalExecutionPolicy {
+            background: true,
+            max_lines: 3,
+        },
+    ] {
+        for mode in [
+            McpTerminalDisplayMode::Inline,
+            McpTerminalDisplayMode::Silent,
+        ] {
+            assert_eq!(
+                external_mcp_terminal_policy(Some(integrated), mode, 17),
+                integrated
+            );
+        }
+    }
+}
 
 fn execution_request(
     id: &str,
