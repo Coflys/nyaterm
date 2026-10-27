@@ -423,3 +423,70 @@ fn superseded_file_list_reply(expire: bool) {
         "a superseded file list must not start a transfer"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn text_only_timeouts_are_reported_while_the_helper_waits_for_control() {
+    let mut harness = ProtocolHarness::new();
+    harness.connect();
+    let formats = [ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)];
+    let list = || ClipboardPdu::FormatList(FormatList::new_unicode(&formats, true).unwrap());
+    harness.receive(list());
+    assert_eq!(harness.outgoing().len(), 1);
+    harness.receive(list());
+    assert!(harness.messages.try_recv().is_err());
+
+    let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let bridge = Arc::clone(&harness.bridge);
+    let receiver = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(crate::CLIPBOARD_TIMEOUT_CHECK_INTERVAL);
+        crate::receive_control(&mut control_rx, &mut tick, Some(&bridge)).await
+    });
+    // Exercise the actual helper wait path with file support disabled. Capture
+    // the outcome before asserting so even a regression releases the receiver.
+    let timeout = harness
+        .output
+        .recv_timeout(std::time::Duration::from_secs(8));
+    control_tx
+        .send(Ok(RdpControlMessage::Ping { sequence: 42 }))
+        .unwrap();
+    let message = tokio::time::timeout(std::time::Duration::from_secs(2), receiver)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(message, RdpControlMessage::Ping { sequence: 42 }));
+    let Outbound::Control(RdpControlMessage::Error {
+        error,
+        fatal,
+        session_id,
+    }) = timeout.expect("text-only clipboard must report a stalled remote response")
+    else {
+        panic!("expected a typed clipboard timeout");
+    };
+    assert_eq!(session_id, "clipboard-test");
+    assert_eq!(error.kind, nyaterm_remote_desktop::RdpErrorKind::Clipboard);
+    assert!(!fatal);
+    assert!(
+        harness.messages.try_recv().is_err(),
+        "a timeout must not send a new request"
+    );
+
+    harness.receive(ClipboardPdu::FormatDataResponse(
+        OwnedFormatDataResponse::new_unicode_string("stale remote text"),
+    ));
+    assert!(
+        harness.output.try_recv().is_err(),
+        "late superseded text must not be published"
+    );
+    assert_eq!(harness.outgoing().len(), 1);
+    harness.receive(ClipboardPdu::FormatDataResponse(
+        OwnedFormatDataResponse::new_unicode_string("current remote text"),
+    ));
+    let Outbound::Control(RdpControlMessage::Clipboard { text, .. }) =
+        harness.output.try_recv().unwrap()
+    else {
+        panic!("expected the current remote text");
+    };
+    assert_eq!(text, "current remote text");
+}

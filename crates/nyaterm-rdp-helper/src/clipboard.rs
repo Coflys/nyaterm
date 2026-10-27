@@ -170,6 +170,10 @@ impl ClipboardBridge {
         reply
     }
 
+    pub(super) fn check_remote_fetch_timeout(&self) {
+        self.expire_remote_fetch(REMOTE_FETCH_TIMEOUT);
+    }
+
     fn expire_remote_fetch(&self, timeout: Duration) {
         let timed_out = self
             .fetch
@@ -315,7 +319,6 @@ impl ClipboardBridge {
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .expire();
                 }
-                bridge.expire_remote_fetch(REMOTE_FETCH_TIMEOUT);
                 std::thread::sleep(Duration::from_millis(750));
             }
         });

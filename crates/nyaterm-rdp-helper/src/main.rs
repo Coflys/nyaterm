@@ -41,6 +41,7 @@ mod clipboard;
 use clipboard::ClipboardBridge;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const CLIPBOARD_TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_millis(750);
 const STDOUT_BUFFER_BYTES: usize = 256 * 1024;
 
 enum Outbound {
@@ -131,6 +132,26 @@ fn install_crypto_provider() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("failed to install the rustls aws-lc-rs CryptoProvider"))
 }
 
+/// Keep remote request diagnostics independent of local file clipboard polling.
+/// The interval belongs to the control loop, so it also runs in text-only mode
+/// while the application sends no new control messages.
+async fn receive_control(
+    control_rx: &mut tokio_mpsc::UnboundedReceiver<io::Result<RdpControlMessage>>,
+    clipboard_tick: &mut tokio::time::Interval,
+    clipboard: Option<&ClipboardBridge>,
+) -> Option<io::Result<RdpControlMessage>> {
+    loop {
+        tokio::select! {
+            message = control_rx.recv() => return message,
+            _ = clipboard_tick.tick() => {
+                if let Some(clipboard) = clipboard {
+                    clipboard.check_remote_fetch_timeout();
+                }
+            }
+        }
+    }
+}
+
 async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
     let (output_tx, output_rx) = mpsc::sync_channel(1);
     let writer = spawn_stdout_writer(output_rx)?;
@@ -145,8 +166,16 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
     let mut clipboard_bridge = None;
     let mut hello_received = false;
     let mut active_session_id: Option<String> = None;
+    let mut clipboard_tick = tokio::time::interval(CLIPBOARD_TIMEOUT_CHECK_INTERVAL);
+    clipboard_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    while let Some(message) = control_rx.recv().await {
+    while let Some(message) = receive_control(
+        &mut control_rx,
+        &mut clipboard_tick,
+        clipboard_bridge.as_deref(),
+    )
+    .await
+    {
         let message = message?;
         validate_control_phase(&message, hello_received)?;
         match message {
