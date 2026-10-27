@@ -414,8 +414,13 @@ pub(super) fn read_clipboard_paths() -> Option<Vec<PathBuf>> {
 }
 
 fn write_clipboard_paths(paths: &[PathBuf]) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .map_err(|error| error.to_string())?
+    let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
+    // arboard's file-list setter only writes CF_HDROP; it does not empty the
+    // clipboard. Explorer's file data object from the previous local copy then
+    // stays on the OLE clipboard and paste targets keep using the old files,
+    // even though CF_HDROP already points at the new ones.
+    clipboard.clear().map_err(|error| error.to_string())?;
+    clipboard
         .set()
         .file_list(paths)
         .map_err(|error| error.to_string())
