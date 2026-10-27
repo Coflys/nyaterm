@@ -132,6 +132,8 @@ impl DesktopController {
         let shell_slot = Rc::new(RefCell::new(None));
         let shell_slot_for_window = shell_slot.clone();
         let flavor = nyaterm_core::app_identity::AppFlavor::current();
+        #[cfg(target_os = "linux")]
+        let window_decorations = self.effective_window_decorations(cx);
         let handle = cx.open_window(
             WindowOptions {
                 app_id: Some(flavor.desktop_id().to_string()),
@@ -142,7 +144,7 @@ impl DesktopController {
                         .then(|| point(px(9.), px(11.))),
                 }),
                 #[cfg(target_os = "linux")]
-                window_decorations: Some(self.effective_window_decorations(cx)),
+                window_decorations: Some(window_decorations),
                 window_bounds: Some(placement.window_bounds),
                 display_id: placement.display_id,
                 ..Default::default()
