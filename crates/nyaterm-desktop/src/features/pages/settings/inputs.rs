@@ -670,11 +670,13 @@ impl NyaTermApp {
 
     /// Build the inputs a provider credential row draws.
     ///
-    /// Three fields for the credential itself, plus the manual-model box its group
-    /// draws: `ai_model_groups` builds one group per enabled credential, keyed by the
-    /// credential id, and looks that box up whether or not the group is expanded.
-    /// Adding a credential reveals all four, so the add is also a boundary that builds
-    /// them; keep the ids in step with the lookups in `ai::models`.
+    /// Three fields for the credential itself, one name/value pair per custom
+    /// header, plus the manual-model box its group draws: `ai::models` builds
+    /// one group per enabled credential, keyed by the credential id, and looks
+    /// that box up whether or not the group is expanded. Adding a credential
+    /// reveals the fixed fields; header rows are ensured when the credential
+    /// is selected or edited, so keep ids in step with the lookups in
+    /// `ai::models`.
     pub(in crate::features) fn ensure_ai_credential_inputs(
         &mut self,
         credential_id: &str,
@@ -715,6 +717,36 @@ impl NyaTermApp {
                         "".into()
                     },
                     ..secret_input_setup(secret_field)
+                },
+                cx,
+            );
+        }
+        for header in &credential.extra_headers {
+            let header_secret = self
+                .ai
+                .settings_credential_header_secret_drafts()
+                .get(&header.id)
+                .cloned()
+                .unwrap_or_default();
+            self.ensure_text_input(
+                format!("ai.credential.{credential_id}.header.{}.name", header.id),
+                &header.name,
+                TextInputSetup {
+                    placeholder: t!("ai.customHeaderName").to_string().into(),
+                    ..secret_input_setup(false)
+                },
+                cx,
+            );
+            self.ensure_text_input(
+                format!("ai.credential.{credential_id}.header.{}.value", header.id),
+                &header_secret,
+                TextInputSetup {
+                    placeholder: if !header.value.is_empty() {
+                        "••••••••".into()
+                    } else {
+                        t!("ai.customHeaderValue").to_string().into()
+                    },
+                    ..secret_input_setup(true)
                 },
                 cx,
             );

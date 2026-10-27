@@ -1103,6 +1103,15 @@ impl ConnectionStore {
         for credential in &mut settings.provider_credentials {
             credential.api_key =
                 decrypt_optional_secret(&crypto, master_key_token, &credential.api_key)?;
+            for header in &mut credential.extra_headers {
+                let value = std::mem::take(&mut header.value);
+                header.value = decrypt_optional_secret(
+                    &crypto,
+                    master_key_token,
+                    &Some(value).filter(|value| !value.is_empty()),
+                )?
+                .unwrap_or_default();
+            }
         }
         Ok(())
     }
@@ -1264,6 +1273,15 @@ fn encrypt_ai_settings_secrets(
     for credential in &mut settings.provider_credentials {
         credential.api_key =
             encrypt_optional_secret(crypto, master_key_token, &credential.api_key)?;
+        for header in &mut credential.extra_headers {
+            let value = std::mem::take(&mut header.value);
+            header.value = encrypt_optional_secret(
+                crypto,
+                master_key_token,
+                &Some(value).filter(|value| !value.is_empty()),
+            )?
+            .unwrap_or_default();
+        }
     }
     Ok(())
 }

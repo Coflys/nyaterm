@@ -2,7 +2,8 @@
 
 use super::{
     AiApiFormat, AiBackendKind, AiModelConfigItem, AiModelReasoningEffort, AiProviderApiProtocol,
-    AiProviderCredential, AiProviderKind, AiReasoningEffort,
+    AiProviderCredential, AiProviderKind, AiReasoningEffort, MAX_AI_CUSTOM_HEADER_NAME_LEN,
+    MAX_AI_CUSTOM_HEADER_VALUE_LEN, MAX_AI_CUSTOM_HEADERS,
 };
 
 pub const MODEL_REASONING_EFFORTS: [AiModelReasoningEffort; 8] = [
@@ -293,14 +294,139 @@ pub fn parse_provider_model_page(
     Ok(ProviderModelPage { names, next_cursor })
 }
 
+/// Exact casing of well-known auth headers so a user-configured override
+/// replaces the SDK-managed value instead of being sent alongside it.
+fn canonical_custom_header_name(name: &str) -> &str {
+    if name.eq_ignore_ascii_case("authorization") {
+        "Authorization"
+    } else if name.eq_ignore_ascii_case("x-api-key") {
+        "x-api-key"
+    } else if name.eq_ignore_ascii_case("x-goog-api-key") {
+        "x-goog-api-key"
+    } else if name.eq_ignore_ascii_case("anthropic-version") {
+        "anthropic-version"
+    } else {
+        name
+    }
+}
+
+/// HTTP token characters (RFC 9110 tchar) for custom header names.
+pub fn is_valid_custom_header_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty()
+        && name.len() <= MAX_AI_CUSTOM_HEADER_NAME_LEN
+        && name.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+                    | b'0'..=b'9'
+                    | b'a'..=b'z'
+                    | b'A'..=b'Z'
+            )
+        })
+}
+
+fn is_valid_custom_header_value(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= MAX_AI_CUSTOM_HEADER_VALUE_LEN
+        && value
+            .bytes()
+            .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
+}
+
+/// Validated `(name, value)` pairs for a credential: rows are trimmed, blank
+/// rows are skipped, and later rows win on case-insensitive name conflicts.
+pub fn custom_header_pairs(credential: &AiProviderCredential) -> Vec<(String, String)> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let mut index_by_name: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for header in &credential.extra_headers {
+        let name = header.name.trim();
+        let value = header.value.expose_secret().trim();
+        if !is_valid_custom_header_name(name) || !is_valid_custom_header_value(value) {
+            continue;
+        }
+        let pair = (
+            canonical_custom_header_name(name).to_string(),
+            value.to_string(),
+        );
+        let key = name.to_ascii_lowercase();
+        if let Some(&index) = index_by_name.get(&key) {
+            headers[index] = pair;
+        } else {
+            index_by_name.insert(key, headers.len());
+            headers.push(pair);
+        }
+    }
+    headers.truncate(MAX_AI_CUSTOM_HEADERS);
+    headers
+}
+
+/// Trims custom headers, drops blank/invalid rows, assigns missing ids, and
+/// deduplicates case-insensitive names (last row wins).
+pub fn normalize_custom_headers(headers: &mut Vec<super::AiHttpHeader>) {
+    let mut normalized: Vec<super::AiHttpHeader> = Vec::with_capacity(headers.len());
+    let mut index_by_name: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for header in headers.drain(..) {
+        let name = header.name.trim();
+        let value = header.value.expose_secret().trim();
+        if !is_valid_custom_header_name(name) || !is_valid_custom_header_value(value) {
+            continue;
+        }
+        let row = super::AiHttpHeader {
+            id: if header.id.trim().is_empty() {
+                super::uuid()
+            } else {
+                header.id
+            },
+            name: name.to_string(),
+            value: value.to_string().into(),
+        };
+        let key = name.to_ascii_lowercase();
+        if let Some(&index) = index_by_name.get(&key) {
+            normalized[index] = row;
+        } else {
+            index_by_name.insert(key, normalized.len());
+            normalized.push(row);
+        }
+    }
+    normalized.truncate(MAX_AI_CUSTOM_HEADERS);
+    *headers = normalized;
+}
+
+/// A blank custom header row with a fresh id, for settings editors.
+pub fn new_custom_header() -> super::AiHttpHeader {
+    super::AiHttpHeader {
+        id: super::uuid(),
+        name: String::new(),
+        value: crate::SecretString::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        available_provider_name, effective_protocol, model_belongs_to_provider,
-        model_reasoning_options, provider_name_taken, set_provider_protocol,
+        available_provider_name, custom_header_pairs, effective_protocol,
+        is_valid_custom_header_name, model_belongs_to_provider, model_reasoning_options,
+        new_custom_header, normalize_custom_headers, provider_name_taken, set_provider_protocol,
     };
     use crate::ai::{
-        AiApiFormat, AiModelConfigItem, AiProviderApiProtocol, AiProviderCredential,
+        AiApiFormat, AiHttpHeader, AiModelConfigItem, AiProviderApiProtocol, AiProviderCredential,
         AiProviderKind, AiReasoningEffort, AiSettings, normalize_ai_settings,
     };
     use serde_json::json;
@@ -310,6 +436,65 @@ mod tests {
             json!({"id":id,"name":"Account","provider_kind":kind,"enabled":true}),
         )
         .unwrap()
+    }
+
+    fn header(id: &str, name: &str, value: &str) -> AiHttpHeader {
+        AiHttpHeader {
+            id: id.to_string(),
+            name: name.to_string(),
+            value: value.into(),
+        }
+    }
+
+    #[test]
+    fn custom_header_names_follow_token_syntax() {
+        assert!(is_valid_custom_header_name("X-Custom-Token"));
+        assert!(is_valid_custom_header_name("authorization"));
+        assert!(is_valid_custom_header_name("  X-Foo  "));
+        assert!(!is_valid_custom_header_name(""));
+        assert!(!is_valid_custom_header_name("   "));
+        assert!(!is_valid_custom_header_name("not a header"));
+        assert!(!is_valid_custom_header_name("X-Foo:bar"));
+        assert!(!is_valid_custom_header_name("X-Foo\r\nbar"));
+    }
+
+    #[test]
+    fn custom_header_pairs_canonicalize_auth_and_dedupe_last_wins() {
+        let mut credential = credential("custom", "openai_compatible");
+        credential.extra_headers = vec![
+            header("h1", "X-Custom-Token", "secret"),
+            header("h2", "authorization", "Bearer override"),
+            header("h3", "X-CUSTOM-TOKEN", "newer"),
+            header("h4", "", "dropped"),
+            header("h5", "X Bad", "dropped"),
+            header("h6", "X-Empty", ""),
+        ];
+        assert_eq!(
+            custom_header_pairs(&credential),
+            vec![
+                ("X-CUSTOM-TOKEN".to_string(), "newer".to_string()),
+                ("Authorization".to_string(), "Bearer override".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn custom_headers_normalize_in_place_for_settings() {
+        let mut headers = vec![
+            header("", "  X-Foo  ", "  one  "),
+            header("keep", "x-foo", "two"),
+            header("", "", "dropped"),
+        ];
+        normalize_custom_headers(&mut headers);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].id, "keep");
+        assert_eq!(headers[0].name, "x-foo");
+        assert_eq!(headers[0].value.expose_secret(), "two");
+
+        let fresh = new_custom_header();
+        assert!(!fresh.id.is_empty());
+        assert!(fresh.name.is_empty());
+        assert!(fresh.value.is_empty());
     }
     #[test]
     fn same_brand_accounts_never_capture_implicit_builtin_models() {

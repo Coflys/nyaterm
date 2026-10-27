@@ -1,6 +1,7 @@
 mod provider;
 mod proxy;
 use nyaterm_core::ai::{AiProviderApiProtocol, provider_settings::effective_protocol};
+use provider::apply_custom_headers;
 pub(crate) use provider::discover_provider_models_cancellable;
 pub use provider::{discover_provider_models, test_model_connection};
 use std::collections::BTreeMap;
@@ -182,6 +183,7 @@ fn complete_openai_responses_chat(
     {
         http_request = http_request.bearer_auth(api_key);
     }
+    http_request = apply_custom_headers(http_request, credential);
     let response = http_request.send().map_err(map_ai_http_error)?;
     let status = response.status();
     let response_body = response.text().map_err(map_ai_http_error)?;
@@ -216,6 +218,7 @@ fn stream_openai_responses_chat(
     {
         http_request = http_request.bearer_auth(api_key);
     }
+    http_request = apply_custom_headers(http_request, credential);
     let response = http_request.send().map_err(map_ai_http_error)?;
     let status = response.status();
     if !status.is_success() {
@@ -253,6 +256,7 @@ fn complete_openai_compatible_chat(
         http_request = http_request.bearer_auth(api_key);
     }
 
+    http_request = apply_custom_headers(http_request, credential);
     let response = http_request.send().map_err(map_ai_http_error)?;
     let status = response.status();
     let response_body = response.text().map_err(map_ai_http_error)?;
@@ -297,6 +301,7 @@ fn stream_openai_compatible_chat(
         http_request = http_request.bearer_auth(api_key);
     }
 
+    http_request = apply_custom_headers(http_request, credential);
     let response = http_request.send().map_err(map_ai_http_error)?;
     let status = response.status();
     if !status.is_success() {
@@ -330,13 +335,12 @@ fn stream_anthropic_chat(
         true,
     );
     let api_key = api_key(credential)?;
-    let response = client
+    let mut http_request = client
         .post(url)
         .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .json(&body)
-        .send()
-        .map_err(map_ai_http_error)?;
+        .header("anthropic-version", ANTHROPIC_VERSION);
+    http_request = apply_custom_headers(http_request, credential);
+    let response = http_request.json(&body).send().map_err(map_ai_http_error)?;
     let status = response.status();
     if !status.is_success() {
         let response_body = response.text().map_err(map_ai_http_error)?;
@@ -369,12 +373,9 @@ fn stream_gemini_chat(
         .map_err(|error| error.to_string())?;
     let body = build_gemini_chat_request_body(request, settings, history);
     let api_key = api_key(credential)?;
-    let response = client
-        .post(url)
-        .header("x-goog-api-key", api_key)
-        .json(&body)
-        .send()
-        .map_err(map_ai_http_error)?;
+    let mut http_request = client.post(url).header("x-goog-api-key", api_key);
+    http_request = apply_custom_headers(http_request, credential);
+    let response = http_request.json(&body).send().map_err(map_ai_http_error)?;
     let status = response.status();
     if !status.is_success() {
         let response_body = response.text().map_err(map_ai_http_error)?;
@@ -400,13 +401,12 @@ fn complete_anthropic_chat(
     let url = anthropic_messages_url(base_url).map_err(|error| error.to_string())?;
     let body = build_anthropic_chat_request_body(resolved_model, request, settings, history);
     let api_key = api_key(credential)?;
-    let response = client
+    let mut http_request = client
         .post(url)
         .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .json(&body)
-        .send()
-        .map_err(map_ai_http_error)?;
+        .header("anthropic-version", ANTHROPIC_VERSION);
+    http_request = apply_custom_headers(http_request, credential);
+    let response = http_request.json(&body).send().map_err(map_ai_http_error)?;
     let status = response.status();
     let response_body = response.text().map_err(map_ai_http_error)?;
     if !status.is_success() {
@@ -438,12 +438,9 @@ fn complete_gemini_chat(
         gemini_generate_content_url(base_url, &model_name).map_err(|error| error.to_string())?;
     let body = build_gemini_chat_request_body(request, settings, history);
     let api_key = api_key(credential)?;
-    let response = client
-        .post(url)
-        .header("x-goog-api-key", api_key)
-        .json(&body)
-        .send()
-        .map_err(map_ai_http_error)?;
+    let mut http_request = client.post(url).header("x-goog-api-key", api_key);
+    http_request = apply_custom_headers(http_request, credential);
+    let response = http_request.json(&body).send().map_err(map_ai_http_error)?;
     let status = response.status();
     let response_body = response.text().map_err(map_ai_http_error)?;
     if !status.is_success() {
@@ -795,6 +792,7 @@ mod tests {
             api_format: AiApiFormat::Responses,
             base_url: Some(base_url),
             api_key: Some("mock-fixture-key".to_string().into()),
+            extra_headers: Vec::new(),
             enabled: true,
         };
         let model = AiModelConfigItem {
@@ -1029,6 +1027,54 @@ mod tests {
                 "{protocol:?} missing done"
             );
         }
+    }
+
+    #[test]
+    fn custom_headers_are_sent_with_discovery_and_chat_and_override_auth() {
+        use super::discover_provider_models;
+        use nyaterm_core::AiHttpHeader;
+
+        let (base, server) =
+            mock_server(r#"{"data":[{"id":"gpt-test"}]}"#.into(), "application/json");
+        let mut settings = responses_settings(base);
+        settings.provider_credentials[0].api_format = AiApiFormat::ChatCompletions;
+        settings.provider_credentials[0].extra_headers = vec![
+            AiHttpHeader {
+                id: "h1".into(),
+                name: "X-Custom-Token".into(),
+                value: "secret-1".into(),
+            },
+            AiHttpHeader {
+                id: "h2".into(),
+                name: "authorization".into(),
+                value: "Bearer override".into(),
+            },
+        ];
+        let models =
+            discover_provider_models(&settings, &settings.provider_credentials[0]).unwrap();
+        assert_eq!(models.len(), 1);
+        let raw = server.join().unwrap().to_lowercase();
+        assert!(raw.starts_with("get /v1/models"));
+        assert!(raw.contains("x-custom-token: secret-1"), "{raw}");
+        assert!(raw.contains("authorization: bearer override"), "{raw}");
+        assert!(!raw.contains("mock-fixture-key"), "{raw}");
+
+        let (base, server) = mock_server(
+            r#"{"choices":[{"message":{"content":"OK"}}]}"#.into(),
+            "application/json",
+        );
+        settings.provider_credentials[0].base_url = Some(base);
+        assert_eq!(
+            complete_native_chat(&settings, &request(), &[])
+                .unwrap()
+                .text,
+            "OK"
+        );
+        let raw = server.join().unwrap().to_lowercase();
+        assert!(raw.starts_with("post /v1/chat/completions"), "{raw}");
+        assert!(raw.contains("x-custom-token: secret-1"), "{raw}");
+        assert!(raw.contains("authorization: bearer override"), "{raw}");
+        assert!(!raw.contains("mock-fixture-key"), "{raw}");
     }
 
     #[test]

@@ -391,6 +391,7 @@ fn model_catalog_mutations_keep_default_model_valid() {
             provider_kind: AiProviderKind::OpenaiCompatible,
             base_url: Some("https://example.invalid".to_string()),
             api_key: None,
+            extra_headers: Vec::new(),
             enabled: true,
         });
     state.settings.config.default_model_id = None;
@@ -435,6 +436,61 @@ fn credential_edits_move_secret_drafts_into_both_compatible_records() {
 }
 
 #[test]
+fn credential_header_edits_flow_through_drafts_into_config() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let header_id = state
+        .add_settings_credential_header("openai")
+        .expect("add header");
+    assert!(state.apply_settings_credential_input(
+        &format!("openai.header.{header_id}.name"),
+        "X-Token".to_string(),
+    ));
+    assert!(state.apply_settings_credential_input(
+        &format!("openai.header.{header_id}.value"),
+        "secret".to_string(),
+    ));
+
+    let pending = state.pending_settings();
+    let pending_header = pending.provider_credentials[0]
+        .extra_headers
+        .iter()
+        .find(|header| header.id == header_id)
+        .expect("pending header");
+    assert_eq!(pending_header.name, "X-Token");
+    assert_eq!(pending_header.value.expose_secret(), "secret");
+    assert!(
+        state.settings.config.provider_credentials[0]
+            .extra_headers
+            .iter()
+            .all(|header| header.value.is_empty())
+    );
+
+    state.commit_settings_credential_edits("openai");
+    let stored = state.settings.config.provider_credentials[0]
+        .extra_headers
+        .iter()
+        .find(|header| header.id == header_id)
+        .expect("stored header");
+    assert_eq!(stored.name, "X-Token");
+    assert_eq!(stored.value.expose_secret(), "secret");
+    assert!(
+        !state
+            .settings
+            .credential_header_secret_drafts
+            .contains_key(&header_id)
+    );
+
+    assert!(state.remove_settings_credential_header("openai", &header_id));
+    assert!(
+        state.settings.config.provider_credentials[0]
+            .extra_headers
+            .is_empty()
+    );
+}
+
+#[test]
 fn credential_catalog_changes_preserve_an_absent_default_model() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -471,6 +527,7 @@ fn credential_catalog_changes_preserve_an_absent_default_model() {
             provider_kind: AiProviderKind::OpenaiCompatible,
             base_url: Some("https://example.invalid".to_string()),
             api_key: None,
+            extra_headers: Vec::new(),
             enabled: true,
         });
     assert_eq!(

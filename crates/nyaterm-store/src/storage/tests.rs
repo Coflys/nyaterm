@@ -5401,7 +5401,7 @@ fn ai_settings_loads_and_normalizes_legacy_embedded_settings() {
     store.save_settings_value(&raw).expect("save raw settings");
 
     let loaded = store.load_ai_settings().expect("load ai");
-    assert_eq!(loaded.schema_version, 6);
+    assert_eq!(loaded.schema_version, 7);
     assert_eq!(loaded.active_profile_id, "ollama");
     assert_eq!(loaded.default_model_id.as_deref(), Some("ollama:llama3"));
     assert!(!loaded.provider_credentials.is_empty());
@@ -5461,7 +5461,7 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
     store.save_settings_value(&raw).expect("seed settings");
 
     let mut loaded = store.load_ai_settings().expect("load settings");
-    assert_eq!(loaded.schema_version, 6);
+    assert_eq!(loaded.schema_version, 7);
     assert_eq!(
         loaded.external_mcp.terminal_display_mode,
         nyaterm_core::McpTerminalDisplayMode::Inline

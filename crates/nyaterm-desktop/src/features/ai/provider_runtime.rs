@@ -60,6 +60,28 @@ impl NyaTermApp {
         self.reset_text_input(&format!("ai.credential.{id}.base-url"), &url, cx);
         self.persist_ai_settings_now(cx);
     }
+    pub(in crate::features) fn add_ai_provider_header(
+        &mut self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ai.add_settings_credential_header(&id).is_some() {
+            self.ensure_ai_credential_inputs(&id, cx);
+            self.request_settings_panel_refresh(cx);
+        }
+        self.persist_ai_settings_now(cx);
+    }
+    pub(in crate::features) fn remove_ai_provider_header(
+        &mut self,
+        id: String,
+        header_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ai.remove_settings_credential_header(&id, &header_id) {
+            self.request_settings_panel_refresh(cx);
+        }
+        self.persist_ai_settings_now(cx);
+    }
     pub(in crate::features) fn remove_ai_provider_confirm(
         &mut self,
         id: String,
@@ -288,7 +310,36 @@ impl NyaTermApp {
                 });
             }
         }
+        if let Some(header_id) = self.ai.provider_view().revealed_header_id.clone()
+            && let Some(credential) =
+                self.ai
+                    .settings_config()
+                    .provider_credentials
+                    .iter()
+                    .find(|credential| {
+                        credential
+                            .extra_headers
+                            .iter()
+                            .any(|header| header.id == header_id)
+                    })
+            && let Some(input) = self.existing_text_input(format!(
+                "ai.credential.{}.header.{}.value",
+                credential.id, header_id
+            ))
+        {
+            let draft = self
+                .ai
+                .settings_credential_header_secret_drafts()
+                .get(&header_id)
+                .cloned()
+                .unwrap_or_default();
+            input.update(cx, |input, cx| {
+                input.set_content_silent(&draft, cx);
+                input.set_masked(true, cx);
+            });
+        }
         self.ai.provider_view_mut().revealed_id = None;
+        self.ai.provider_view_mut().revealed_header_id = None;
     }
     pub(in crate::features) fn toggle_ai_provider_secret(
         &mut self,
@@ -352,6 +403,88 @@ impl NyaTermApp {
                         });
                     }
                     app.ai.provider_view_mut().revealed_id = Some(id);
+                    app.request_settings_panel_refresh(cx);
+                }
+            });
+        })
+        .detach();
+    }
+    pub(in crate::features) fn toggle_ai_provider_header_secret(
+        &mut self,
+        credential_id: String,
+        header_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ai.provider_view().revealed_header_id.as_ref() == Some(&header_id) {
+            self.hide_ai_provider_secret(cx);
+            self.request_settings_panel_refresh(cx);
+            return;
+        }
+        self.hide_ai_provider_secret(cx);
+        if let Some(draft) = self
+            .ai
+            .settings_credential_header_secret_drafts()
+            .get(&header_id)
+            && !draft.is_empty()
+        {
+            if let Some(input) = self.existing_text_input(format!(
+                "ai.credential.{credential_id}.header.{header_id}.value"
+            )) {
+                input.update(cx, |input, cx| input.set_masked(false, cx));
+            }
+            self.ai.provider_view_mut().revealed_header_id = Some(header_id);
+            self.request_settings_panel_refresh(cx);
+            return;
+        }
+        let generation = self.ai.provider_view().generation;
+        let reveal_generation = self.ai.provider_view().reveal_generation;
+        let settings = self.ai.pending_settings();
+        let store = self.store_blocking_client();
+        let jobs = self.blocking_jobs.clone();
+        let reveal_credential_id = credential_id.clone();
+        let reveal_header_id = header_id.clone();
+        let selected_id = self.ai.provider_view().selected_id.clone();
+        cx.spawn(async move |this, cx| {
+            let result = await_blocking_job(jobs.submit_task("ai-secret-reveal", move |_| {
+                let current = store
+                    .request_fn(nyaterm_store::StoreDomain::Ai, |store| {
+                        store.load_ai_settings()
+                    })
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, String>(
+                    nyaterm_core::merge_masked_ai_settings(&current, settings)
+                        .provider_credentials
+                        .into_iter()
+                        .find(|credential| credential.id == reveal_credential_id)
+                        .and_then(|credential| {
+                            credential
+                                .extra_headers
+                                .into_iter()
+                                .find(|header| header.id == reveal_header_id)
+                                .map(|header| header.value)
+                        })
+                        .unwrap_or_default(),
+                )
+            }))
+            .await
+            .and_then(|result| result);
+            let _ = this.update(cx, |app, cx| {
+                if app.ai.provider_view().generation != generation
+                    || app.ai.provider_view().reveal_generation != reveal_generation
+                    || app.ai.provider_view().selected_id != selected_id
+                {
+                    return;
+                }
+                if let Ok(secret) = result {
+                    if let Some(input) = app.existing_text_input(format!(
+                        "ai.credential.{credential_id}.header.{header_id}.value"
+                    )) {
+                        input.update(cx, |input, cx| {
+                            input.set_content_silent(secret.expose_secret(), cx);
+                            input.set_masked(false, cx);
+                        });
+                    }
+                    app.ai.provider_view_mut().revealed_header_id = Some(header_id);
                     app.request_settings_panel_refresh(cx);
                 }
             });

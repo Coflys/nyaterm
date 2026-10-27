@@ -7,7 +7,31 @@ use nyaterm_core::ai::{
 };
 use serde_json::json;
 use std::io::{BufRead, BufReader};
+use std::str::FromStr;
 use std::time::Duration;
+
+/// Applies a credential's custom headers to a raw request builder. Applied
+/// after auth headers so user overrides win.
+pub(crate) fn apply_custom_headers(
+    builder: zed_reqwest::blocking::RequestBuilder,
+    credential: &AiProviderCredential,
+) -> zed_reqwest::blocking::RequestBuilder {
+    let mut map = zed_reqwest::header::HeaderMap::new();
+    for (name, value) in nyaterm_core::custom_header_pairs(credential) {
+        let (Ok(parsed_name), Ok(parsed_value)) = (
+            zed_reqwest::header::HeaderName::from_str(&name),
+            zed_reqwest::header::HeaderValue::from_str(&value),
+        ) else {
+            continue;
+        };
+        map.insert(parsed_name, parsed_value);
+    }
+    if map.is_empty() {
+        builder
+    } else {
+        builder.headers(map)
+    }
+}
 
 pub fn discover_provider_models(
     settings: &AiSettings,
@@ -76,6 +100,7 @@ pub(crate) fn discover_provider_models_cancellable(
                 _ => request.bearer_auth(key),
             };
         }
+        request = apply_custom_headers(request, credential);
         let response = request.send().map_err(|error| error.to_string())?;
         if !response.status().is_success() {
             return Err(format!("Provider returned {}", response.status()));
@@ -145,6 +170,7 @@ pub fn complete_ollama(
     if let Some(key) = credential.api_key.as_deref().filter(|key| !key.is_empty()) {
         http = http.bearer_auth(key);
     }
+    http = apply_custom_headers(http, credential);
     let response = http.send().map_err(|error| error.to_string())?;
     if !response.status().is_success() {
         return Err(format!("Ollama returned {}", response.status()));
