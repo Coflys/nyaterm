@@ -962,7 +962,7 @@ impl SettingsPanel {
         }
     }
 
-    fn select_entity(
+    pub(in crate::features::pages::settings) fn select_entity(
         &mut self,
         id: SharedString,
         options: Vec<NyaSelectOption>,

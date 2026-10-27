@@ -2911,11 +2911,95 @@ fn native_window_material_is_restored_from_backup_and_preserved_during_sync() {
 }
 
 #[test]
+fn window_decorations_default_and_roundtrip_without_discarding_future_data() {
+    use nyaterm_core::models::window_decoration::WindowDecoration;
+
+    let dir = unique_temp_dir("window-decorations-compatibility");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let legacy = serde_json::json!({"appearance": {
+        "theme": "github-dark", "future_field": {"enabled": true}
+    }});
+    store.save_settings_value(&legacy).unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert_eq!(settings.window_decorations, WindowDecoration::Client);
+    for decoration in [
+        WindowDecoration::Server,
+        WindowDecoration::Client,
+        WindowDecoration::Unknown("future_decoration".into()),
+    ] {
+        settings.window_decorations = decoration.clone();
+        let saved = store.save_appearance_settings(&settings).unwrap();
+        assert_eq!(saved.window_decorations, decoration);
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["appearance"]["window_decorations"], decoration.as_str());
+        assert_eq!(
+            raw["appearance"]["future_field"],
+            legacy["appearance"]["future_field"]
+        );
+        settings.theme = "github-light".into();
+        assert_eq!(
+            store
+                .save_appearance_settings(&settings)
+                .unwrap()
+                .window_decorations,
+            decoration
+        );
+    }
+}
+
+#[test]
+fn window_decorations_restore_from_backups_and_remain_local_during_sync() {
+    use nyaterm_core::models::window_decoration::WindowDecoration;
+    use nyaterm_core::portable_snapshot::PortableSnapshotKind;
+
+    let dir = unique_temp_dir("window-decorations-snapshots");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    settings.window_decorations = WindowDecoration::Server;
+    store.save_appearance_settings(&settings).unwrap();
+    let mut backup = store
+        .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "device", "test")
+        .unwrap();
+    backup.recalculate_hash().unwrap();
+    let mut sync = store
+        .build_raw_portable_snapshot(PortableSnapshotKind::Sync, "device", "test")
+        .unwrap();
+    sync.recalculate_hash().unwrap();
+    let mut synced: serde_json::Value = serde_json::from_str(&sync.entities["settings"]).unwrap();
+    assert!(synced["appearance"].get("window_decorations").is_none());
+    // Even an incoming document carrying another device's value cannot replace it.
+    synced["appearance"]["window_decorations"] = serde_json::json!("server");
+    sync.entities.insert("settings".into(), synced.to_string());
+    sync.recalculate_hash().unwrap();
+    settings.window_decorations = WindowDecoration::Client;
+    store.save_appearance_settings(&settings).unwrap();
+    store.apply_raw_portable_snapshot(&sync).unwrap();
+    assert_eq!(
+        store
+            .load_app_settings_summary()
+            .unwrap()
+            .window_decorations,
+        WindowDecoration::Client
+    );
+    store.apply_raw_portable_snapshot(&backup).unwrap();
+    assert_eq!(
+        store
+            .load_app_settings_summary()
+            .unwrap()
+            .window_decorations,
+        WindowDecoration::Server
+    );
+}
+
+#[test]
 fn malformed_native_window_settings_are_rejected_without_overwriting_user_data() {
     let dir = unique_temp_dir("native-material-malformed");
     let store = ConnectionStore::open(&dir).unwrap();
     let settings = store.load_app_settings_summary().unwrap();
     for appearance in [
+        serde_json::json!({"window_decorations": {"future": "format"}}),
+        serde_json::json!({"window_decorations": null}),
+        serde_json::json!({"window_decorations": true}),
         serde_json::json!({"window_material": {"future": "format"}}),
         serde_json::json!({"window_background_opacity": "invalid"}),
         serde_json::json!({"window_background_opacity": 0.2}),

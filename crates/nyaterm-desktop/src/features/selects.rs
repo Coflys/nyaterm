@@ -266,6 +266,10 @@ impl NyaTermApp {
                 self.set_terminal_theme((value != FOLLOW_UI_THEME_VALUE).then_some(value), cx)
             }
             "appearance-minimum-contrast" => self.set_minimum_contrast_ratio(value, cx),
+            "appearance-window-decorations" => self.set_window_decorations(
+                nyaterm_core::models::window_decoration::WindowDecoration::from(value.to_owned()),
+                cx,
+            ),
             "appearance-background-fit" => self.set_background_image_fit(value, cx),
             "appearance-window-material" => self.set_window_material(
                 nyaterm_core::models::window_material::WindowMaterial::from(value.to_owned()),

@@ -172,6 +172,7 @@ const DEVICE_LOCAL_UI_FIELDS: &[&str] = &[
 ];
 
 const DEVICE_LOCAL_APPEARANCE_FIELDS: &[&str] = &[
+    "window_decorations",
     "window_material",
     "window_background_opacity",
     "background_image_path",

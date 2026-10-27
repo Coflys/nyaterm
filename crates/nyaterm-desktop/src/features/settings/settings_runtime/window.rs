@@ -248,8 +248,8 @@ fn open_settings_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut App) {
                 .as_ref()
                 .and_then(|controller| controller.upgrade())
             {
-                controller.update(cx, |controller, _| {
-                    controller.release_settings_owner(app.workspace_id)
+                controller.update(cx, |controller, cx| {
+                    controller.release_settings_owner(app.workspace_id, cx)
                 });
             }
             app.shell

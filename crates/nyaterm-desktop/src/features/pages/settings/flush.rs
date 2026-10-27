@@ -187,8 +187,8 @@ impl NyaTermApp {
                 .as_ref()
                 .and_then(gpui::WeakEntity::upgrade)
             {
-                controller.update(cx, |controller, _| {
-                    controller.release_settings_owner(self.workspace_id)
+                controller.update(cx, |controller, cx| {
+                    controller.release_settings_owner(self.workspace_id, cx)
                 });
             }
             self.request_settings_panel_refresh(cx);

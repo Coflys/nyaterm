@@ -3,6 +3,22 @@ use nyaterm_ui::window_chrome::TitleDragBehavior;
 
 use crate::window_chrome::{Platform, WindowChrome, WindowChromeInput};
 
+#[test]
+fn unmanaged_popups_keep_client_controls_when_system_decorations_are_selected() {
+    use crate::window_chrome::window_decorations_for_kind;
+    use gpui::{WindowDecorations, WindowKind};
+
+    for requested in [WindowDecorations::Client, WindowDecorations::Server] {
+        assert_eq!(
+            window_decorations_for_kind(&WindowKind::PopUp, requested),
+            WindowDecorations::Client
+        );
+        for kind in [WindowKind::Normal, WindowKind::Dialog, WindowKind::Floating] {
+            assert_eq!(window_decorations_for_kind(&kind, requested), requested);
+        }
+    }
+}
+
 fn input(platform: Platform) -> WindowChromeInput {
     WindowChromeInput {
         platform,
