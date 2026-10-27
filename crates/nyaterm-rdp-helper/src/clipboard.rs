@@ -170,11 +170,22 @@ impl ClipboardBridge {
         reply
     }
 
-    fn expire_remote_fetch(&self) -> Option<ClipboardFormatId> {
-        self.fetch
+    fn expire_remote_fetch(&self, timeout: Duration) {
+        let timed_out = self
+            .fetch
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .expire(REMOTE_FETCH_TIMEOUT)
+            .expire(timeout);
+        if timed_out {
+            let _ = self.output_tx.send(Outbound::Control(RdpControlMessage::Error {
+                session_id: self.session_id.clone(),
+                error: nyaterm_remote_desktop::RdpError::new(
+                    nyaterm_remote_desktop::RdpErrorKind::Clipboard,
+                    "RDP clipboard response timed out; waiting for the outstanding response. Reconnect if clipboard copies remain unavailable.",
+                ),
+                fatal: false,
+            }));
+        }
     }
 
     fn publish_remote_text(&self, text: String) {
@@ -304,9 +315,7 @@ impl ClipboardBridge {
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .expire();
                 }
-                if let Some(format) = bridge.expire_remote_fetch() {
-                    bridge.send_paste(format);
-                }
+                bridge.expire_remote_fetch(REMOTE_FETCH_TIMEOUT);
                 std::thread::sleep(Duration::from_millis(750));
             }
         });

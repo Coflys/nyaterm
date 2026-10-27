@@ -19,6 +19,7 @@ struct FetchRequest {
 struct PendingFetch {
     request: FetchRequest,
     sent_at: Instant,
+    timeout_reported: bool,
 }
 
 /// Serializes remote `FormatData` fetches.
@@ -66,6 +67,7 @@ impl RemoteFetchState {
             self.pending = Some(PendingFetch {
                 request,
                 sent_at: Instant::now(),
+                timeout_reported: false,
             });
             Some(format)
         }
@@ -82,24 +84,26 @@ impl RemoteFetchState {
         FetchReply { accepted, next }
     }
 
-    /// Abandons a request whose reply never arrived and sends the newest queued
-    /// one, so a lost reply cannot stall later copies.
-    pub fn expire(&mut self, timeout: Duration) -> Option<ClipboardFormatId> {
-        let expired = self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.sent_at.elapsed() >= timeout);
-        if !expired {
-            return None;
+    /// Reports a timeout once, retaining the outstanding request until its reply.
+    /// FormatDataResponse has no request identifier: reusing this slot on timeout
+    /// would let a late response masquerade as the answer to the newest request.
+    /// If no response ever arrives, the channel/session must be reset to resume.
+    pub fn expire(&mut self, timeout: Duration) -> bool {
+        let Some(pending) = self.pending.as_mut() else {
+            return false;
+        };
+        if pending.timeout_reported || pending.sent_at.elapsed() < timeout {
+            return false;
         }
-        self.pending = None;
-        self.latest.take().map(|request| self.start(request))
+        pending.timeout_reported = true;
+        true
     }
 
     fn start(&mut self, request: FetchRequest) -> ClipboardFormatId {
         self.pending = Some(PendingFetch {
             request,
             sent_at: Instant::now(),
+            timeout_reported: false,
         });
         request.format
     }
@@ -171,14 +175,50 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_reply_times_out_and_sends_the_queued_request() {
+    fn a_timeout_keeps_the_old_request_until_its_late_reply_is_drained() {
         let mut state = RemoteFetchState::default();
         state.begin_format_list(Some((FetchKind::FileList, format(1))));
         state.begin_format_list(Some((FetchKind::FileList, format(2))));
 
-        assert_eq!(state.expire(Duration::ZERO), Some(format(2)));
-        let reply = state.finish_reply(FetchKind::FileList, false);
+        assert!(state.expire(Duration::ZERO));
+        let stale = state.finish_reply(FetchKind::FileList, false);
+        assert!(
+            !stale.accepted,
+            "a late reply must not become the new clipboard"
+        );
+        assert_eq!(stale.next, Some(format(2)));
+        assert!(state.finish_reply(FetchKind::FileList, false).accepted);
+    }
+
+    #[test]
+    fn missing_replies_keep_only_the_latest_list_and_report_timeout_once() {
+        let mut state = RemoteFetchState::default();
+        assert!(!state.expire(Duration::ZERO));
+        state.begin_format_list(Some((FetchKind::FileList, format(1))));
+        assert!(!state.expire(Duration::MAX));
+        assert!(state.expire(Duration::ZERO));
+        for id in 2..10_000 {
+            assert_eq!(
+                state.begin_format_list(Some((FetchKind::FileList, format(id)))),
+                None
+            );
+            assert!(!state.expire(Duration::ZERO));
+        }
+        let stale = state.finish_reply(FetchKind::FileList, false);
+        assert!(!stale.accepted);
+        assert_eq!(stale.next, Some(format(9_999)));
+        assert!(state.expire(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_late_unsuperseded_reply_still_belongs_to_its_original_request() {
+        let mut state = RemoteFetchState::default();
+        state.begin_format_list(Some((FetchKind::Text, format(1))));
+        assert!(state.expire(Duration::ZERO));
+        let reply = state.finish_reply(FetchKind::Text, false);
         assert!(reply.accepted);
+        assert_eq!(reply.next, None);
+        assert!(!state.expire(Duration::ZERO));
     }
 
     #[test]

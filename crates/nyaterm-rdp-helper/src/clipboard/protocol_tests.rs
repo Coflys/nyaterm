@@ -347,6 +347,15 @@ fn local_file_copy_carries_write_time_and_zeroes_reserved_timestamp_slots() {
 
 #[test]
 fn a_superseded_file_list_reply_is_dropped_and_the_newest_list_requested() {
+    superseded_file_list_reply(false);
+}
+
+#[test]
+fn a_timed_out_file_list_reply_cannot_become_the_new_clipboard() {
+    superseded_file_list_reply(true);
+}
+
+fn superseded_file_list_reply(expire: bool) {
     let mut harness = ProtocolHarness::new_with_files();
     harness.connect_files();
     harness.bridge.file_available.store(true, Ordering::SeqCst);
@@ -370,6 +379,30 @@ fn a_superseded_file_list_reply_is_dropped_and_the_newest_list_requested() {
         harness.messages.try_recv().is_err(),
         "requests must be serialized"
     );
+
+    if expire {
+        harness
+            .bridge
+            .expire_remote_fetch(std::time::Duration::ZERO);
+        let Outbound::Control(RdpControlMessage::Error { error, fatal, .. }) =
+            harness.output.try_recv().unwrap()
+        else {
+            panic!("expected clipboard timeout diagnostic");
+        };
+        assert_eq!(error.kind, nyaterm_remote_desktop::RdpErrorKind::Clipboard);
+        assert!(!fatal);
+        assert!(
+            harness.messages.try_recv().is_err(),
+            "timeout must not send a new request"
+        );
+        harness
+            .bridge
+            .expire_remote_fetch(std::time::Duration::ZERO);
+        assert!(
+            harness.output.try_recv().is_err(),
+            "report each timeout only once"
+        );
+    }
 
     // The late reply belongs to the superseded list: drop it, request the new
     // list, and start no transfer for the old files.
