@@ -801,7 +801,12 @@ mod tests {
         vcx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
         draw(vcx);
 
-        vcx.simulate_keystrokes("ctrl-c");
+        let copy_shortcut = if cfg!(target_os = "macos") {
+            "cmd-c"
+        } else {
+            "ctrl-c"
+        };
+        vcx.simulate_keystrokes(copy_shortcut);
         draw(vcx);
         let copied = vcx
             .update(|_, cx| cx.read_from_clipboard())
@@ -810,7 +815,7 @@ mod tests {
             copied
                 .as_deref()
                 .is_some_and(|text| text.contains("10.168.10.103:3389")),
-            "selecting the endpoint and pressing ctrl-c should copy it, got {copied:?}"
+            "selecting the endpoint and pressing {copy_shortcut} should copy it, got {copied:?}"
         );
     }
 
