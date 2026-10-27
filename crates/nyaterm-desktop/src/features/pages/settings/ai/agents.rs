@@ -3,7 +3,7 @@ use super::{ai_card, ai_field};
 use crate::features::mcp::McpHostStatus;
 use crate::features::pages::settings::panel::SettingsPanel;
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
-use nyaterm_core::{AiPermissionMode, CodexThreadMode};
+use nyaterm_core::{AiPermissionMode, CodexThreadMode, McpTerminalDisplayMode};
 use nyaterm_ui::{NyaButton, NyaSelectOption};
 use rust_i18n::t;
 
@@ -393,6 +393,22 @@ impl SettingsPanel {
             false,
             cx,
         );
+        let display_mode = self.form_select_control(
+            "ai-mcp-terminal-display-mode",
+            vec![
+                NyaSelectOption::new("inline", t!("ai.mcp.inline")),
+                NyaSelectOption::new("silent", t!("ai.mcp.silent")),
+            ],
+            Some(
+                match settings.external_mcp.terminal_display_mode {
+                    McpTerminalDisplayMode::Inline => "inline",
+                    McpTerminalDisplayMode::Silent => "silent",
+                }
+                .into(),
+            ),
+            false,
+            cx,
+        );
         let mcp_status = match self.mcp_host_status(cx) {
             McpHostStatus::Running => t!("ai.mcp.running"),
             McpHostStatus::Unavailable => t!("ai.mcp.unavailable"),
@@ -441,7 +457,13 @@ impl SettingsPanel {
                         None,
                         mcp_permission,
                     ))
-                    .child(ai_field(palette, t!("ai.mcp.sessionScope"), None, scope)),
+                    .child(ai_field(palette, t!("ai.mcp.sessionScope"), None, scope))
+                    .child(ai_field(
+                        palette,
+                        t!("ai.mcp.terminalDisplay"),
+                        None,
+                        display_mode,
+                    )),
             )
             .child(
                 div().flex().flex_wrap().gap_3().children(

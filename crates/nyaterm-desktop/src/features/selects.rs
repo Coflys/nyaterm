@@ -12,7 +12,7 @@ use gpui::{
 };
 use nyaterm_core::{
     AiAgentKind, AiPermissionMode, CodexThreadMode, ExistingFileBehavior, ExternalMcpSessionScope,
-    RecordingMode, RecordingRotationPolicy, RiskLevel,
+    McpTerminalDisplayMode, RecordingMode, RecordingRotationPolicy, RiskLevel,
 };
 use nyaterm_transport::SftpDuplicatePolicy;
 use nyaterm_ui::{
@@ -517,6 +517,15 @@ impl NyaTermApp {
                 },
                 cx,
             ),
+            "ai-mcp-terminal-display-mode" => match value {
+                "inline" => {
+                    self.set_ai_mcp_terminal_display_mode(McpTerminalDisplayMode::Inline, cx)
+                }
+                "silent" => {
+                    self.set_ai_mcp_terminal_display_mode(McpTerminalDisplayMode::Silent, cx)
+                }
+                _ => {}
+            },
             id if id.starts_with("quick-command.variable.") => {
                 if let Some(index) = id
                     .strip_prefix("quick-command.variable.")
