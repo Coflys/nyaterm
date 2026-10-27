@@ -12,6 +12,14 @@ pub const PROTOCOL_VERSION: u32 = 11;
 /// JSON framing and other events in the same input batch.
 pub const MAX_COMMITTED_TEXT_BYTES: usize = 64 * 1024;
 
+/// Desktop extent the protocol will negotiate, in pixels. Shared by
+/// `RdpDisplayMetrics::clamped` and the connect/resize validation so a request
+/// the application is allowed to make is never rejected at the session layer.
+pub(crate) const MIN_WIDTH: u32 = 200;
+pub(crate) const MIN_HEIGHT: u32 = 200;
+pub(crate) const MAX_WIDTH: u32 = 8192;
+pub(crate) const MAX_HEIGHT: u32 = 8192;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CommittedTextError {
     #[error("committed text exceeds the {MAX_COMMITTED_TEXT_BYTES}-byte limit")]
@@ -114,6 +122,16 @@ pub struct RdpDisplayConfig {
     pub mode: RdpDisplayMode,
     pub width: u32,
     pub height: u32,
+    /// Desktop scale factor in percent (100..=500) negotiated with the initial
+    /// desktop size, or 0 to leave the choice to the server.
+    ///
+    /// This is ephemeral client display information, like
+    /// [`RdpDisplayMetrics`]: it is filled in from the panel that hosts the
+    /// session and is never taken from a saved connection. Asking for the scale
+    /// in the same handshake as the size is what keeps a fit-window session
+    /// from changing resolution again right after it connects.
+    #[serde(default)]
+    pub desktop_scale_factor: u32,
     pub color_depth: u8,
     /// RDPEGFX surface updates. See `nyaterm_core::RdpDisplaySettings`.
     #[serde(default)]
@@ -147,6 +165,22 @@ pub struct RdpDisplayMetrics {
     pub physical_size_mm: Option<(u32, u32)>,
 }
 
+impl RdpDisplayMetrics {
+    /// Bring a panel-derived request into the range the protocol accepts.
+    ///
+    /// Even boundaries because the legacy desktop size fields are `u16` pixels
+    /// and the server rounds the framebuffer to them; a request that is not
+    /// even comes back as a different size, which looks like a resize stutter.
+    pub fn clamped(self) -> Self {
+        Self {
+            width: self.width.clamp(MIN_WIDTH, MAX_WIDTH) & !1,
+            height: self.height.clamp(MIN_HEIGHT, MAX_HEIGHT) & !1,
+            desktop_scale_factor: self.desktop_scale_factor.clamp(100, 500),
+            physical_size_mm: self.physical_size_mm,
+        }
+    }
+}
+
 fn rdp_default_true() -> bool {
     true
 }
@@ -157,6 +191,7 @@ impl Default for RdpDisplayConfig {
             mode: RdpDisplayMode::FitWindow,
             width: 1920,
             height: 1080,
+            desktop_scale_factor: 0,
             color_depth: 32,
             graphics_pipeline: false,
             display_wallpaper: true,
@@ -182,6 +217,7 @@ impl From<&nyaterm_core::RdpDisplaySettings> for RdpDisplayConfig {
             mode: parse_rdp_display_mode(&settings.mode),
             width: settings.width,
             height: settings.height,
+            desktop_scale_factor: 0,
             color_depth: settings.color_depth,
             graphics_pipeline: settings.graphics_pipeline,
             display_wallpaper: settings.display_wallpaper,
@@ -202,6 +238,21 @@ pub enum RdpDisplayMode {
     #[default]
     FitWindow,
     Fixed,
+}
+
+impl RdpDisplayConfig {
+    /// Ask the server for exactly the desktop the hosting panel will draw into.
+    ///
+    /// A fit-window session that connects at the saved size and is resized to
+    /// the panel afterwards shows the desktop twice at two different scales in
+    /// the time it takes to connect; the panel is measurable before the connect
+    /// is issued, so the first negotiation should already use it.
+    pub fn fit_to_panel(&mut self, metrics: RdpDisplayMetrics) {
+        let metrics = metrics.clamped();
+        self.width = metrics.width;
+        self.height = metrics.height;
+        self.desktop_scale_factor = metrics.desktop_scale_factor;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1041,11 +1092,35 @@ pub fn parse_vnc_scale_mode(value: &str) -> VncScaleMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, RdpCertificatePolicy, RdpClipboardConfig,
-        RdpClipboardMode, RdpDisplayConfig, RdpDisplayMode, RdpSessionConfig,
-        parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
-        validate_committed_text,
+        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, MAX_WIDTH, MIN_HEIGHT, RdpCertificatePolicy,
+        RdpClipboardConfig, RdpClipboardMode, RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode,
+        RdpSessionConfig, parse_rdp_certificate_policy, parse_rdp_clipboard_mode,
+        parse_rdp_display_mode, validate_committed_text,
     };
+
+    #[test]
+    fn panel_metrics_become_a_negotiable_desktop() {
+        let metrics = RdpDisplayMetrics {
+            width: 9_000,
+            height: 7,
+            desktop_scale_factor: 40,
+            physical_size_mm: Some((310, 170)),
+        }
+        .clamped();
+        assert_eq!((metrics.width, metrics.height), (MAX_WIDTH, MIN_HEIGHT));
+        assert_eq!(metrics.desktop_scale_factor, 100);
+        assert_eq!(metrics.physical_size_mm, Some((310, 170)));
+
+        let mut display = RdpDisplayConfig::default();
+        display.fit_to_panel(RdpDisplayMetrics {
+            width: 1_281,
+            height: 719,
+            desktop_scale_factor: 125,
+            physical_size_mm: None,
+        });
+        assert_eq!((display.width, display.height), (1_280, 718));
+        assert_eq!(display.desktop_scale_factor, 125);
+    }
 
     #[test]
     fn legacy_display_ipc_and_saved_defaults_agree() {

@@ -606,84 +606,45 @@ impl NyaTermApp {
                         max_attempts: reconnect.max_attempts,
                     },
                 };
-                match self.create_rdp_runtime(config.clone()) {
-                    Ok(session_id) => {
-                        if let Some(route) =
-                            self.remote_desktop.prepared_routes.remove(&connection.id)
-                        {
-                            self.remote_desktop.routes.insert(session_id.clone(), route);
-                        }
-                        let source_connection_id = Some(connection.id.clone());
-                        self.register_session_for_start(
-                            &session_id,
-                            crate::models::SessionRuntimeMetadata {
-                                ssh_config: None,
-                                ssh_multiplex_key: None,
-                                source_connection_id: source_connection_id.clone(),
-                                ai_execution_profile: AiExecutionProfile::Disabled,
-                                launch_config: SessionLaunchConfig::Rdp(config),
-                                disconnected: false,
-                            },
-                            tab_placement,
-                            fallback_insert_index,
-                        );
-                        if let Some(custom_name) = options.custom_name {
-                            self.session
-                                .set_custom_name(session_id.clone(), custom_name);
-                        }
-                        if let Some(color) = options.tab_color {
-                            self.session.set_tab_color(&session_id, Some(color));
-                        }
-                        if options.locked {
-                            self.session.set_tab_locked(&session_id, true);
-                        }
-                        if tab_placement.is_none()
-                            && fallback_insert_index.is_none()
-                            && let Some(after_session_id) = options.after_session_id
-                        {
-                            self.session
-                                .move_session_after(&session_id, &after_session_id);
-                        }
-                        self.persist_connection_used(connection.id.clone(), cx);
-                        self.activate_session_id(&session_id, cx);
-                        self.apply_workspace_split_for_duplicate(
-                            cx,
-                            workspace_split.clone(),
-                            &session_id,
-                        );
-                        self.shell
-                            .set_status(format!("connecting RDP {}", connection.name));
-                    }
-                    Err(error) => {
-                        let message = format!("RDP connection failed: {error}");
-                        let session_id = self.create_failed_rdp_runtime(error);
-                        self.register_session_for_start(
-                            &session_id,
-                            crate::models::SessionRuntimeMetadata {
-                                ssh_config: None,
-                                ssh_multiplex_key: None,
-                                source_connection_id: Some(connection.id.clone()),
-                                ai_execution_profile: AiExecutionProfile::Disabled,
-                                launch_config: SessionLaunchConfig::Rdp(config),
-                                disconnected: false,
-                            },
-                            tab_placement,
-                            fallback_insert_index,
-                        );
-                        if let Some(custom_name) = options.custom_name {
-                            self.session
-                                .set_custom_name(session_id.clone(), custom_name);
-                        }
-                        if let Some(color) = options.tab_color {
-                            self.session.set_tab_color(&session_id, Some(color));
-                        }
-                        if options.locked {
-                            self.session.set_tab_locked(&session_id, true);
-                        }
-                        self.activate_session_id(&session_id, cx);
-                        self.shell.set_status(message);
-                    }
+                let session_id = self.schedule_rdp_runtime(config.clone(), cx);
+                if let Some(route) = self.remote_desktop.prepared_routes.remove(&connection.id) {
+                    self.remote_desktop.routes.insert(session_id.clone(), route);
                 }
+                self.register_session_for_start(
+                    &session_id,
+                    crate::models::SessionRuntimeMetadata {
+                        ssh_config: None,
+                        ssh_multiplex_key: None,
+                        source_connection_id: Some(connection.id.clone()),
+                        ai_execution_profile: AiExecutionProfile::Disabled,
+                        launch_config: SessionLaunchConfig::Rdp(config),
+                        disconnected: false,
+                    },
+                    tab_placement,
+                    fallback_insert_index,
+                );
+                if let Some(custom_name) = options.custom_name {
+                    self.session
+                        .set_custom_name(session_id.clone(), custom_name);
+                }
+                if let Some(color) = options.tab_color {
+                    self.session.set_tab_color(&session_id, Some(color));
+                }
+                if options.locked {
+                    self.session.set_tab_locked(&session_id, true);
+                }
+                if tab_placement.is_none()
+                    && fallback_insert_index.is_none()
+                    && let Some(after_session_id) = options.after_session_id
+                {
+                    self.session
+                        .move_session_after(&session_id, &after_session_id);
+                }
+                self.persist_connection_used(connection.id.clone(), cx);
+                self.activate_session_id(&session_id, cx);
+                self.apply_workspace_split_for_duplicate(cx, workspace_split.clone(), &session_id);
+                self.shell
+                    .set_status(format!("connecting RDP {}", connection.name));
                 self.shell.show_workspace();
                 cx.notify();
             }

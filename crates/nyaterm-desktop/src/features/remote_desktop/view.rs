@@ -242,9 +242,12 @@ impl NyaTermApp {
                 }
                 _ => t!("remoteDesktop.waitingFrame"),
             };
-            return self
-                .rdp_status_view("Remote Desktop", detail)
-                .into_any_element();
+            return rdp_viewport_probe(
+                session_id,
+                self.rdp_status_view("Remote Desktop", detail),
+                cx.entity(),
+            )
+            .into_any_element();
         };
         let remote_size = (framebuffer.width(), framebuffer.height());
         let scale_mode = self
@@ -298,8 +301,8 @@ impl NyaTermApp {
                     let session_id = viewport_session_id.clone();
                     let scale_factor = window.scale_factor();
                     window.defer(cx, move |_, cx| {
-                        app.update(cx, |this, _| {
-                            this.update_rdp_viewport(&session_id, bounds, scale_factor);
+                        app.update(cx, |this, cx| {
+                            this.update_rdp_viewport(&session_id, bounds, scale_factor, cx);
                         });
                     });
                     remote_desktop_image_bounds(bounds, remote_size.0, remote_size.1, scale_mode)
@@ -794,6 +797,39 @@ impl NyaTermApp {
                     .child(detail),
             )
     }
+}
+
+/// Records the size of the panel a session is drawn in, over a placeholder view.
+///
+/// The framebuffer canvas only exists once a frame has arrived, so a session
+/// that is still connecting would have nothing to size itself against and would
+/// negotiate its desktop twice. This probe paints nothing.
+fn rdp_viewport_probe(
+    session_id: String,
+    content: impl IntoElement,
+    app: gpui::Entity<NyaTermApp>,
+) -> impl IntoElement {
+    div()
+        .size_full()
+        .relative()
+        .child(
+            canvas(
+                move |bounds, window, cx| {
+                    let app = app.clone();
+                    let session_id = session_id.clone();
+                    let scale_factor = window.scale_factor();
+                    window.defer(cx, move |_, cx| {
+                        app.update(cx, |this, cx| {
+                            this.update_rdp_viewport(&session_id, bounds, scale_factor, cx);
+                        });
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .child(content)
 }
 
 fn remote_desktop_image_bounds(

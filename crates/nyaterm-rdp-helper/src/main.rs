@@ -637,9 +637,10 @@ fn build_config(
     // Options are what separate "the graphics pipeline was never asked for" from
     // "the server refused it" when a log is all you have.
     eprintln!(
-        "RDP session options width={} height={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
+        "RDP session options width={} height={} scale={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
         config.display.width,
         config.display.height,
+        config.display.desktop_scale_factor,
         color_depth,
         u8::from(config.display.graphics_pipeline),
         u8::from(gfx_effective),
@@ -685,6 +686,13 @@ fn build_config(
         .with_clipboard(ClipboardType::Disable);
     if clipboard_enabled {
         builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
+    }
+    // Zero means the caller had no panel-derived scale to ask for, which is what
+    // a fixed-size connection and every pre-existing saved connection send.
+    // Negotiating the scale together with the size is what keeps the desktop from
+    // being re-negotiated a moment after the session is up.
+    if (100..=500).contains(&config.display.desktop_scale_factor) {
+        builder = builder.with_desktop_scale_factor(config.display.desktop_scale_factor);
     }
     if let Some(relay) = &config.relay {
         relay.validate().map_err(anyhow::Error::msg)?;

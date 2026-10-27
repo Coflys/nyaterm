@@ -8,6 +8,7 @@ mod framebuffer;
 mod input;
 mod lifecycle;
 mod resize;
+mod start;
 #[cfg(test)]
 mod tests;
 mod trust;

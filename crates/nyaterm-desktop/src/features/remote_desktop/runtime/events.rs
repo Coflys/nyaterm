@@ -251,6 +251,7 @@ impl NyaTermApp {
             }
         }
         let mut dirty = self.drive_rdp_pointer_flush();
+        dirty |= self.drive_deferred_rdp_starts();
         dirty |= self.drive_rdp_resize_debounce();
         dirty |= self.drive_rdp_reconnects(cx);
         self.sync_rdp_keyboard_capture(window);

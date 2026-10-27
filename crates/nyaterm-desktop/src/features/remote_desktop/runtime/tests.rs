@@ -19,6 +19,288 @@ use super::{
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
 #[test]
+fn fit_window_connect_waits_for_the_panel_then_asks_for_its_size() {
+    use super::start::{RdpStartPlan, plan_rdp_start};
+    use nyaterm_remote_desktop::{RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode};
+
+    let display = RdpDisplayConfig {
+        mode: RdpDisplayMode::FitWindow,
+        width: 1920,
+        height: 1080,
+        ..Default::default()
+    };
+    assert_eq!(
+        plan_rdp_start(&display, None),
+        RdpStartPlan::WaitForPanel,
+        "the saved 1920x1080 must not be negotiated while the panel is still unknown"
+    );
+
+    let measured = RdpDisplayMetrics {
+        width: 1403,
+        height: 749,
+        desktop_scale_factor: 150,
+        physical_size_mm: None,
+    };
+    let RdpStartPlan::Connect(negotiated) = plan_rdp_start(&display, Some(measured)) else {
+        panic!("a measured panel is enough to connect");
+    };
+    assert_eq!((negotiated.width, negotiated.height), (1402, 748));
+    assert_eq!(negotiated.desktop_scale_factor, 150);
+    assert_eq!(negotiated.mode, RdpDisplayMode::FitWindow);
+}
+
+#[test]
+fn fixed_size_connect_never_waits_and_never_takes_the_panel_size() {
+    use super::start::{RdpStartPlan, plan_rdp_start};
+    use nyaterm_remote_desktop::{RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode};
+
+    let display = RdpDisplayConfig {
+        mode: RdpDisplayMode::Fixed,
+        width: 1024,
+        height: 768,
+        ..Default::default()
+    };
+    assert_eq!(
+        plan_rdp_start(&display, None),
+        RdpStartPlan::Connect(display.clone())
+    );
+    let RdpStartPlan::Connect(negotiated) = plan_rdp_start(
+        &display,
+        Some(RdpDisplayMetrics {
+            width: 2560,
+            height: 1440,
+            desktop_scale_factor: 200,
+            physical_size_mm: None,
+        }),
+    ) else {
+        panic!("a fixed size connects without measuring");
+    };
+    assert_eq!(negotiated, display);
+}
+
+/// A fit-window request carrying the saved 1920x1080, which is the desktop the
+/// server must stop being asked for once the panel is known.
+fn fit_window_rdp_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
+    use nyaterm_remote_desktop::{
+        RdpCertificatePolicy, RdpClipboardConfig, RdpDisplayConfig, RdpDisplayMode,
+        RdpReconnectConfig, RdpSessionConfig,
+    };
+
+    RdpSessionConfig {
+        relay: None,
+        name: name.into(),
+        host: "127.0.0.1".into(),
+        port: 1,
+        username: String::new(),
+        domain: String::new(),
+        password: None,
+        use_nla: false,
+        certificate_policy: RdpCertificatePolicy::default(),
+        administrative_session: false,
+        display: RdpDisplayConfig {
+            mode: RdpDisplayMode::FitWindow,
+            width: 1920,
+            height: 1080,
+            ..Default::default()
+        },
+        clipboard: RdpClipboardConfig::default(),
+        reconnect: RdpReconnectConfig::default(),
+    }
+}
+
+/// The held connect has to be started by a real layout, because that is the only
+/// measurement a connecting tab ever gets: the framebuffer canvas, which reports
+/// the same bounds, does not exist until a frame arrives.
+#[test]
+fn a_drawn_connecting_tab_hands_its_panel_to_the_connect() {
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div, px,
+    };
+    use nyaterm_core::test_support::TestTempDir;
+
+    use super::resize::fit_window_display_metrics;
+    use crate::features::NyaTermApp;
+    use crate::models::SessionLaunchConfig;
+
+    struct PanelHost {
+        app: Entity<NyaTermApp>,
+        session_id: String,
+    }
+
+    impl Render for PanelHost {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let session_id = self.session_id.clone();
+            div().w(px(1_281.)).h(px(721.)).child(
+                self.app
+                    .update(cx, |app, cx| app.remote_desktop_view(session_id, cx)),
+            )
+        }
+    }
+
+    let root = TestTempDir::new("nyaterm-rdp-panel-measurement");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let session_id = "rdp-panel";
+    let app = crate::features::test_support::app_with_visible_local_session(
+        &mut cx,
+        root.path(),
+        session_id,
+    );
+    let config = fit_window_rdp_config("panel");
+    cx.update_entity(&app, |app, cx| {
+        app.sync_component_theme(cx);
+        app.session.metadata_mut(session_id).unwrap().launch_config =
+            SessionLaunchConfig::Rdp(config.clone());
+        app.remote_desktop.insert_connecting(session_id.to_string());
+        app.begin_rdp_runtime(session_id, config, cx);
+        assert!(
+            app.remote_desktop
+                .sessions
+                .get(session_id)
+                .unwrap()
+                .deferred_start
+                .is_some(),
+            "nothing has drawn the tab yet, so the connect is still held"
+        );
+    });
+
+    let host_app = app.clone();
+    let (_host, vcx) = cx.add_window_view(move |_, _| PanelHost {
+        app: host_app,
+        session_id: session_id.to_string(),
+    });
+    let vcx: &mut VisualTestContext = vcx;
+    for _ in 0..2 {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.refresh();
+            _ = window.draw(cx);
+        });
+    }
+    vcx.run_until_parked();
+
+    app.update(&mut cx, |app, _| {
+        let session = app.remote_desktop.sessions.get(session_id).unwrap();
+        let viewport = session
+            .viewport
+            .expect("the connecting tab reports the panel it was drawn into");
+        assert_eq!(
+            (
+                f32::from(viewport.size.width),
+                f32::from(viewport.size.height)
+            ),
+            (1_281., 721.),
+            "the probe takes the panel's own bounds, not the window's"
+        );
+        assert!(
+            session.deferred_start.is_none(),
+            "the frame consumed the held launch request"
+        );
+        assert_eq!(
+            session.last_resize,
+            Some(fit_window_display_metrics(viewport, session.viewport_scale_factor).clamped()),
+            "the desktop is negotiated from the panel that was drawn"
+        );
+        assert_ne!(
+            session
+                .last_resize
+                .map(|metrics| (metrics.width, metrics.height)),
+            Some((1_920, 1_080)),
+            "the saved size must not be the first negotiation"
+        );
+    });
+}
+
+#[test]
+fn a_collapsed_pane_is_not_taken_for_a_panel_size() {
+    use super::resize::panel_is_measurable;
+    use gpui::{Bounds, point, px, size};
+
+    assert!(panel_is_measurable(Bounds::new(
+        point(px(0.), px(0.)),
+        size(px(1_024.), px(640.))
+    )));
+    for (width, height) in [(1_024., 20.), (20., 640.), (0., 0.)] {
+        assert!(
+            !panel_is_measurable(Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(width), px(height))
+            )),
+            "a {width}x{height} pane must not negotiate or resize the desktop"
+        );
+    }
+}
+
+#[test]
+fn an_unmeasured_panel_holds_the_connect_and_the_first_measurement_sizes_it() {
+    use gpui::{Bounds, TestAppContext, point, px, size};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::RdpDisplayMetrics;
+
+    use crate::models::SessionLaunchConfig;
+
+    let root = TestTempDir::new("nyaterm-rdp-deferred-start");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let session_id = "rdp-deferred";
+    let app = crate::features::test_support::app_with_visible_local_session(
+        &mut cx,
+        root.path(),
+        session_id,
+    );
+    let config = fit_window_rdp_config("deferred");
+    app.update(&mut cx, |app, cx| {
+        app.session.metadata_mut(session_id).unwrap().launch_config =
+            SessionLaunchConfig::Rdp(config.clone());
+        app.remote_desktop.insert_connecting(session_id.to_string());
+        app.begin_rdp_runtime(session_id, config, cx);
+    });
+    app.update(&mut cx, |app, _| {
+        let session = app.remote_desktop.sessions.get(session_id).unwrap();
+        assert!(
+            session.deferred_start.is_some(),
+            "the connect waits for the panel instead of negotiating the saved size"
+        );
+        assert!(
+            app.remote_desktop.manager.state(session_id).is_none(),
+            "nothing was negotiated with the server yet"
+        );
+    });
+
+    // The first layout of the tab, at 150% window scaling.
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(1_281.), px(721.)));
+    app.update(&mut cx, |app, cx| {
+        app.update_rdp_viewport(session_id, viewport, 1.5, cx);
+    });
+    app.update(&mut cx, |app, _| {
+        let session = app.remote_desktop.sessions.get(session_id).unwrap();
+        assert!(
+            session.deferred_start.is_none(),
+            "the measurement consumed the held launch request"
+        );
+        assert_eq!(
+            session.last_resize,
+            Some(RdpDisplayMetrics {
+                width: 1_922,
+                height: 1_082,
+                desktop_scale_factor: 150,
+                physical_size_mm: None,
+            }),
+            "the panel desktop is the one being negotiated, not one to be resized to later"
+        );
+        let negotiated_or_reported = app.remote_desktop.manager.state(session_id).is_some()
+            || session.state == RemoteDesktopViewState::Failed;
+        assert!(
+            negotiated_or_reported,
+            "the held request was neither connected nor reported as a failure: state={:?} error={:?}",
+            session.state,
+            session.error
+        );
+    });
+}
+
+#[test]
 fn vnc_retry_without_password_opens_and_cancels_dialog_without_leasing_root() {
     use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
     use nyaterm_core::test_support::TestTempDir;
