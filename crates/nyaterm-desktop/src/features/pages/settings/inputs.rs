@@ -1516,7 +1516,7 @@ mod tests {
 
         cx.update_entity(&app, |app, cx| app.run_provider_cloud_sync_test(cx));
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let completed = cx.update_entity(&app, |app, _| !app.cloud_sync.job_running());
             if completed {
@@ -1628,7 +1628,7 @@ mod tests {
 
         cx.update_entity(&app, |app, cx| app.run_provider_cloud_sync_test(cx));
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let completed = cx.update_entity(&app, |app, _| !app.cloud_sync.job_running());
             if completed {

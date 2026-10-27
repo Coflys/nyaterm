@@ -464,14 +464,6 @@ pub(crate) enum ConfigPathPromptResult {
 pub(crate) enum SnapshotPasswordPromptKind {
     Export,
     Import,
-    CloudForcePush,
-    CloudForcePull,
-    CloudProviderPush,
-    CloudProviderPull,
-    CloudProviderForcePush,
-    CloudProviderForcePull,
-    CloudRecoverCurrent,
-    CloudProviderRecoverCurrent,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -572,7 +564,7 @@ mod snapshot_password_prompt_tests {
     #[test]
     fn snapshot_password_prompt_debug_redacts_the_password() {
         let state = SnapshotPasswordPromptState {
-            kind: SnapshotPasswordPromptKind::CloudProviderPush,
+            kind: SnapshotPasswordPromptKind::Export,
             value: "snapshot-secret".to_string().into(),
         };
 

@@ -98,14 +98,13 @@ impl NyaTermApp {
 
     pub(in crate::features) fn run_local_cloud_sync_push(
         &mut self,
-        master_password: nyaterm_core::SecretString,
         force: bool,
         cx: &mut Context<Self>,
     ) {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if !self.begin_cloud_sync_job(cx) {
+        if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
         let resolution = if force {
@@ -113,8 +112,8 @@ impl NyaTermApp {
         } else {
             None
         };
-        let options = self.local_cloud_sync_options(master_password);
-        let cleanup_options = options.clone();
+        let runtime = self.runtime.clone();
+        let settings = self.cloud_sync.settings().clone();
         let local_store = self.store_blocking_client();
         let started_at = Instant::now();
         self.cloud_sync.set_status(if force {
@@ -129,10 +128,11 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-local-push", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                let state = load_current_cloud_sync_state(&local_store)?;
+                let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
                 if force && resolution.is_none() {
                     return Err(CloudSyncError::LocalChangedDuringSync);
                 }
-                let state = load_current_cloud_sync_state(&local_store)?;
                 if let Some(request) = &resolution {
                     return nyaterm_core::cloud_sync::conflict::resolve_with_remote(
                         &local_store,
@@ -142,7 +142,8 @@ impl NyaTermApp {
                         request,
                         &|| Ok(()),
                         &operation_control,
-                    );
+                    )
+                    .map(|result| (result, options));
                 }
                 cloud_sync::push_snapshot_with_remote_controlled(
                     &local_store,
@@ -152,6 +153,7 @@ impl NyaTermApp {
                     force,
                     &operation_control,
                 )
+                .map(|result| (result, options))
             });
         cx.spawn(async move |this, cx| {
             let result = await_cloud_sync_job(
@@ -166,7 +168,7 @@ impl NyaTermApp {
             .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(result) => {
+                    Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
@@ -204,6 +206,7 @@ impl NyaTermApp {
                             false,
                         );
                         this.shell.set_status(this.cloud_sync.status().to_string());
+                        this.handle_cloud_sync_password_error(&error, cx);
                         let mut history = CloudSyncHistoryEntry::sync(
                             status,
                             if force {
@@ -230,7 +233,6 @@ impl NyaTermApp {
 
     pub(in crate::features) fn run_local_cloud_sync_pull(
         &mut self,
-        master_password: nyaterm_core::SecretString,
         force: bool,
         cx: &mut Context<Self>,
     ) {
@@ -243,7 +245,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        if !self.begin_cloud_sync_job(cx) {
+        if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
         let resolution = if force {
@@ -251,8 +253,8 @@ impl NyaTermApp {
         } else {
             None
         };
-        let options = self.local_cloud_sync_options(master_password);
-        let cleanup_options = options.clone();
+        let runtime = self.runtime.clone();
+        let settings = self.cloud_sync.settings().clone();
         let local_store = self.store_blocking_client();
         let started_at = Instant::now();
         self.cloud_sync.set_status(if force {
@@ -267,10 +269,11 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-local-pull", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                let state = load_current_cloud_sync_state(&local_store)?;
+                let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
                 if force && resolution.is_none() {
                     return Err(CloudSyncError::LocalChangedDuringSync);
                 }
-                let state = load_current_cloud_sync_state(&local_store)?;
                 if let Some(request) = &resolution {
                     return nyaterm_core::cloud_sync::conflict::resolve_with_remote(
                         &local_store,
@@ -280,7 +283,8 @@ impl NyaTermApp {
                         request,
                         &|| Ok(()),
                         &operation_control,
-                    );
+                    )
+                    .map(|result| (result, options));
                 }
                 cloud_sync::pull_snapshot_with_remote_controlled(
                     &local_store,
@@ -291,6 +295,7 @@ impl NyaTermApp {
                     &|| Ok(()),
                     &operation_control,
                 )
+                .map(|result| (result, options))
             });
         cx.spawn(async move |this, cx| {
             let result = await_cloud_sync_job(
@@ -305,7 +310,7 @@ impl NyaTermApp {
             .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(result) => {
+                    Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
@@ -344,6 +349,7 @@ impl NyaTermApp {
                             false,
                         );
                         this.shell.set_status(this.cloud_sync.status().to_string());
+                        this.handle_cloud_sync_password_error(&error, cx);
                         let mut history = CloudSyncHistoryEntry::sync(
                             status,
                             if force {
@@ -370,14 +376,13 @@ impl NyaTermApp {
 
     pub(in crate::features) fn run_provider_cloud_sync_push(
         &mut self,
-        master_password: nyaterm_core::SecretString,
         force: bool,
         cx: &mut Context<Self>,
     ) {
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
-        if !self.begin_cloud_sync_job(cx) {
+        if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
         let resolution = if force {
@@ -385,8 +390,7 @@ impl NyaTermApp {
         } else {
             None
         };
-        let options = self.local_cloud_sync_options(master_password);
-        let cleanup_options = options.clone();
+        let runtime = self.runtime.clone();
         let settings = self.cloud_sync.settings().clone();
         let local_store = self.store_blocking_client();
         let cleanup_settings = settings.clone();
@@ -406,10 +410,11 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-provider-push", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                let state = load_current_cloud_sync_state(&local_store)?;
+                let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
                 if force && resolution.is_none() {
                     return Err(CloudSyncError::LocalChangedDuringSync);
                 }
-                let state = load_current_cloud_sync_state(&local_store)?;
                 if let Some(request) = &resolution {
                     return super::super::cloud_sync_provider::resolve_provider_conflict(
                         &local_store,
@@ -418,7 +423,8 @@ impl NyaTermApp {
                         &state,
                         request,
                         &operation_control,
-                    );
+                    )
+                    .map(|result| (result, options));
                 }
                 push_provider_snapshot(
                     &local_store,
@@ -428,6 +434,7 @@ impl NyaTermApp {
                     force,
                     &operation_control,
                 )
+                .map(|result| (result, options))
             });
         cx.spawn(async move |this, cx| {
             let result = await_cloud_sync_job(
@@ -442,7 +449,7 @@ impl NyaTermApp {
             .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(result) => {
+                    Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
@@ -480,6 +487,7 @@ impl NyaTermApp {
                             true,
                         );
                         this.shell.set_status(this.cloud_sync.status().to_string());
+                        this.handle_cloud_sync_password_error(&error, cx);
                         let mut history = CloudSyncHistoryEntry::sync(
                             status,
                             if force {
@@ -506,7 +514,6 @@ impl NyaTermApp {
 
     pub(in crate::features) fn run_provider_cloud_sync_pull(
         &mut self,
-        master_password: nyaterm_core::SecretString,
         force: bool,
         cx: &mut Context<Self>,
     ) {
@@ -519,7 +526,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        if !self.begin_cloud_sync_job(cx) {
+        if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
         let resolution = if force {
@@ -527,8 +534,7 @@ impl NyaTermApp {
         } else {
             None
         };
-        let options = self.local_cloud_sync_options(master_password);
-        let cleanup_options = options.clone();
+        let runtime = self.runtime.clone();
         let settings = self.cloud_sync.settings().clone();
         let local_store = self.store_blocking_client();
         let cleanup_settings = settings.clone();
@@ -548,10 +554,11 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-provider-pull", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
+                let state = load_current_cloud_sync_state(&local_store)?;
+                let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
                 if force && resolution.is_none() {
                     return Err(CloudSyncError::LocalChangedDuringSync);
                 }
-                let state = load_current_cloud_sync_state(&local_store)?;
                 if let Some(request) = &resolution {
                     return super::super::cloud_sync_provider::resolve_provider_conflict(
                         &local_store,
@@ -560,7 +567,8 @@ impl NyaTermApp {
                         &state,
                         request,
                         &operation_control,
-                    );
+                    )
+                    .map(|result| (result, options));
                 }
                 pull_provider_snapshot(
                     &local_store,
@@ -570,6 +578,7 @@ impl NyaTermApp {
                     force,
                     &operation_control,
                 )
+                .map(|result| (result, options))
             });
         cx.spawn(async move |this, cx| {
             let result = await_cloud_sync_job(
@@ -584,7 +593,7 @@ impl NyaTermApp {
             .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(result) => {
+                    Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
@@ -623,6 +632,7 @@ impl NyaTermApp {
                             true,
                         );
                         this.shell.set_status(this.cloud_sync.status().to_string());
+                        this.handle_cloud_sync_password_error(&error, cx);
                         let mut history = CloudSyncHistoryEntry::sync(
                             status,
                             if force {
@@ -647,26 +657,8 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn local_cloud_sync_options(
-        &self,
-        master_password: nyaterm_core::SecretString,
-    ) -> LocalCloudSyncOptions {
-        LocalCloudSyncOptions {
-            device_name: Some(self.cloud_sync.settings().device_name.clone()),
-            config_dir: self.runtime.config_dir().to_path_buf(),
-            portable_key_path: self.runtime.portable_key_path().map(ToOwned::to_owned),
-            remote_dir: self.runtime.config_dir().join("cloud-sync-local"),
-            remote_root: self.cloud_sync.settings().remote_root.clone(),
-            device_id: self.cloud_sync.state().device_id.clone(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-            master_password,
-            enabled: true,
-        }
-    }
-
     pub(in crate::features) fn run_cloud_sync_recovery(
         &mut self,
-        master_password: nyaterm_core::SecretString,
         provider_action: bool,
         cx: &mut Context<Self>,
     ) {
@@ -679,11 +671,10 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        if !self.begin_cloud_sync_job(cx) {
+        if !self.begin_cloud_sync_snapshot_job(cx) {
             return;
         }
-        let options = self.local_cloud_sync_options(master_password);
-        let cleanup_options = options.clone();
+        let runtime = self.runtime.clone();
         let settings = self.cloud_sync.settings().clone();
         let local_store = self.store_blocking_client();
         let cleanup_settings = settings.clone();
@@ -701,7 +692,9 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("cloud-sync-recover", move |_| {
                 let _operation = lock_cloud_sync_operation(&operation_control)?;
-                if provider_action {
+                let state = load_current_cloud_sync_state(&local_store)?;
+                let options = load_cloud_sync_options(&local_store, &runtime, &settings, &state)?;
+                let result = if provider_action {
                     recover_provider_snapshot(&local_store, &settings, &options, &operation_control)
                 } else {
                     cloud_sync::recover_current_snapshot_with_remote_controlled(
@@ -710,7 +703,8 @@ impl NyaTermApp {
                         &LocalDirectoryRemote::new(options.remote_dir.clone()),
                         &operation_control,
                     )
-                }
+                }?;
+                Ok((result, options))
             });
         cx.spawn(async move |this, cx| {
             let result = await_cloud_sync_job(
@@ -725,7 +719,7 @@ impl NyaTermApp {
             .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(result) => {
+                    Ok((result, cleanup_options)) => {
                         schedule_cloud_sync_cleanup(
                             this.store_blocking_client(),
                             this.blocking_jobs.clone(),
@@ -759,6 +753,7 @@ impl NyaTermApp {
                             provider.clone(),
                             provider_action,
                         );
+                        this.handle_cloud_sync_password_error(&error, cx);
                         let mut history = CloudSyncHistoryEntry::sync(
                             status,
                             "recover_current_remote",
@@ -778,6 +773,31 @@ impl NyaTermApp {
         })
         .detach();
         cx.notify();
+    }
+
+    fn handle_cloud_sync_password_error(&mut self, error: &CloudSyncError, cx: &mut Context<Self>) {
+        if matches!(
+            error,
+            CloudSyncError::PortableSnapshot(
+                nyaterm_core::PortableSnapshotError::MissingMasterPassword
+            )
+        ) {
+            self.focus_settings_tab(crate::models::SettingsTab::Security, cx);
+            self.open_page(crate::models::NavItem::Settings, cx);
+            self.cloud_sync
+                .set_status(t!("settings.syncMasterPasswordRequired"));
+            self.shell.set_status(self.cloud_sync.status().to_string());
+        }
+    }
+
+    fn begin_cloud_sync_snapshot_job(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.cloud_sync.settings().enabled {
+            self.cloud_sync.set_status(t!("settings.syncEnableFirst"));
+            self.shell.set_status(self.cloud_sync.status().to_string());
+            cx.notify();
+            return false;
+        }
+        self.begin_cloud_sync_job(cx)
     }
 
     fn begin_cloud_sync_job(&mut self, cx: &mut Context<Self>) -> bool {
@@ -959,5 +979,120 @@ fn cloud_sync_outcome_message(outcome: CloudSyncOutcome) -> String {
         CloudSyncOutcome::Uploaded => t!("settings.syncPushSuccess").to_string(),
         CloudSyncOutcome::Downloaded => t!("settings.syncPullSuccess").to_string(),
         CloudSyncOutcome::Recovered => t!("settings.syncRecoverCurrentSuccess").to_string(),
+    }
+}
+
+// Called only by a blocking job, under the same operation lock as automatic sync.
+fn load_cloud_sync_options(
+    store: &nyaterm_store::StoreBlockingClient,
+    runtime: &nyaterm_core::AppRuntime,
+    settings: &CloudSyncSettings,
+    state: &CloudSyncState,
+) -> Result<LocalCloudSyncOptions, CloudSyncError> {
+    let master_password = store
+        .request_fn(StoreDomain::CloudSync, |database| {
+            database.load_cloud_sync_master_password()
+        })
+        .map_err(|error| CloudSyncError::LocalStore(error.category().to_string()))?
+        .filter(|password| !password.is_empty())
+        .ok_or(nyaterm_core::PortableSnapshotError::MissingMasterPassword)?;
+    Ok(LocalCloudSyncOptions {
+        device_name: Some(settings.device_name.clone()),
+        config_dir: runtime.config_dir().to_path_buf(),
+        portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
+        remote_dir: runtime.config_dir().join("cloud-sync-local"),
+        remote_root: settings.remote_root.clone(),
+        device_id: state.device_id.clone(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        master_password,
+        enabled: true,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_cloud_sync_options;
+    use crate::test_support::{TestConfigDir, blocking_test_store};
+    use nyaterm_core::{
+        AppRuntime, CloudSyncError, CloudSyncSettings, CloudSyncState, PortableSnapshotError,
+        RuntimeMode,
+    };
+    use nyaterm_store::{ConnectionStore, StoreDomain};
+    use redb::ReadableTable as _;
+
+    fn runtime(dir: &TestConfigDir) -> AppRuntime {
+        AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            dir.path().into(),
+            dir.join("config"),
+            dir.join("logs"),
+            dir.join("cache"),
+            None,
+        )
+    }
+
+    #[test]
+    fn manual_cloud_sync_loads_the_saved_password_without_trimming_and_rejects_missing_password() {
+        let dir = TestConfigDir::new("nyaterm-manual-sync-options");
+        let store = blocking_test_store(dir.path());
+        let settings = CloudSyncSettings::default();
+        let state = CloudSyncState::default();
+        assert!(matches!(
+            load_cloud_sync_options(&store, &runtime(&dir), &settings, &state),
+            Err(CloudSyncError::PortableSnapshot(
+                PortableSnapshotError::MissingMasterPassword
+            ))
+        ));
+        store
+            .request_fn(StoreDomain::CloudSync, |store| {
+                store.save_master_password(Some(" fixture-password "))
+            })
+            .unwrap();
+        let options = load_cloud_sync_options(&store, &runtime(&dir), &settings, &state).unwrap();
+        assert_eq!(
+            options.master_password.expose_secret(),
+            " fixture-password "
+        );
+        assert_eq!(options.device_id, state.device_id);
+    }
+
+    #[test]
+    fn manual_cloud_sync_rejects_corrupted_saved_password_without_fallback_or_writes() {
+        let dir = TestConfigDir::new("nyaterm-manual-sync-corrupt-password");
+        let config = dir.join("config");
+        let store = ConnectionStore::open(&config).unwrap();
+        store
+            .save_master_password(Some("fixture-password"))
+            .unwrap();
+        drop(store);
+        // Seed a damaged supported settings document before starting the store worker.
+        let database = redb::Database::open(config.join("nyaterm.redb")).unwrap();
+        let transaction = database.begin_write().unwrap();
+        {
+            let mut table = transaction
+                .open_table(redb::TableDefinition::<&str, &[u8]>::new("settings"))
+                .unwrap();
+            let mut settings: serde_json::Value =
+                serde_json::from_slice(table.get("settings/default").unwrap().unwrap().value())
+                    .unwrap();
+            settings["security"]["master_password"] = serde_json::json!("corrupted-base64!");
+            table
+                .insert(
+                    "settings/default",
+                    serde_json::to_vec(&settings).unwrap().as_slice(),
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        drop(database);
+        let store = blocking_test_store(dir.path());
+        let result = load_cloud_sync_options(
+            &store,
+            &runtime(&dir),
+            &CloudSyncSettings::default(),
+            &CloudSyncState::default(),
+        );
+        assert!(matches!(result, Err(CloudSyncError::LocalStore(_))));
+        assert!(!config.join("cloud-sync-local").exists());
     }
 }
