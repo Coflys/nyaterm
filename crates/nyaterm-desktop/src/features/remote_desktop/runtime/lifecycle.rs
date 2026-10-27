@@ -628,6 +628,12 @@ impl NyaTermApp {
     }
 }
 
+/// Only a connection that was lost may be retried automatically.
+///
+/// A session the server ended -- most often because another connection took it over --
+/// ends its replacement for the same reason, so two NyaTerm clients chasing each other
+/// never settles and neither side gets a usable desktop. Those arrive as
+/// [`RdpErrorKind::Session`] and wait for the view's manual retry instead.
 pub(super) fn rdp_error_is_retryable(kind: RdpErrorKind) -> bool {
     matches!(
         kind,
@@ -635,7 +641,6 @@ pub(super) fn rdp_error_is_retryable(kind: RdpErrorKind) -> bool {
             | RdpErrorKind::ConnectionRefused
             | RdpErrorKind::Tls
             | RdpErrorKind::Transport
-            | RdpErrorKind::Session
     )
 }
 
@@ -646,11 +651,17 @@ pub(super) fn rdp_reconnect_delay(attempt: u32, jitter_ms: u64) -> Duration {
         + Duration::from_millis(jitter_ms.min(249))
 }
 
-pub(super) fn clear_rdp_reconnect_after_frame(
+pub(super) fn cancel_rdp_reconnect_schedule(
     session: &mut crate::features::remote_desktop::state::RemoteDesktopSessionState,
 ) {
     session.reconnect_attempts = 0;
     session.reconnect_at = None;
+}
+
+pub(super) fn clear_rdp_reconnect_after_frame(
+    session: &mut crate::features::remote_desktop::state::RemoteDesktopSessionState,
+) {
+    cancel_rdp_reconnect_schedule(session);
     session.error = None;
 }
 

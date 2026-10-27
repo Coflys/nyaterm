@@ -1,5 +1,6 @@
 use super::errors::format_rdp_error;
 use super::input::POINTER_MOVE_INTERVAL;
+use super::lifecycle::cancel_rdp_reconnect_schedule;
 use crate::features::NyaTermApp;
 use crate::features::remote_desktop::state::resize::should_disable_dynamic_resize_after_state;
 use crate::models::TransferJobKind;
@@ -562,6 +563,10 @@ impl NyaTermApp {
                     }
                     if fatal && !should_reconnect {
                         session.state = RemoteDesktopViewState::Failed;
+                        // A deadline left over from an earlier transient failure would still
+                        // fire in `drive_rdp_reconnects`, silently reconnecting a session the
+                        // server just refused to keep.
+                        cancel_rdp_reconnect_schedule(session);
                     }
                 }
                 if !should_reconnect {

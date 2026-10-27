@@ -426,6 +426,12 @@ pub enum RdpErrorKind {
     ConnectionRefused,
     Tls,
     Transport,
+    /// The live session ended: the server stated a reason, or the session broke in a way
+    /// the helper could not attribute to the transport.
+    ///
+    /// Deliberately not auto-reconnectable. A server that ended a session for a reason --
+    /// most often a takeover by another connection -- ends the replacement the same way,
+    /// so two NyaTerm clients chasing each other leaves neither usable.
     Session,
     Clipboard,
     Negotiation,

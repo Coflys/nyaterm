@@ -8,12 +8,13 @@ use nyaterm_remote_desktop::{
 };
 
 use super::{
-    MAINTENANCE_INTERVAL, POINTER_MOVE_INTERVAL, RESIZE_DEBOUNCE, clear_rdp_reconnect_after_frame,
-    defer_rdp_pointer_move, inline_remote_desktop_password, rdp_error_is_retryable,
-    rdp_key_modifiers, rdp_reconnect_delay, record_remote_cursor_position_if_sent,
-    remote_committed_text_supported, remote_desktop_password_id, remote_desktop_periodic_delay,
-    remote_modifier_transitions, remote_state_clears_input, secure_attention_available,
-    vnc_capabilities_for_state, vnc_input_allowed, vnc_keysym_for_key,
+    MAINTENANCE_INTERVAL, POINTER_MOVE_INTERVAL, RESIZE_DEBOUNCE, cancel_rdp_reconnect_schedule,
+    clear_rdp_reconnect_after_frame, defer_rdp_pointer_move, inline_remote_desktop_password,
+    rdp_error_is_retryable, rdp_key_modifiers, rdp_reconnect_delay,
+    record_remote_cursor_position_if_sent, remote_committed_text_supported,
+    remote_desktop_password_id, remote_desktop_periodic_delay, remote_modifier_transitions,
+    remote_state_clears_input, secure_attention_available, vnc_capabilities_for_state,
+    vnc_input_allowed, vnc_keysym_for_key,
 };
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
@@ -92,11 +93,13 @@ fn reconnect_classification_only_accepts_transient_failures() {
         RdpErrorKind::ConnectionRefused,
         RdpErrorKind::Tls,
         RdpErrorKind::Transport,
-        RdpErrorKind::Session,
     ] {
         assert!(rdp_error_is_retryable(kind), "{kind:?}");
     }
     for kind in [
+        // The server ended the session and said why, or the session broke in a way that
+        // is not a lost connection. Retrying restarts the same decision.
+        RdpErrorKind::Session,
         RdpErrorKind::Authentication,
         RdpErrorKind::CertificateRejected,
         RdpErrorKind::Negotiation,
@@ -205,6 +208,24 @@ fn first_frame_clears_reconnect_attempt_and_error_state() {
     assert_eq!(session.reconnect_attempts, 0);
     assert_eq!(session.reconnect_at, None);
     assert_eq!(session.error, None);
+}
+
+/// The terminal-error path calls this right after recording the error it just received, so
+/// unlike the first-frame reset it must leave `error` in place.
+#[test]
+fn cancelling_a_pending_retry_keeps_the_error_being_shown() {
+    let mut session = RemoteDesktopSessionState {
+        reconnect_attempts: 2,
+        reconnect_at: Some(Instant::now()),
+        error: Some(RdpError::new(RdpErrorKind::Session, "terminated").into()),
+        ..Default::default()
+    };
+
+    cancel_rdp_reconnect_schedule(&mut session);
+
+    assert_eq!(session.reconnect_attempts, 0);
+    assert_eq!(session.reconnect_at, None);
+    assert!(session.error.is_some());
 }
 
 #[test]

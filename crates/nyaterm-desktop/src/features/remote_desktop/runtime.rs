@@ -41,6 +41,8 @@ use input::vnc_input_allowed;
 #[cfg(test)]
 use input::vnc_keysym_for_key;
 #[cfg(test)]
+use lifecycle::cancel_rdp_reconnect_schedule;
+#[cfg(test)]
 use lifecycle::clear_rdp_reconnect_after_frame;
 #[cfg(test)]
 use lifecycle::inline_remote_desktop_password;
