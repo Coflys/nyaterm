@@ -66,6 +66,8 @@ pub(in crate::features) struct ResizeHandleHoverState {
 
 #[derive(Default)]
 pub(super) struct ShellDiagnosticState {
+    renderer: Option<gpui::GpuSpecs>,
+    renderer_probed: bool,
     last_log_at: HashMap<&'static str, Instant>,
 }
 
@@ -578,6 +580,17 @@ impl ShellFeatureState {
             self.navigation.settings.previous_right_collapsed = None;
             false
         }
+    }
+
+    pub(in crate::features) fn capture_renderer(&mut self, window: &gpui::Window) {
+        if !self.diagnostics.renderer_probed {
+            self.diagnostics.renderer = window.gpu_specs();
+            self.diagnostics.renderer_probed = true;
+        }
+    }
+
+    pub(in crate::features) fn renderer(&self) -> Option<&gpui::GpuSpecs> {
+        self.diagnostics.renderer.as_ref()
     }
 
     /// The window `NyaTermApp` renders in, once the first frame has run.

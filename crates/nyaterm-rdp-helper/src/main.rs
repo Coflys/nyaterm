@@ -20,13 +20,14 @@ use ironrdp_input::{
 };
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
+use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use nyaterm_remote_desktop::{
     CursorPosition, CursorShape, CursorVisibility, PROTOCOL_VERSION, Packet, PixelFormat,
     RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpCertificateRequest, RdpCertificateResponse,
-    RdpControlMessage, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpServerCapabilities,
-    RdpSessionConfig, RdpSessionState, RemoteCursorEvent, RemotePoint, RemotePointerButton,
-    RemotePointerEvent, RemoteWheelAxis, decode_control, encode_control, encode_cursor_packet,
-    encode_frame_packet_owned, read_packet, validate_committed_text,
+    RdpControlMessage, RdpDisplayConfig, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent,
+    RdpServerCapabilities, RdpSessionConfig, RdpSessionState, RemoteCursorEvent, RemotePoint,
+    RemotePointerButton, RemotePointerEvent, RemoteWheelAxis, decode_control, encode_control,
+    encode_cursor_packet, encode_frame_packet_owned, read_packet, validate_committed_text,
     validate_framebuffer_dimensions, write_packet_into,
 };
 use sha2::{Digest, Sha256};
@@ -40,6 +41,7 @@ mod clipboard;
 use clipboard::ClipboardBridge;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const CLIPBOARD_TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_millis(750);
 const STDOUT_BUFFER_BYTES: usize = 256 * 1024;
 
 enum Outbound {
@@ -130,6 +132,26 @@ fn install_crypto_provider() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("failed to install the rustls aws-lc-rs CryptoProvider"))
 }
 
+/// Keep remote request diagnostics independent of local file clipboard polling.
+/// The interval belongs to the control loop, so it also runs in text-only mode
+/// while the application sends no new control messages.
+async fn receive_control(
+    control_rx: &mut tokio_mpsc::UnboundedReceiver<io::Result<RdpControlMessage>>,
+    clipboard_tick: &mut tokio::time::Interval,
+    clipboard: Option<&ClipboardBridge>,
+) -> Option<io::Result<RdpControlMessage>> {
+    loop {
+        tokio::select! {
+            message = control_rx.recv() => return message,
+            _ = clipboard_tick.tick() => {
+                if let Some(clipboard) = clipboard {
+                    clipboard.check_remote_fetch_timeout();
+                }
+            }
+        }
+    }
+}
+
 async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
     let (output_tx, output_rx) = mpsc::sync_channel(1);
     let writer = spawn_stdout_writer(output_rx)?;
@@ -144,8 +166,16 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
     let mut clipboard_bridge = None;
     let mut hello_received = false;
     let mut active_session_id: Option<String> = None;
+    let mut clipboard_tick = tokio::time::interval(CLIPBOARD_TIMEOUT_CHECK_INTERVAL);
+    clipboard_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    while let Some(message) = control_rx.recv().await {
+    while let Some(message) = receive_control(
+        &mut control_rx,
+        &mut clipboard_tick,
+        clipboard_bridge.as_deref(),
+    )
+    .await
+    {
         let message = message?;
         validate_control_phase(&message, hello_received)?;
         match message {
@@ -153,9 +183,6 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                 send_control(&output_tx, RdpControlMessage::Pong { sequence })?;
             }
             RdpControlMessage::ClientHello { version } => {
-                if version != PROTOCOL_VERSION {
-                    anyhow::bail!("RDP IPC protocol version mismatch");
-                }
                 send_control(
                     &output_tx,
                     RdpControlMessage::ServerHello {
@@ -166,6 +193,17 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                         },
                     },
                 )?;
+                if version != PROTOCOL_VERSION {
+                    // Flush the actual version so older applications can explain
+                    // the incompatibility before either side processes Connect.
+                    drop(output_tx);
+                    writer
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("RDP stdout writer panicked"))??;
+                    anyhow::bail!(
+                        "RDP IPC protocol version {version} does not match {PROTOCOL_VERSION}"
+                    );
+                }
                 hello_received = true;
             }
             RdpControlMessage::Connect { session_id, config } => {
@@ -591,6 +629,24 @@ fn build_config(
     );
     let clipboard_factory = clipboard.clone();
     let use_credssp = config.use_nla && config.password.is_some();
+    // The fork implements Progressive decoding, but this path has not been
+    // validated end to end. Keep it disabled independently of the saved request.
+    let gfx_effective = graphics_pipeline_effective(config.display.graphics_pipeline);
+    // One line per connection, always: it is the only record that this process
+    // negotiated a session at all, and it carries no host, account, or password.
+    // Options are what separate "the graphics pipeline was never asked for" from
+    // "the server refused it" when a log is all you have.
+    eprintln!(
+        "RDP session options width={} height={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
+        config.display.width,
+        config.display.height,
+        color_depth,
+        u8::from(config.display.graphics_pipeline),
+        u8::from(gfx_effective),
+        performance_flags_bits(&config.display),
+        u8::from(use_credssp),
+        u8::from(config.administrative_session),
+    );
     let mut builder = ConfigBuilder::new()
         .with_destination(destination)
         .with_username(config.username.clone())
@@ -609,12 +665,17 @@ fn build_config(
         .with_desktop_width(u16::try_from(config.display.width).unwrap_or(1920))
         .with_desktop_height(u16::try_from(config.display.height).unwrap_or(1080))
         .with_color_depth(color_depth)
+        // Missing saved settings preserve IronRDP's previous default (0x86).
+        .with_performance_flags(PerformanceFlags::from_bits_truncate(
+            performance_flags_bits(&config.display),
+        ))
+        // See `gfx_effective`: this channel remains unavailable in this release.
+        .with_graphics_pipeline(gfx_effective)
         // `none` authentication must not submit a password or enter CredSSP.
         .with_credssp(use_credssp)
         .with_tls(!use_credssp)
-        // Upstream can now enable RDPEGFX when a platform H.264 decoder exists.
-        // Keep the existing bitmap path until the graphics pipeline is validated.
-        .with_graphics_pipeline(false)
+        // Request administrative logon; the server controls session assignment.
+        .with_administrative_session(config.administrative_session)
         .with_codecs(Vec::new())
         .with_pointer_software_rendering(false)
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict)
@@ -634,6 +695,53 @@ fn build_config(
     }
     let config = builder.build()?;
     Ok((config, clipboard))
+}
+
+fn graphics_pipeline_effective(_requested: bool) -> bool {
+    false
+}
+
+/// [MS-RDPBCGR] 2.2.1.11.1 performance flags, as a raw bit pattern.
+///
+/// Kept as a plain `u32` so the mapping can be tested without an IronRDP value.
+/// The four `disable_*` settings are inverted on purpose: they match the names
+/// mRemoteNG uses, where enabling the switch means the effect is turned off.
+fn performance_flags_bits(display: &RdpDisplayConfig) -> u32 {
+    const DISABLE_WALLPAPER: u32 = 0x0000_0001;
+    const DISABLE_FULL_WINDOW_DRAG: u32 = 0x0000_0002;
+    const DISABLE_MENU_ANIMATIONS: u32 = 0x0000_0004;
+    const DISABLE_THEMING: u32 = 0x0000_0008;
+    const DISABLE_CURSOR_SHADOW: u32 = 0x0000_0020;
+    const DISABLE_CURSOR_BLINKING: u32 = 0x0000_0040;
+    const ENABLE_FONT_SMOOTHING: u32 = 0x0000_0080;
+    const ENABLE_DESKTOP_COMPOSITION: u32 = 0x0000_0100;
+
+    let mut flags = 0;
+    if !display.display_wallpaper {
+        flags |= DISABLE_WALLPAPER;
+    }
+    if display.disable_full_window_drag {
+        flags |= DISABLE_FULL_WINDOW_DRAG;
+    }
+    if display.disable_menu_animations {
+        flags |= DISABLE_MENU_ANIMATIONS;
+    }
+    if !display.display_themes {
+        flags |= DISABLE_THEMING;
+    }
+    if display.disable_cursor_shadow {
+        flags |= DISABLE_CURSOR_SHADOW;
+    }
+    if display.disable_cursor_blinking {
+        flags |= DISABLE_CURSOR_BLINKING;
+    }
+    if display.enable_font_smoothing {
+        flags |= ENABLE_FONT_SMOOTHING;
+    }
+    if display.enable_desktop_composition {
+        flags |= ENABLE_DESKTOP_COMPOSITION;
+    }
+    flags
 }
 
 struct DesktopPayload {
@@ -1385,8 +1493,9 @@ mod tests {
     use super::{
         CertificateGate, DesktopOutputState, DesktopPayload, Outbound, build_config,
         classify_error, convert_and_send_input, convert_input, desktop_update_payload,
-        forward_full_frame_request, forward_output, install_crypto_provider, output_channel,
-        report_ironrdp_panic, secure_attention_input, send_iron_input, send_reliable_iron_input,
+        forward_full_frame_request, forward_output, graphics_pipeline_effective,
+        install_crypto_provider, output_channel, performance_flags_bits, report_ironrdp_panic,
+        secure_attention_input, send_iron_input, send_reliable_iron_input,
         validate_active_session_id, validate_input_events,
     };
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
@@ -1421,6 +1530,7 @@ mod tests {
             domain: String::new(),
             password: None,
             use_nla: false,
+            administrative_session: false,
             certificate_policy: RdpCertificatePolicy::Prompt,
             display: RdpDisplayConfig::default(),
             clipboard: RdpClipboardConfig::default(),
@@ -1668,6 +1778,64 @@ mod tests {
             (1, true, 0, 0, 2, 1, 8)
         );
         assert_eq!(pixels, [0x33, 0x22, 0x11, 0xff, 0xcc, 0xbb, 0xaa, 0xff]);
+    }
+
+    #[test]
+    fn graphics_pipeline_stays_off_for_both_saved_requests() {
+        assert!(!graphics_pipeline_effective(false));
+        assert!(!graphics_pipeline_effective(true));
+    }
+
+    #[test]
+    fn performance_flags_each_follow_their_own_setting() {
+        let baseline = RdpDisplayConfig::default();
+        let mut variants = Vec::new();
+        let mut display = baseline.clone();
+        display.display_wallpaper = false;
+        variants.push((display, 0x01));
+        let mut display = baseline.clone();
+        display.display_themes = false;
+        variants.push((display, 0x08));
+        let mut display = baseline.clone();
+        display.enable_font_smoothing = false;
+        variants.push((display, 0x80));
+        let mut display = baseline.clone();
+        display.enable_desktop_composition = true;
+        variants.push((display, 0x100));
+        let mut display = baseline.clone();
+        display.disable_full_window_drag = false;
+        variants.push((display, 0x02));
+        let mut display = baseline.clone();
+        display.disable_menu_animations = false;
+        variants.push((display, 0x04));
+        let mut display = baseline.clone();
+        display.disable_cursor_shadow = true;
+        variants.push((display, 0x20));
+        let mut display = baseline;
+        display.disable_cursor_blinking = true;
+        variants.push((display, 0x40));
+        for (display, bit) in variants {
+            assert_eq!(performance_flags_bits(&display) ^ 0x86, bit);
+        }
+    }
+
+    #[test]
+    fn performance_flags_follow_the_saved_connection_settings() {
+        // Preserve the performance flags sent before these options were added.
+        assert_eq!(performance_flags_bits(&RdpDisplayConfig::default()), 0x86);
+
+        let display = RdpDisplayConfig {
+            display_wallpaper: true,
+            display_themes: true,
+            enable_font_smoothing: false,
+            enable_desktop_composition: true,
+            disable_full_window_drag: false,
+            disable_menu_animations: false,
+            disable_cursor_shadow: false,
+            disable_cursor_blinking: false,
+            ..Default::default()
+        };
+        assert_eq!(performance_flags_bits(&display), 0x100);
     }
 
     #[test]

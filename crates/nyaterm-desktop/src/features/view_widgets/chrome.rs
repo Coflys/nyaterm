@@ -377,6 +377,28 @@ pub(in crate::features) fn full_window_overlay_layer(
     deferred(full_window_input_layer(id).child(content)).with_priority(APP_OVERLAY_PRIORITY)
 }
 
+/// Overlay layer that keeps the window's text-selection listeners alive.
+///
+/// [`full_window_input_layer`] stops mouse propagation, and window-level mouse
+/// listeners run in paint order, so its `stop_propagation` also starves a
+/// selectable text painted inside the overlay. `occlude()` already keeps the
+/// pointer away from the elements behind the layer.
+pub(in crate::features) fn selectable_overlay_layer(
+    id: impl Into<String>,
+    content: impl IntoElement,
+) -> gpui::Deferred {
+    deferred(
+        div()
+            .id(SharedString::from(id.into()))
+            .key_context(crate::shortcuts::MODAL_KEY_CONTEXT)
+            .absolute()
+            .inset_0()
+            .occlude()
+            .child(content),
+    )
+    .with_priority(APP_OVERLAY_PRIORITY)
+}
+
 /// Lifts an overlay that deliberately owns no input layer above the resize
 /// handles. Hover-driven surfaces must not block the pointer underneath them.
 pub(in crate::features) fn passive_overlay_layer(content: impl IntoElement) -> gpui::Deferred {
@@ -479,6 +501,67 @@ mod tests {
         lower_events: Arc<AtomicUsize>,
         backdrop_clicks: Arc<AtomicUsize>,
         child_clicks: Arc<AtomicUsize>,
+    }
+
+    struct SelectableInputLayerFixture {
+        background_events: Arc<AtomicUsize>,
+        overlay_clicks: Arc<AtomicUsize>,
+    }
+
+    impl Render for SelectableInputLayerFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let down = self.background_events.clone();
+            let up = self.background_events.clone();
+            let moved = self.background_events.clone();
+            let scrolled = self.background_events.clone();
+            let clicked = self.overlay_clicks.clone();
+            div()
+                .size_full()
+                .relative()
+                .on_any_mouse_down(move |_, _, _| {
+                    down.fetch_add(1, Ordering::SeqCst);
+                })
+                .on_mouse_up(MouseButton::Left, move |_, _, _| {
+                    up.fetch_add(1, Ordering::SeqCst);
+                })
+                .on_mouse_move(move |_, _, _| {
+                    moved.fetch_add(1, Ordering::SeqCst);
+                })
+                .on_scroll_wheel(move |_, _, _| {
+                    scrolled.fetch_add(1, Ordering::SeqCst);
+                })
+                .child(super::selectable_overlay_layer(
+                    "selectable-test-layer",
+                    div()
+                        .id("selectable-test-content")
+                        .size_full()
+                        .on_click(move |_, _, _| {
+                            clicked.fetch_add(1, Ordering::SeqCst);
+                        }),
+                ))
+        }
+    }
+
+    #[gpui::test]
+    fn selectable_layer_occludes_background_pointer_and_scroll_handlers(cx: &mut TestAppContext) {
+        let background_events = Arc::new(AtomicUsize::new(0));
+        let overlay_clicks = Arc::new(AtomicUsize::new(0));
+        let (_, cx) = cx.add_window_view(|_, _| SelectableInputLayerFixture {
+            background_events: background_events.clone(),
+            overlay_clicks: overlay_clicks.clone(),
+        });
+        draw(cx);
+        let position = point(px(12.), px(12.));
+        cx.simulate_mouse_move(position, None, Modifiers::none());
+        cx.simulate_click(position, Modifiers::none());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Lines(point(0., -3.)),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        assert_eq!(overlay_clicks.load(Ordering::SeqCst), 1);
+        assert_eq!(background_events.load(Ordering::SeqCst), 0);
     }
 
     struct ChildControlsFixture {
