@@ -1118,6 +1118,17 @@ impl SettingsFeatureState {
         self.summary.window_material = material;
     }
 
+    pub(in crate::features) fn set_window_decorations(
+        &mut self,
+        decorations: nyaterm_core::models::window_decoration::WindowDecoration,
+    ) -> bool {
+        if self.summary.window_decorations == decorations {
+            return false;
+        }
+        self.summary.window_decorations = decorations;
+        true
+    }
+
     pub(in crate::features) fn set_window_background_opacity(&mut self, opacity: u8) -> bool {
         if self.summary.window_background_opacity == opacity {
             return false;

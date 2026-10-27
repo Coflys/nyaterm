@@ -1,18 +1,17 @@
 use rust_i18n::t;
 
-use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
+use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_core::{CloudConflictKind, truncate_preview};
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::{
-    cloud_sync_status_dot_color, cloud_sync_status_text_color, configured_cloud_sync_provider,
-    format_cloud_provider, format_duration_ms,
+    SyncHistoryTimeFormatter, cloud_sync_status_dot_color, configured_cloud_sync_provider,
+    format_cloud_provider,
 };
-use crate::features::view_widgets::{
-    CloudSyncHistoryRowLabels, cloud_sync_history_row, dialog_action_button,
-};
+use crate::features::sync::SyncHistoryFilter;
+use crate::features::view_widgets::{cloud_sync_history_row, dialog_action_button};
 use crate::widgets::small_button;
-use nyaterm_ui::{NyaScrollable, NyaTooltip};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable};
 
 impl NyaTermApp {
     pub(in crate::features) fn sync_backup_history_panel(
@@ -20,38 +19,36 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
-        // Tauri SyncBackupHistoryPanel:
-        // shared PanelHeader + status strip + optional conflict card + dense history list.
         let provider = configured_cloud_sync_provider(self.cloud_sync.settings());
         let provider_label = format_cloud_provider(&provider);
         let enabled = self.cloud_sync.settings().enabled;
         let status_message = self.cloud_sync.status().to_string();
-        let last_history_status = self
+        let state = self.cloud_sync.activity_status();
+        let state_label = t!(match state {
+            "disabled" => "settings.syncState.disabled",
+            "conflict" => "settings.syncHistory.needsAttention",
+            "running" => "settings.syncState.running",
+            _ => "settings.syncState.idle",
+        });
+        let formatter = SyncHistoryTimeFormatter::new();
+        let last_success = self
             .cloud_sync
             .history()
-            .first()
-            .map(|entry| entry.status.as_str());
-        let state = if !enabled {
-            "disabled"
-        } else if self.cloud_sync.conflict().is_some() {
-            "conflict"
-        } else if self.cloud_sync.job_running() {
-            "running"
-        } else {
-            match last_history_status {
-                Some("failed") => "failed",
-                Some("success") => "success",
-                _ => "idle",
-            }
-        };
-        let state_label = match state {
-            "disabled" => t!("settings.syncState.disabled"),
-            "conflict" => t!("settings.syncState.conflict"),
-            "failed" => t!("settings.syncState.failed"),
-            "running" => t!("settings.syncState.running"),
-            "success" => t!("settings.syncState.success"),
-            _ => t!("settings.syncState.idle"),
-        };
+            .iter()
+            .filter(|entry| {
+                entry.kind == "sync"
+                    && entry.status == "success"
+                    && entry.provider.as_deref() == Some(provider.as_str())
+            })
+            .map(|entry| entry.timestamp_ms)
+            .max()
+            .map(|timestamp| {
+                format!(
+                    "{} {}",
+                    formatter.day(timestamp),
+                    formatter.clock(timestamp)
+                )
+            });
         let history = self.cloud_sync.history().to_vec();
         let expanded = self.cloud_sync.history_expanded().clone();
         let conflict = self.cloud_sync.conflict().cloned();
@@ -75,8 +72,41 @@ impl NyaTermApp {
         });
         let sync_action_enabled = enabled && !self.cloud_sync.job_running();
 
+        let filter = self.cloud_sync.history_filter();
+        let limit = self.cloud_sync.history_visible_limit();
+        let mut history = history;
+        history.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp_ms));
+        let matching_count = history.iter().filter(|entry| filter.matches(entry)).count();
+        let mut filters = div().px_2().py_2().flex_none().flex().flex_wrap().gap_1();
+        for (value, label) in [
+            (SyncHistoryFilter::All, t!("settings.historyAll")),
+            (
+                SyncHistoryFilter::Success,
+                t!("settings.historyOverviewSuccess"),
+            ),
+            (
+                SyncHistoryFilter::Failed,
+                t!("settings.historyOverviewFailed"),
+            ),
+            (
+                SyncHistoryFilter::Conflict,
+                t!("settings.historyOverviewConflict"),
+            ),
+        ] {
+            filters = filters.child(
+                NyaButton::new(format!("sync-history-filter-{value:?}"), label)
+                    .variant(NyaButtonVariant::Ghost)
+                    .small()
+                    .compact()
+                    .selected(filter == value)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.cloud_sync.filter_history(value);
+                        cx.notify();
+                    })),
+            );
+        }
         let mut rows = div().flex().flex_col();
-        if history.is_empty() {
+        if matching_count == 0 {
             rows = rows.child(
                 div()
                     .py_6()
@@ -84,188 +114,168 @@ impl NyaTermApp {
                     .text_center()
                     .text_size(px(11.))
                     .text_color(rgb(palette.text_dimmed))
-                    .child(t!("settings.historyNoEntries")),
+                    .child(if history.is_empty() {
+                        t!("settings.historyNoEntries")
+                    } else {
+                        t!("settings.historyNoResultsTitle")
+                    }),
             );
         } else {
-            for entry in history {
+            let mut previous_day = None;
+            for entry in history
+                .into_iter()
+                .filter(|entry| filter.matches(entry))
+                .take(limit)
+            {
+                let day = formatter.day(entry.timestamp_ms);
+                if previous_day.as_ref() != Some(&day) {
+                    rows = rows.child(
+                        div()
+                            .px_3()
+                            .pt_3()
+                            .pb_1()
+                            .text_size(px(10.))
+                            .font_weight(FontWeight(600.))
+                            .text_color(rgb(palette.text_muted))
+                            .child(day.clone()),
+                    );
+                    previous_day = Some(day);
+                }
                 let entry_id = entry.id.clone();
                 let is_open = expanded.contains(&entry_id);
-                let copy_message = entry.message.clone();
-                let kind_label = t!(match entry.kind.as_str() {
-                    "sync" => "settings.historyKindSync",
-                    "backup" => "settings.historyKindBackup",
-                    _ => "settings.historyKindSync",
-                });
-                let status_label = t!(match entry.status.as_str() {
-                    "success" => "settings.syncState.success",
-                    "failed" => "settings.syncState.failed",
-                    "conflict" => "settings.syncState.conflict",
-                    "running" => "settings.syncState.running",
-                    _ => "settings.syncState.idle",
-                });
-                let trigger_label =
-                    t!("settings.historyTrigger", value = entry.trigger).to_string();
-                let provider = entry
-                    .provider
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(format_cloud_provider)
-                    .unwrap_or_else(|| "-".to_string());
-                let provider_label = t!("settings.historyProvider", value = provider).to_string();
-                let duration =
-                    format_duration_ms(entry.duration_ms).unwrap_or_else(|| "-".to_string());
-                let duration_label = t!("settings.historyDuration", value = duration).to_string();
+                // Copy all original fields, including full revisions and messages.
+                let diagnostics = serde_json::to_string_pretty(&entry).unwrap_or_default();
                 rows = rows.child(cloud_sync_history_row(
                     palette,
                     entry,
-                    CloudSyncHistoryRowLabels {
-                        kind: kind_label.to_string(),
-                        status: status_label.to_string(),
-                        trigger: trigger_label,
-                        provider: provider_label,
-                        duration: duration_label,
-                        revision: t!("settings.historyRevision"),
-                        view_details: t!("settings.historyViewDetails"),
-                        hide_details: t!("settings.historyHideDetails"),
-                        copy_message: t!("settings.historyCopyMessage"),
-                    },
+                    &formatter,
                     is_open,
                     cx.listener(move |this, _, _, cx| {
                         this.toggle_cloud_sync_history_details(&entry_id, cx);
                     }),
                     cx.listener(move |this, _, _, cx| {
-                        if copy_message.trim().is_empty() {
-                            this.shell
-                                .set_status("history entry has no message".to_string());
-                            this.copy_text_with_feedback("copy-sync-history", String::new(), cx);
-                        } else {
-                            this.copy_text_with_feedback(
-                                "copy-sync-history",
-                                copy_message.clone(),
-                                cx,
-                            );
-                            this.shell
-                                .set_status("sync history message copied".to_string());
-                        }
+                        this.copy_text_with_feedback("copy-sync-history", diagnostics.clone(), cx);
                         cx.notify();
                     }),
                 ));
             }
+            if matching_count > limit {
+                rows = rows.child(
+                    div().p_2().child(
+                        NyaButton::new(
+                            "sync-history-show-more",
+                            t!("settings.syncHistory.showMore"),
+                        )
+                        .variant(NyaButtonVariant::Ghost)
+                        .small()
+                        .full_width()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cloud_sync.show_more_history();
+                            cx.notify();
+                        })),
+                    ),
+                );
+            }
         }
 
+        let indicator = if state == "running" {
+            nyaterm_ui::chat::running_indicator("cloud-sync-running", rgb(palette.link))
+                .into_any_element()
+        } else {
+            div()
+                .size(px(8.))
+                .rounded_full()
+                .flex_none()
+                .bg(cloud_sync_status_dot_color(palette, state))
+                .into_any_element()
+        };
+        let heading = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(indicator)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight(600.))
+                    .text_color(rgb(palette.text))
+                    .child(state_label),
+            )
+            .child(sync_history_action_button(
+                palette,
+                "sync-history-push-now",
+                "icons/fe/upload.svg",
+                t!("settings.syncPushNow"),
+                sync_action_enabled,
+                cx.listener(|this, _, window, cx| {
+                    if this.cloud_sync.settings().enabled && !this.cloud_sync.job_running() {
+                        this.prompt_provider_cloud_sync_push(window, cx);
+                    }
+                }),
+            ))
+            .child(sync_history_action_button(
+                palette,
+                "sync-history-pull-now",
+                "icons/fe/download.svg",
+                t!("settings.syncPullNow"),
+                sync_action_enabled,
+                cx.listener(|this, _, window, cx| {
+                    if this.cloud_sync.settings().enabled && !this.cloud_sync.job_running() {
+                        this.prompt_provider_cloud_sync_pull(window, cx);
+                    }
+                }),
+            ));
+        let last_success =
+            last_success.unwrap_or_else(|| t!("settings.syncHistory.noSuccess").to_string());
+        let header = div()
+            .flex_none()
+            .px_3()
+            .py_3()
+            .border_b_1()
+            .border_color(rgb(palette.border))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(heading)
+            .child(
+                div()
+                    .pl_4()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(provider_label),
+            )
+            .child(
+                div()
+                    .pl_4()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("settings.syncHistory.lastSuccess", value = last_success)),
+            )
+            .when(
+                !status_message.trim().is_empty() && conflict.is_none(),
+                |this| {
+                    this.child(
+                        div()
+                            .pl_4()
+                            .text_size(px(11.))
+                            .line_height(px(17.))
+                            .text_color(rgb(palette.text_muted))
+                            .child(t!(
+                                "settings.syncHistory.operationNotice",
+                                value = truncate_preview(&status_message, 140)
+                            )),
+                    )
+                },
+            );
         div()
             .size_full()
             .flex()
             .flex_col()
             .overflow_hidden()
             .bg(self.shell_transparent_color(palette.surface))
-            .child(
-                div()
-                    .flex_none()
-                    .px_3()
-                    .py(px(10.))
-                    .border_b_1()
-                    .border_color(rgb(palette.border))
-                    .bg(self.shell_transparent_color(palette.surface))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex()
-                            .min_w_0()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .size(px(8.))
-                                    .rounded_full()
-                                    .flex_none()
-                                    .bg(cloud_sync_status_dot_color(palette, state)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette.text_muted))
-                                    .child(t!("settings.historyCurrentState")),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight(600.))
-                                    .text_color(cloud_sync_status_text_color(palette, state))
-                                    .overflow_hidden()
-                                    .child(state_label),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette.border))
-                                    .child("·"),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette.text_muted))
-                                    .overflow_hidden()
-                                    .child(provider_label),
-                            )
-                            .child(sync_history_action_button(
-                                palette,
-                                "sync-history-push-now",
-                                "icons/fe/upload.svg",
-                                t!("settings.syncPushNow"),
-                                sync_action_enabled,
-                                cx.listener(move |this, _, window, cx| {
-                                    if !this.cloud_sync.settings().enabled
-                                        || this.cloud_sync.job_running()
-                                    {
-                                        this.shell.set_status(
-                                            "cloud sync is disabled or already running".to_string(),
-                                        );
-                                        cx.notify();
-                                        return;
-                                    }
-                                    this.prompt_provider_cloud_sync_push(window, cx);
-                                }),
-                            ))
-                            .child(sync_history_action_button(
-                                palette,
-                                "sync-history-pull-now",
-                                "icons/fe/download.svg",
-                                t!("settings.syncPullNow"),
-                                sync_action_enabled,
-                                cx.listener(move |this, _, window, cx| {
-                                    if !this.cloud_sync.settings().enabled
-                                        || this.cloud_sync.job_running()
-                                    {
-                                        this.shell.set_status(
-                                            "cloud sync is disabled or already running".to_string(),
-                                        );
-                                        cx.notify();
-                                        return;
-                                    }
-                                    this.prompt_provider_cloud_sync_pull(window, cx);
-                                }),
-                            )),
-                    )
-                    .when(
-                        !status_message.trim().is_empty() && conflict.is_none(),
-                        |this| {
-                            this.child(
-                                div()
-                                    .pl_4()
-                                    .text_size(px(12.))
-                                    .line_height(px(18.))
-                                    .text_color(rgb(palette.text_muted))
-                                    .child(truncate_preview(&status_message, 140)),
-                            )
-                        },
-                    ),
-            )
+            .child(header)
             .when_some(conflict, |this, conflict| {
                 let can_resolve = conflict.preview.local_content_hash.is_some();
                 let can_pull = can_resolve && conflict.selected_revision.is_some();
@@ -310,7 +320,11 @@ impl NyaTermApp {
                                 .py_2()
                                 .text_size(px(11.))
                                 .text_color(rgb(palette.text))
-                                .child(preview.message.clone()),
+                                .child(if remote_inconsistent {
+                                    t!("settings.syncHistory.incompleteHint")
+                                } else {
+                                    t!("settings.syncHistory.conflictExplanation")
+                                }),
                         )
                         .child(
                             div()
@@ -450,6 +464,9 @@ impl NyaTermApp {
                         ),
                 )
             })
+            .child(div().px_3().pt_3().text_size(px(12.)).font_weight(FontWeight(600.))
+                .text_color(rgb(palette.text)).child(t!("settings.syncHistory.title")))
+            .child(filters)
             .child(
                 div()
                     .id(SharedString::from("sync-backup-history-list"))
@@ -469,35 +486,25 @@ fn sync_history_action_button(
     enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
-    let tooltip: SharedString = tooltip.into();
     let id: SharedString = id.into().into();
     let selector = id.clone();
     div()
-        .id(id)
+        .id(SharedString::from(format!("{id}-wrapper")))
         .debug_selector(move || selector.to_string())
         .size(px(24.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .opacity(if enabled { 1.0 } else { 0.45 })
-        .cursor_pointer()
-        .tooltip(move |window, cx| NyaTooltip::new(tooltip.clone()).build(window, cx))
-        .hover(|this| {
-            if enabled {
-                this.bg(rgb(palette.surface_elevated))
-            } else {
-                this
-            }
-        })
+        .flex_none()
         .child(
-            svg()
-                .size(px(14.))
-                .flex_none()
-                .path(icon_path)
-                .text_color(rgb(palette.text_muted)),
+            NyaButton::new(id, "")
+                .icon(icon_path)
+                .text_color(rgb(palette.text_muted))
+                .tooltip(tooltip)
+                .variant(NyaButtonVariant::Ghost)
+                .height(px(24.))
+                .small()
+                .compact()
+                .disabled(!enabled)
+                .on_click(on_click),
         )
-        .on_click(on_click)
 }
 
 #[cfg(test)]
