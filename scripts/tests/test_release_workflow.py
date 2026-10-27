@@ -70,7 +70,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_signing_job_has_no_publication_commands_or_write_token(self) -> None:
         preparation = jobs()["prepare_release"]
-        for forbidden in ("contents: write", "gh release ", "aws s3", "git push", "gh workflow run"):
+        for forbidden in ("contents: write", "gh release create", "gh release upload", "gh release edit", "aws s3", "git push", "gh workflow run"):
             self.assertNotIn(forbidden, preparation)
         self.assertIn("needs: [preflight, prepare_release]", jobs()["release"])
 
@@ -90,6 +90,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn('select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")', content)
             self.assertIn('if [[ "${r2_success}" == \'1\' ]]', content)
 
+
+    def test_draft_notes_are_preserved_until_publish_gate(self) -> None:
+        blocks = jobs()
+        self.assertIn("Wait for populated draft release", blocks["preflight"])
+        self.assertIn("gh release view", blocks["prepare_release"])
+        self.assertIn("--json body --jq '.body'", blocks["prepare_release"])
+        self.assertNotIn("gh release create", blocks["release"])
+        self.assertNotIn("body=@release-notes.md", blocks["release"])
+        self.assertNotIn("--draft=false", blocks["release"])
+        self.assertIn("--draft=false", blocks["publish"])
+        values = {
+            "needs.preflight.result": "success",
+            "needs.preflight.outputs.publish": "true",
+            "needs.release.result": "success",
+            "needs.r2.result": "success",
+        }
+        self.assertTrue(gate(blocks["publish"], values))
+        values["needs.r2.result"] = "failure"
+        self.assertFalse(gate(blocks["publish"], values))
 
 if __name__ == "__main__":
     unittest.main()
