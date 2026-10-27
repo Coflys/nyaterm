@@ -291,16 +291,12 @@ fn rdp_display(
                     ))),
             )
         })
-        .child(rdp_switch_row(
-            palette,
-            "connection-rdp-graphics-pipeline",
-            t!("dialog.rdpGraphicsPipeline"),
-            t!("dialog.rdpGraphicsPipelineDesc"),
-            editor.rdp_display.graphics_pipeline,
-            cx.listener(|this, _, _, cx| {
-                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpGraphicsPipeline, cx)
-            }),
-        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("dialog.rdpGraphicsPipelineUnavailable")),
+        )
         .child(rdp_switch_row(
             palette,
             "connection-rdp-display-wallpaper",

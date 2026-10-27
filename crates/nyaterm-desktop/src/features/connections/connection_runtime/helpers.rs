@@ -1513,17 +1513,16 @@ mod tests {
             width: 2560,
             height: 1440,
             color_depth: 24,
-            // Every one of these is the opposite of its default, so a field that
-            // is silently re-defaulted on the way through fails the assert below.
-            graphics_pipeline: false,
-            display_wallpaper: true,
-            display_themes: true,
+            // Every option differs from its default to detect re-defaulting.
+            graphics_pipeline: true,
+            display_wallpaper: false,
+            display_themes: false,
             enable_font_smoothing: false,
             enable_desktop_composition: true,
             disable_full_window_drag: false,
             disable_menu_animations: false,
-            disable_cursor_shadow: false,
-            disable_cursor_blinking: false,
+            disable_cursor_shadow: true,
+            disable_cursor_blinking: true,
         };
         let expected_clipboard = RdpClipboardSettings {
             mode: "disabled".to_string(),
@@ -1934,7 +1933,6 @@ pub(in crate::features) enum ConnectionEditorToggle {
     RdpUseNla,
     RdpAdministrativeSession,
     RdpReconnect,
-    RdpGraphicsPipeline,
     RdpDisplayWallpaper,
     RdpDisplayThemes,
     RdpFontSmoothing,

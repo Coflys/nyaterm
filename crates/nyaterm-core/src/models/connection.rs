@@ -636,10 +636,8 @@ pub struct RdpSecuritySettings {
     pub use_nla: bool,
     #[serde(default = "default_rdp_certificate_policy")]
     pub certificate_policy: String,
-    /// mRemoteNG `ConnectToAdministerServer` (`UseConsoleSession`): ask the server
-    /// for its console session instead of a new one. It rides with the logon
-    /// request, which is why it lives beside the other negotiation options rather
-    /// than with the picture settings.
+    /// Request an administrative session. The server determines the actual
+    /// session assignment; this does not guarantee access to a console session.
     #[serde(default)]
     pub administrative_session: bool,
 }
@@ -664,19 +662,16 @@ pub struct RdpDisplaySettings {
     pub height: u32,
     #[serde(default = "default_rdp_color_depth")]
     pub color_depth: u8,
-    /// RDPEGFX surface updates (RemoteFX / ClearCodec). Off by default: the pinned
-    /// IronRDP revision cannot decode every tile a real Windows host sends
-    /// (RemoteFxProgressive surfaces are dropped as undecodable), and a dropped
-    /// tile is a hole that arrives later as a separate patch — the desktop then
-    /// looks like blocks being pasted in. The bitmap path always works.
+    /// Persisted request for RDPEGFX. The helper currently disables this path
+    /// pending end-to-end validation; saved requests are retained for future support.
     #[serde(default)]
     pub graphics_pipeline: bool,
     /// mRemoteNG `DisplayWallpaper`. Polarity is the client's: false means the
     /// server is told not to send wallpaper at all.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub display_wallpaper: bool,
     /// mRemoteNG `DisplayThemes`, same inverted polarity.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub display_themes: bool,
     /// mRemoteNG `EnableFontSmoothing`. This one is not inverted.
     #[serde(default = "default_true")]
@@ -690,9 +685,9 @@ pub struct RdpDisplaySettings {
     pub disable_full_window_drag: bool,
     #[serde(default = "default_true")]
     pub disable_menu_animations: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub disable_cursor_shadow: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub disable_cursor_blinking: bool,
 }
 
@@ -704,14 +699,14 @@ impl Default for RdpDisplaySettings {
             height: default_rdp_height(),
             color_depth: default_rdp_color_depth(),
             graphics_pipeline: false,
-            display_wallpaper: false,
-            display_themes: false,
+            display_wallpaper: true,
+            display_themes: true,
             enable_font_smoothing: true,
             enable_desktop_composition: false,
             disable_full_window_drag: true,
             disable_menu_animations: true,
-            disable_cursor_shadow: true,
-            disable_cursor_blinking: true,
+            disable_cursor_shadow: false,
+            disable_cursor_blinking: false,
         }
     }
 }

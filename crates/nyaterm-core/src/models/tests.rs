@@ -241,17 +241,16 @@ fn rdp_connection_defaults_and_endpoint_match_tauri_shape() {
     assert_eq!(display.color_depth, 32);
     // Written before these keys existed: absent must mean the current default,
     // not a failed read and not a silently off capability.
-    // Absent must mean off: EGFX is opt-in because the pinned decoder drops
-    // RemoteFxProgressive tiles a real host sends (see the field doc).
+    // The unavailable EGFX path stays off for legacy connections.
     assert!(!display.graphics_pipeline);
-    assert!(!display.display_wallpaper);
-    assert!(!display.display_themes);
+    assert!(display.display_wallpaper);
+    assert!(display.display_themes);
     assert!(display.enable_font_smoothing);
     assert!(!display.enable_desktop_composition);
     assert!(display.disable_full_window_drag);
     assert!(display.disable_menu_animations);
-    assert!(display.disable_cursor_shadow);
-    assert!(display.disable_cursor_blinking);
+    assert!(!display.disable_cursor_shadow);
+    assert!(!display.disable_cursor_blinking);
     assert_eq!(clipboard.mode, "text-only");
     assert!(reconnect.enabled);
     assert_eq!(reconnect.max_attempts, 5);

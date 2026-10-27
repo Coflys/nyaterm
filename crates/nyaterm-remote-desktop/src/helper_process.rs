@@ -242,6 +242,146 @@ pub(crate) struct HelperProcess {
     pub(crate) child: Child,
     pub(crate) stdin: ChildStdin,
     pub(crate) stdout: ChildStdout,
+    pub(crate) stderr: StderrCapture,
+}
+
+/// The pipe reader never invokes subscribers: a blocked log writer must not
+/// stop draining the helper. Only bounded, validated metadata survives EOF.
+pub(crate) struct StderrCapture {
+    worker: JoinHandle<StderrSummary>,
+    helper: &'static str,
+}
+
+impl StderrCapture {
+    pub(crate) fn finish(self) {
+        match self.worker.join() {
+            Ok(summary) => tracing::debug!(
+                helper = self.helper,
+                discarded_lines = summary.discarded_lines,
+                oversized_lines = summary.oversized_lines,
+                read_failed = summary.read_failed,
+                options = ?summary.options,
+                "helper stderr summary (raw text discarded)"
+            ),
+            Err(_) => tracing::warn!(helper = self.helper, "helper stderr reader panicked"),
+        }
+    }
+}
+
+const STDERR_LINE_LIMIT: usize = 4096;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StderrSummary {
+    options: Option<SessionOptions>,
+    discarded_lines: u64,
+    oversized_lines: u64,
+    read_failed: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SessionOptions {
+    width: u32,
+    height: u32,
+    color_depth: u32,
+    graphics_requested: bool,
+    graphics_effective: bool,
+    performance_flags: u32,
+    credssp_enabled: bool,
+    administrative_session_requested: bool,
+}
+
+fn session_options(line: &[u8]) -> Option<SessionOptions> {
+    let text = std::str::from_utf8(line).ok()?.trim_end_matches('\r');
+    let mut fields = text.strip_prefix("RDP session options ")?.split(' ');
+    let mut values = [0; 8];
+    for (i, key) in [
+        "width",
+        "height",
+        "depth",
+        "gfx_requested",
+        "gfx_effective",
+        "perf",
+        "nla",
+        "console",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (name, value) = fields.next()?.split_once('=')?;
+        if name != *key {
+            return None;
+        }
+        values[i] = if i == 5 {
+            u32::from_str_radix(value.strip_prefix("0x")?, 16).ok()?
+        } else {
+            if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            value.parse().ok()?
+        };
+    }
+    if fields.next().is_some()
+        || values[0] > 65535
+        || values[1] > 65535
+        || ![16, 24, 32].contains(&values[2])
+        || values[5] & !0x1ff != 0
+        || [3, 4, 6, 7].iter().any(|i| values[*i] > 1)
+    {
+        return None;
+    }
+    Some(SessionOptions {
+        width: values[0],
+        height: values[1],
+        color_depth: values[2],
+        graphics_requested: values[3] != 0,
+        graphics_effective: values[4] != 0,
+        performance_flags: values[5],
+        credssp_enabled: values[6] != 0,
+        administrative_session_requested: values[7] != 0,
+    })
+}
+
+fn collect_stderr(mut reader: impl io::Read) -> StderrSummary {
+    let mut summary = StderrSummary::default();
+    let mut buffer = [0; 4096];
+    let mut line = Vec::with_capacity(STDERR_LINE_LIMIT);
+    let mut oversized = false;
+    let finish_line = |line: &mut Vec<u8>, oversized: &mut bool, summary: &mut StderrSummary| {
+        if *oversized {
+            summary.oversized_lines = summary.oversized_lines.saturating_add(1);
+        } else if !line.is_empty() && line.as_slice() != b"\r" {
+            if let Some(options) = session_options(line) {
+                summary.options = Some(options);
+            } else {
+                summary.discarded_lines = summary.discarded_lines.saturating_add(1);
+            }
+        }
+        line.clear();
+        *oversized = false;
+    };
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                for byte in &buffer[..count] {
+                    if *byte == b'\n' {
+                        finish_line(&mut line, &mut oversized, &mut summary);
+                    } else if line.len() < STDERR_LINE_LIMIT {
+                        line.push(*byte);
+                    } else {
+                        oversized = true;
+                    }
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                summary.read_failed = true;
+                break;
+            }
+        }
+    }
+    finish_line(&mut line, &mut oversized, &mut summary);
+    summary
 }
 
 /// Locate a helper binary.
@@ -280,67 +420,61 @@ pub(crate) fn resolve_helper(package: &str, env_var: &str) -> Result<PathBuf, St
     }
 }
 
-/// Spawn a helper with piped stdin/stdout and a piped, forwarded stderr.
-///
-/// The helper owns the protocol decoders, so its stderr is the only place a
-/// decoder warning, a rejected PDU, or a session-option line appears. A reader
-/// thread is required, not optional: a child that writes more than the pipe
-/// buffer while nobody reads stalls on its next write, which looks exactly like
-/// a hung helper. The thread ends by itself at EOF when the child exits.
+/// Spawn a helper with a continuously drained stderr and bounded metadata.
 pub(crate) fn spawn_helper(path: &Path, log_target: &'static str) -> io::Result<HelperProcess> {
     let mut command = Command::new(path);
+    configure_child(&mut command);
+    spawn_helper_command(command, log_target)
+}
+
+fn spawn_helper_command(
+    mut command: Command,
+    log_target: &'static str,
+) -> io::Result<HelperProcess> {
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configure_child(&mut command);
     let mut child = command.spawn()?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "helper stdin is unavailable"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "helper stdout is unavailable"))?;
-    if let Some(stderr) = child.stderr.take() {
-        let thread_name = format!("nyaterm-{log_target}-stderr");
-        if let Err(error) = std::thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                forward_stderr_lines(io::BufReader::new(stderr), |line| {
-                    // Only helper diagnostics: never terminal contents or
-                    // credentials. Forward at info because the application's
-                    // default filter is info for nyaterm targets, so a debug
-                    // line would be dropped and the helper would look silent.
-                    tracing::info!(helper = log_target, "{line}");
-                });
-            })
-        {
-            tracing::warn!(%error, helper = log_target, "could not start helper stderr reader");
+    let result = (|| {
+        let stdin = child.stdin.take().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::BrokenPipe, "helper stdin is unavailable")
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::BrokenPipe, "helper stdout is unavailable")
+        })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("helper stderr unavailable"))?;
+        let worker = nyaterm_core::runtime::worker::spawn(
+            format!("nyaterm-{log_target}-stderr"),
+            move || collect_stderr(stderr),
+        )?;
+        Ok((
+            stdin,
+            stdout,
+            StderrCapture {
+                worker,
+                helper: log_target,
+            },
+        ))
+    })();
+    let (stdin, stdout, stderr) = match result {
+        Ok(pipes) => pipes,
+        Err(error) => {
+            // Never leave a live child with an undrained stderr pipe.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
         }
-    }
+    };
     Ok(HelperProcess {
         child,
         stdin,
         stdout,
+        stderr,
     })
-}
-
-fn forward_stderr_lines(mut reader: impl io::BufRead, mut log: impl FnMut(&str)) {
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                let line = line.trim_end();
-                if !line.is_empty() {
-                    log(line);
-                }
-            }
-        }
-    }
 }
 
 /// Reap a helper, then join its reader thread.
@@ -387,8 +521,8 @@ mod tests {
     use crate::{PROTOCOL_VERSION, RdpControlMessage, encode_control};
 
     use super::{
-        IpcWriter, RELIABLE_INPUT_LIMIT, WriterInner, WriterState, forward_stderr_lines,
-        resolve_helper,
+        IpcWriter, RELIABLE_INPUT_LIMIT, WriterInner, WriterState, collect_stderr, resolve_helper,
+        session_options,
     };
 
     fn packet(version: u32) -> crate::Packet {
@@ -406,22 +540,110 @@ mod tests {
     }
 
     #[test]
-    fn helper_stderr_lines_are_forwarded_without_blank_or_trailing_cr() {
-        let mut lines = Vec::new();
-        forward_stderr_lines(
-            std::io::Cursor::new(
-                "RDP session options console=1\r\n\r\nVNC helper stopped: boom\nlast line",
-            ),
-            |line| lines.push(line.to_string()),
-        );
-        assert_eq!(
-            lines,
-            [
-                "RDP session options console=1",
-                "VNC helper stopped: boom",
-                "last line"
-            ]
-        );
+    fn stderr_keeps_only_validated_options_and_discards_private_text() {
+        let options = b"RDP session options width=1920 height=1080 depth=32 gfx_requested=1 gfx_effective=0 perf=0x86 nla=1 console=0";
+        let mut input = b"password=secret username=private token=hidden\n\xff\n\r\n".to_vec();
+        input.extend_from_slice(options);
+        input.extend_from_slice(b"\r\n");
+        input.extend_from_slice(options);
+        input.extend_from_slice(b" password=secret\nlast private line");
+        let summary = collect_stderr(input.as_slice());
+        assert_eq!(summary.options, session_options(options));
+        assert_eq!(summary.discarded_lines, 4);
+        assert!(!format!("{summary:?}").contains("secret"));
+        assert!(session_options(b"RDP session options console=1").is_none());
+    }
+
+    #[test]
+    fn stderr_drains_oversized_unterminated_lines_with_bounded_storage() {
+        let input = vec![b'x'; 8 * 1024 * 1024];
+        let summary = collect_stderr(input.as_slice());
+        assert_eq!(summary.oversized_lines, 1);
+        assert_eq!(summary.discarded_lines, 0);
+        assert_eq!(summary.options, None);
+        let mut input = input;
+        input.extend_from_slice(b"\nprivate\n");
+        let summary = collect_stderr(input.as_slice());
+        assert_eq!(summary.oversized_lines, 1);
+        assert_eq!(summary.discarded_lines, 1);
+    }
+
+    #[test]
+    fn stderr_child_fixture() {
+        let Some(mode) = std::env::var_os("NYATERM_TEST_STDERR_MODE") else {
+            return;
+        };
+        use std::io::Write as _;
+        let mut stderr = std::io::stderr().lock();
+        for _ in 0..2048 {
+            stderr.write_all(&[b'x'; 4096]).unwrap();
+        }
+        stderr.write_all(b"\nRDP session options width=1920 height=1080 depth=32 gfx_requested=0 gfx_effective=0 perf=0x86 nla=1 console=0\n").unwrap();
+        stderr.flush().unwrap();
+        drop(stderr);
+        if mode == "crash" {
+            std::process::exit(91);
+        }
+        if mode == "hang" {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+    }
+
+    fn stderr_fixture_command(mode: &str) -> std::process::Command {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "helper_process::tests::stderr_child_fixture",
+                "--nocapture",
+            ])
+            .env("NYATERM_TEST_STDERR_MODE", mode);
+        super::configure_child(&mut command);
+        command
+    }
+
+    #[test]
+    fn stderr_pipe_drains_floods_and_is_joined_after_normal_crash_and_hung_children() {
+        for mode in ["normal", "crash", "hang"] {
+            let super::HelperProcess {
+                child,
+                stdin,
+                stdout,
+                stderr,
+            } = super::spawn_helper_command(stderr_fixture_command(mode), "test").unwrap();
+            drop(stdin);
+            let start = std::time::Instant::now();
+            let mut child = Some(child);
+            if mode != "hang" {
+                let deadline = start + std::time::Duration::from_secs(5);
+                while child.as_mut().unwrap().try_wait().unwrap().is_none()
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+            super::cleanup_child(&mut child, &mut None);
+            assert!(child.is_none());
+            let summary = stderr.worker.join().expect("stderr worker must terminate");
+            // A hung helper can be killed before completing its flood.
+            if mode != "hang" {
+                assert_eq!(summary.oversized_lines, 1);
+                assert!(summary.options.is_some());
+            }
+            assert!(start.elapsed() < std::time::Duration::from_secs(6));
+            drop(stdout);
+        }
+    }
+
+    #[test]
+    fn stderr_worker_creation_failure_reaps_the_child_before_returning() {
+        let _failure = nyaterm_core::runtime::worker::fail_after(0);
+        let start = std::time::Instant::now();
+        let result = super::spawn_helper_command(stderr_fixture_command("hang"), "test");
+        assert!(result.is_err());
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

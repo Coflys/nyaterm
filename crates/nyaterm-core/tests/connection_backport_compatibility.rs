@@ -52,11 +52,10 @@ fn rdp_display_settings_default_survive_round_trip_and_keep_unknown_fields() {
     }))
     .unwrap();
     let encoded = serde_json::to_value(&legacy).unwrap();
-    // Opt-in: a document that predates the switch keeps the bitmap path, which is
-    // the only one the pinned EGFX decoder handles completely (see the field doc).
+    // Legacy documents preserve the bitmap path and previous display behavior.
     assert_eq!(encoded["display"]["graphics_pipeline"], false);
-    assert_eq!(encoded["display"]["display_wallpaper"], false);
-    assert_eq!(encoded["display"]["disable_cursor_blinking"], true);
+    assert_eq!(encoded["display"]["display_wallpaper"], true);
+    assert_eq!(encoded["display"]["disable_cursor_blinking"], false);
     assert_eq!(encoded["display"]["future_rdp_option"], "preserved");
 
     // Values a newer build wrote must come back unchanged, not re-defaulted.

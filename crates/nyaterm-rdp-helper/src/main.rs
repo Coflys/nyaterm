@@ -154,9 +154,6 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                 send_control(&output_tx, RdpControlMessage::Pong { sequence })?;
             }
             RdpControlMessage::ClientHello { version } => {
-                if version != PROTOCOL_VERSION {
-                    anyhow::bail!("RDP IPC protocol version mismatch");
-                }
                 send_control(
                     &output_tx,
                     RdpControlMessage::ServerHello {
@@ -167,6 +164,17 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                         },
                     },
                 )?;
+                if version != PROTOCOL_VERSION {
+                    // Flush the actual version so older applications can explain
+                    // the incompatibility before either side processes Connect.
+                    drop(output_tx);
+                    writer
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("RDP stdout writer panicked"))??;
+                    anyhow::bail!(
+                        "RDP IPC protocol version {version} does not match {PROTOCOL_VERSION}"
+                    );
+                }
                 hello_received = true;
             }
             RdpControlMessage::Connect { session_id, config } => {
@@ -587,12 +595,9 @@ fn build_config(
     );
     let clipboard_factory = clipboard.clone();
     let use_credssp = config.use_nla && config.password.is_some();
-    // The pinned egfx decoder drops RemoteFxProgressive tiles a real Windows host
-    // sends, and a dropped tile is a hole that only fills in with a later update —
-    // the desktop then looks like blocks being pasted in. Until the fork decodes
-    // them, negotiate *without* the channel whatever the stored switch says; the
-    // requested value is still logged so the switch stays diagnosable.
-    let gfx_effective = false;
+    // The fork implements Progressive decoding, but this path has not been
+    // validated end to end. Keep it disabled independently of the saved request.
+    let gfx_effective = graphics_pipeline_effective(config.display.graphics_pipeline);
     // One line per connection, always: it is the only record that this process
     // negotiated a session at all, and it carries no host, account, or password.
     // Options are what separate "the graphics pipeline was never asked for" from
@@ -626,21 +631,16 @@ fn build_config(
         .with_desktop_width(u16::try_from(config.display.width).unwrap_or(1920))
         .with_desktop_height(u16::try_from(config.display.height).unwrap_or(1080))
         .with_color_depth(color_depth)
-        // What the server is allowed to skip. IronRDP's own default already
-        // disables full-window drag and menu animations but says nothing about
-        // wallpaper, themes, or the cursor, so those pixels used to be sent and
-        // painted for nothing.
+        // Missing saved settings preserve IronRDP's previous default (0x86).
         .with_performance_flags(PerformanceFlags::from_bits_truncate(
             performance_flags_bits(&config.display),
         ))
-        // See `gfx_effective` above: the channel stays off until the pinned decoder
-        // can handle every tile the host sends.
+        // See `gfx_effective`: this channel remains unavailable in this release.
         .with_graphics_pipeline(gfx_effective)
         // `none` authentication must not submit a password or enter CredSSP.
         .with_credssp(use_credssp)
         .with_tls(!use_credssp)
-        // mRemoteNG `ConnectToAdministerServer`: a logon request for the console
-        // session. It changes which session the server hands back, nothing else.
+        // Request administrative logon; the server controls session assignment.
         .with_administrative_session(config.administrative_session)
         // An empty codec list is not "no codecs": IronRDP fills in its default set
         // from this, which is RemoteFX. It only reaches the screen when the graphics
@@ -664,6 +664,10 @@ fn build_config(
     }
     let config = builder.build()?;
     Ok((config, clipboard))
+}
+
+fn graphics_pipeline_effective(_requested: bool) -> bool {
+    false
 }
 
 /// [MS-RDPBCGR] 2.2.1.11.1 performance flags, as a raw bit pattern.
@@ -1458,9 +1462,9 @@ mod tests {
     use super::{
         CertificateGate, DesktopOutputState, DesktopPayload, Outbound, classify_error,
         convert_and_send_input, convert_input, desktop_update_payload, forward_full_frame_request,
-        forward_output, install_crypto_provider, output_channel, performance_flags_bits,
-        report_ironrdp_panic, secure_attention_input, send_iron_input, send_reliable_iron_input,
-        validate_active_session_id, validate_input_events,
+        forward_output, graphics_pipeline_effective, install_crypto_provider, output_channel,
+        performance_flags_bits, report_ironrdp_panic, secure_attention_input, send_iron_input,
+        send_reliable_iron_input, validate_active_session_id, validate_input_events,
     };
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
     use ironrdp_input::{Database as InputDatabase, Operation, Scancode};
@@ -1627,12 +1631,48 @@ mod tests {
     }
 
     #[test]
+    fn graphics_pipeline_stays_off_for_both_saved_requests() {
+        assert!(!graphics_pipeline_effective(false));
+        assert!(!graphics_pipeline_effective(true));
+    }
+
+    #[test]
+    fn performance_flags_each_follow_their_own_setting() {
+        let baseline = RdpDisplayConfig::default();
+        let mut variants = Vec::new();
+        let mut display = baseline.clone();
+        display.display_wallpaper = false;
+        variants.push((display, 0x01));
+        let mut display = baseline.clone();
+        display.display_themes = false;
+        variants.push((display, 0x08));
+        let mut display = baseline.clone();
+        display.enable_font_smoothing = false;
+        variants.push((display, 0x80));
+        let mut display = baseline.clone();
+        display.enable_desktop_composition = true;
+        variants.push((display, 0x100));
+        let mut display = baseline.clone();
+        display.disable_full_window_drag = false;
+        variants.push((display, 0x02));
+        let mut display = baseline.clone();
+        display.disable_menu_animations = false;
+        variants.push((display, 0x04));
+        let mut display = baseline.clone();
+        display.disable_cursor_shadow = true;
+        variants.push((display, 0x20));
+        let mut display = baseline;
+        display.disable_cursor_blinking = true;
+        variants.push((display, 0x40));
+        for (display, bit) in variants {
+            assert_eq!(performance_flags_bits(&display) ^ 0x86, bit);
+        }
+    }
+
+    #[test]
     fn performance_flags_follow_the_saved_connection_settings() {
-        // Defaults ask the server to skip everything that costs pixels.
-        assert_eq!(
-            performance_flags_bits(&RdpDisplayConfig::default()),
-            0x1 | 0x2 | 0x4 | 0x8 | 0x20 | 0x40 | 0x80
-        );
+        // Preserve the performance flags sent before these options were added.
+        assert_eq!(performance_flags_bits(&RdpDisplayConfig::default()), 0x86);
 
         let display = RdpDisplayConfig {
             display_wallpaper: true,
