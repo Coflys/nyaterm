@@ -7,9 +7,10 @@ use std::sync::{Arc, mpsc};
 use ironrdp_cliprdr::CliprdrClient;
 use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_cliprdr::pdu::{
-    Capabilities, ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags,
-    ClipboardPdu, ClipboardProtocolVersion, FORMAT_NAME_FILE_LIST, FormatDataRequest, FormatList,
-    FormatListResponse, OwnedFormatDataResponse,
+    Capabilities, ClipboardFormat, ClipboardFormatId, ClipboardFormatName,
+    ClipboardGeneralCapabilityFlags, ClipboardPdu, ClipboardProtocolVersion, FORMAT_NAME_FILE_LIST,
+    FileDescriptor, FormatDataRequest, FormatList, FormatListResponse, OwnedFormatDataResponse,
+    PackedFileList,
 };
 use ironrdp_core::{decode, encode_vec};
 use ironrdp_svc::{SvcMessage, SvcProcessor};
@@ -348,4 +349,50 @@ fn local_file_copy_carries_all_three_timestamps_on_the_wire() {
     );
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_superseded_file_list_reply_is_dropped_and_the_newest_list_requested() {
+    let mut harness = ProtocolHarness::new_with_files();
+    harness.connect_files();
+    harness.bridge.file_available.store(true, Ordering::SeqCst);
+
+    let formats = [ClipboardFormat::new(ClipboardFormatId::new(0xC0FE))
+        .with_name(ClipboardFormatName::FILE_LIST)];
+    let format_list = || ClipboardPdu::FormatList(FormatList::new_unicode(&formats, true).unwrap());
+
+    harness.receive(format_list());
+    let first_request = harness.outgoing();
+    assert_eq!(first_request.len(), 1);
+    assert!(matches!(
+        decode::<ClipboardPdu<'_>>(&first_request[0]).unwrap(),
+        ClipboardPdu::FormatDataRequest(_)
+    ));
+
+    // Copying again before the first reply arrives supersedes the first list, but
+    // only one format data request may be outstanding.
+    harness.receive(format_list());
+    assert!(
+        harness.messages.try_recv().is_err(),
+        "requests must be serialized"
+    );
+
+    // The late reply belongs to the superseded list: drop it, request the new
+    // list, and start no transfer for the old files.
+    let stale = PackedFileList {
+        files: vec![FileDescriptor::new("previous.bin").with_file_size(1)],
+    };
+    harness.receive(ClipboardPdu::FormatDataResponse(
+        OwnedFormatDataResponse::new_file_list(&stale).unwrap(),
+    ));
+    let next_request = harness.outgoing();
+    assert_eq!(next_request.len(), 1);
+    assert!(matches!(
+        decode::<ClipboardPdu<'_>>(&next_request[0]).unwrap(),
+        ClipboardPdu::FormatDataRequest(_)
+    ));
+    assert!(
+        harness.output.try_recv().is_err(),
+        "a superseded file list must not start a transfer"
+    );
 }
