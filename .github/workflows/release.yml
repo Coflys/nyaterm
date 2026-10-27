@@ -72,7 +72,7 @@ jobs:
       source_sha: ${{ steps.source.outputs.sha }}
     permissions:
       actions: read
-      contents: read
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -358,7 +358,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       actions: read
-      contents: read
+      contents: write
     outputs:
       version: ${{ needs.preflight.outputs.version }}
       tag: ${{ needs.preflight.outputs.tag }}
@@ -574,7 +574,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

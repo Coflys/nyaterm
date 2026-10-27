@@ -68,9 +68,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertEqual(gate(blocks["release"], values), publish)
                 self.assertEqual(gate(blocks["r2"], values), publish)
 
-    def test_signing_job_has_no_publication_commands_or_write_token(self) -> None:
+    def test_signing_job_has_no_publication_commands(self) -> None:
         preparation = jobs()["prepare_release"]
-        for forbidden in ("contents: write", "gh release create", "gh release upload", "gh release edit", "aws s3", "git push", "gh workflow run"):
+        for forbidden in ("gh release create", "gh release upload", "gh release edit", "aws s3", "git push", "gh workflow run"):
             self.assertNotIn(forbidden, preparation)
         self.assertIn("needs: [preflight, prepare_release]", jobs()["release"])
 
@@ -93,6 +93,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_draft_notes_are_preserved_until_publish_gate(self) -> None:
         blocks = jobs()
+        # A GITHUB_TOKEN with contents:read cannot see unpublished draft releases.
+        for name in ("preflight", "prepare_release", "r2"):
+            self.assertIn("contents: write", blocks[name])
         self.assertIn("Wait for populated draft release", blocks["preflight"])
         self.assertIn("gh release view", blocks["prepare_release"])
         self.assertIn("--json body --jq '.body'", blocks["prepare_release"])
