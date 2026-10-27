@@ -195,6 +195,7 @@ impl NyaTermApp {
         cx.observe_window_bounds(window, |this, window, cx| {
             let browser_was_visible = this.transfer_browser_is_visible();
             this.refresh_window_render_inputs(window, cx);
+            this.constrain_session_info_to_viewport();
             this.transfer_browser_visibility_changed(browser_was_visible, cx);
         })
         .detach();

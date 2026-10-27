@@ -15,27 +15,36 @@ use super::TAB_PRESET_COLORS;
 const SESSION_INFO_DIALOG_WIDTH: f32 = 560.;
 const SESSION_INFO_VIEWPORT_MARGIN: f32 = 8.;
 
-/// Keep the whole dialog inside the viewport while its header is dragged.
-///
-/// The dialog height comes from prepaint because it is content-sized; assuming
-/// a fixed height lets a tall report be dragged off-screen. Before the first
-/// measurement, fall back to the modal's own maximum height, which is the
-/// conservative choice.
+fn session_info_dialog_width(viewport_width: f32) -> f32 {
+    (viewport_width - 2. * SESSION_INFO_VIEWPORT_MARGIN).clamp(0., SESSION_INFO_DIALOG_WIDTH)
+}
+
+/// Constrain the measured dialog; before prepaint use its maximum height.
 fn session_info_drag_limits(viewport: (f32, f32), dialog_height: f32) -> (f32, f32) {
     let (viewport_width, viewport_height) = viewport;
-    let fallback_height = (viewport_height - 32.).max(240.);
+    let fallback_height = (viewport_height - 32.).max(0.);
     let dialog_height = if dialog_height > 0. {
         dialog_height
     } else {
         fallback_height
     };
     (
-        ((viewport_width - SESSION_INFO_DIALOG_WIDTH) / 2. - SESSION_INFO_VIEWPORT_MARGIN).max(0.),
+        ((viewport_width - session_info_dialog_width(viewport_width)) / 2.
+            - SESSION_INFO_VIEWPORT_MARGIN)
+            .max(0.),
         ((viewport_height - dialog_height) / 2. - SESSION_INFO_VIEWPORT_MARGIN).max(0.),
     )
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn constrain_session_info_to_viewport(&mut self) {
+        let limits = session_info_drag_limits(
+            self.shell.viewport_size(),
+            self.session.dialog_session_info_dialog_height(),
+        );
+        self.session.dialog_constrain_session_info(limits);
+    }
+
     pub(in crate::features) fn rename_session_dialog_content(
         &mut self,
         cx: &mut Context<Self>,
@@ -232,23 +241,31 @@ impl NyaTermApp {
             }
         }
 
-        let (_, viewport_height) = self.shell.viewport_size();
+        let (viewport_width, viewport_height) = self.shell.viewport_size();
+        self.constrain_session_info_to_viewport();
         let offset = self.session.dialog_session_info_offset();
-        let dialog_max_height = (viewport_height - 32.).max(240.);
+        let dialog_max_height = (viewport_height - 32.).max(0.);
         // Header, footer, the rows' top margin and the dialog's padding/border
         // stay outside the scrolling body. Reserve their fixed height so the
         // dialog can keep a content-driven height and still stay in the viewport.
-        let body_max_height = (dialog_max_height - 160.).max(120.);
+        let body_max_height = (dialog_max_height - 160.).max(0.);
         let scroll = self.session.dialog_session_info_scroll();
 
         div()
             .on_children_prepainted(cx.processor(
-                |this, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, _| {
+                |this, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, cx| {
                     let Some(dialog) = bounds.first() else {
                         return;
                     };
                     this.session
                         .dialog_set_session_info_dialog_height(f32::from(dialog.size.height));
+                    let previous = this.session.dialog_session_info_offset();
+                    this.constrain_session_info_to_viewport();
+                    if this.session.dialog_session_info_offset() != previous {
+                        // A narrower window can wrap the header and change its
+                        // measured height. Repaint only when that moves the dialog.
+                        cx.notify();
+                    }
                 },
             ))
             .id(SharedString::from("session-info-overlay"))
@@ -262,10 +279,6 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .track_focus(self.session.dialog_session_info_focus())
-            .on_click(cx.listener(|this, _, window, cx| {
-                window.focus(this.session.dialog_session_info_focus(), cx);
-                cx.notify();
-            }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 cx.stop_propagation();
                 if event.keystroke.key == "escape" {
@@ -303,7 +316,8 @@ impl NyaTermApp {
                 div()
                     .id(SharedString::from("session-info-dialog"))
                     .debug_selector(|| "session-info-dialog".to_string())
-                    .w(px(SESSION_INFO_DIALOG_WIDTH))
+                    .w(px(session_info_dialog_width(viewport_width)))
+                    .flex_none()
                     .max_h(px(dialog_max_height))
                     .relative()
                     .left(px(offset.0))
@@ -358,6 +372,21 @@ impl NyaTermApp {
                                             .text_color(rgb(palette.text_muted))
                                             .child(truncate_preview(&title, 56)),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child(small_button(
+                                        palette,
+                                        "session-info-header-close",
+                                        t!("common.close"),
+                                        cx.listener(|this, _, _, cx| {
+                                            this.close_active_session_info(cx)
+                                        }),
+                                    )),
                             ),
                     )
                     .child(
@@ -783,5 +812,51 @@ mod tests {
                 .is_some_and(|text| text.contains("10.168.10.103:3389")),
             "selecting the endpoint and pressing ctrl-c should copy it, got {copied:?}"
         );
+    }
+
+    #[test]
+    fn session_info_fits_a_narrow_viewport_and_reclamps_after_resize() {
+        let root = TestConfigDir::new("nyaterm-session-info-narrow-resize");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = rdp_session_app(&mut cx, root.path());
+        let vcx = host_app(&mut cx, app.clone(), 560.);
+        draw(vcx);
+        open_session_info(vcx, &app);
+        let header = vcx.debug_bounds("session-info-header").unwrap();
+        vcx.simulate_mouse_down(header.center(), MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_move(
+            gpui::point(px(750.), px(550.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        vcx.simulate_mouse_up(
+            gpui::point(px(750.), px(550.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(vcx);
+        for (width, height) in [(400., 300.), (320., 220.), (760., 560.)] {
+            vcx.simulate_resize(size(px(width), px(height)));
+            draw(vcx);
+            let dialog = vcx.debug_bounds("session-info-dialog").unwrap();
+            let header = vcx.debug_bounds("session-info-header").unwrap();
+            assert!(f32::from(dialog.left()) >= 0.);
+            assert!(f32::from(dialog.right()) <= width + 1., "{dialog:?}");
+            assert!(f32::from(dialog.top()) >= 0.);
+            assert!(f32::from(dialog.bottom()) <= height + 1., "{dialog:?}");
+            assert!(header.top() >= dialog.top() && header.bottom() <= dialog.bottom());
+        }
+        vcx.update(|_, cx| app.update(cx, |app, cx| app.close_active_session_info(cx)));
+        draw(vcx);
+        open_session_info(vcx, &app);
+        vcx.update(|_, cx| {
+            assert_eq!(app.read(cx).session.dialog_session_info_offset(), (0., 0.));
+            assert!(!app.read(cx).session.dialog_session_info_drag_active());
+            assert_eq!(
+                app.read(cx).session.dialog_session_info_scroll().offset().y,
+                px(0.)
+            );
+        });
     }
 }

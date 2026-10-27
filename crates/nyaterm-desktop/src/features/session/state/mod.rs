@@ -824,6 +824,18 @@ impl SessionFeatureState {
         self.dialogs.drag_session_info(pointer, limits)
     }
 
+    pub(in crate::features) fn dialog_constrain_session_info(&mut self, limits: (f32, f32)) {
+        let offset = &mut self.dialogs.session_info_offset;
+        let next = (
+            offset.0.clamp(-limits.0, limits.0),
+            offset.1.clamp(-limits.1, limits.1),
+        );
+        if *offset != next {
+            *offset = next;
+            self.dialogs.session_info_drag = None;
+        }
+    }
+
     pub(in crate::features) fn dialog_end_session_info_drag(&mut self) {
         self.dialogs.end_session_info_drag();
     }
