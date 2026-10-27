@@ -5460,8 +5460,13 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
     );
     store.save_settings_value(&raw).expect("seed settings");
 
-    let loaded = store.load_ai_settings().expect("load settings");
+    let mut loaded = store.load_ai_settings().expect("load settings");
     assert_eq!(loaded.schema_version, 6);
+    assert_eq!(
+        loaded.external_mcp.terminal_display_mode,
+        nyaterm_core::McpTerminalDisplayMode::Inline
+    );
+    loaded.external_mcp.terminal_display_mode = nyaterm_core::McpTerminalDisplayMode::Silent;
     assert_eq!(
         loaded.provider_profiles[0].base_url.as_deref(),
         Some("http://localhost:11434/")
@@ -5490,8 +5495,14 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
         serde_json::json!([1, 2, 3])
     );
     assert_eq!(ai["external_mcp"]["future_mcp_field"], "preserved");
+    assert_eq!(ai["external_mcp"]["terminal_display_mode"], "silent");
     assert!(ai["external_mcp"].get("server_mode").is_none());
     assert!(ai["external_mcp"].get("idle_timeout_minutes").is_none());
+    let reloaded = store.load_ai_settings().expect("reload settings");
+    assert_eq!(
+        reloaded.external_mcp.terminal_display_mode,
+        nyaterm_core::McpTerminalDisplayMode::Silent
+    );
 
     std::fs::remove_dir_all(dir).ok();
 }

@@ -116,6 +116,14 @@ pub enum ExternalMcpSessionScope {
     AllSessions,
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTerminalDisplayMode {
+    #[default]
+    Inline,
+    Silent,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalMcpSettings {
     #[serde(default)]
@@ -124,6 +132,8 @@ pub struct ExternalMcpSettings {
     pub permission_mode: AiPermissionMode,
     #[serde(default)]
     pub session_scope: ExternalMcpSessionScope,
+    #[serde(default)]
+    pub terminal_display_mode: McpTerminalDisplayMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
