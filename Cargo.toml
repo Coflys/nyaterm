@@ -70,7 +70,7 @@ gpui_platform = { git = "https://github.com/nyakang/zed", rev = "c054331114f9abd
 hayro = { version = "=0.7.1", features = ["embed-fonts"] }
 hex = "0.4"
 hmac = "0.13"
-ironrdp-input = "0.7.0"
+ironrdp-input = "0.8.0"
 jsonc-parser = { version = "0.34", features = ["serde"] }
 keyring = { version = "3.6", features = [
     "apple-native",
@@ -171,8 +171,8 @@ debug = "full"
 
 [patch.crates-io]
 alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "3b60b2ed9544cad2cbba9e92fa0785e885cb4af1" }
-ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
+ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
 sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "d2b04e63ca9a72f2a70b456186e2472b27f0d45d" }
 # The published ironrdp-client and ironrdp-connector packages declare their
 # sibling crates as registry dependencies, but in the IronRDP repository those
@@ -182,13 +182,13 @@ sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "d2b04e63ca9a72f2a70b
 # are identical on both sides. `ironrdp-tls` is here for the same reason:
 # `nyaterm-rdp-helper` names its certificate-validation types directly, because
 # ironrdp-client does not re-export them.
-ironrdp-cliprdr = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-core = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-error = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
-ironrdp-tls = { git = "https://github.com/nyakang/IronRDP", rev = "167abe383bab79e5c9017b4a8932930341a39ed9" }
+ironrdp-cliprdr = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-core = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-error = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
+ironrdp-tls = { git = "https://github.com/nyakang/IronRDP", rev = "b10cd243bc9442a07fcd776568a5fdaf1c64492f" }
 
 # gpui-kit takes zed-reqwest from git while this workspace uses the
 # published crate; without this both end up in the graph.

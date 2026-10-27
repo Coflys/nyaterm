@@ -275,7 +275,7 @@ fn remote_copy_is_delivered_over_ipc_and_does_not_disable_later_local_copies() {
 }
 
 #[test]
-fn local_file_copy_carries_all_three_timestamps_on_the_wire() {
+fn local_file_copy_carries_write_time_and_zeroes_reserved_timestamp_slots() {
     let root = std::env::temp_dir().join(format!("nyaterm-clip-wire-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("sample.bin");
@@ -331,18 +331,12 @@ fn local_file_copy_carries_all_three_timestamps_on_the_wire() {
     const FD_CREATETIME: u32 = 0x8;
     const FD_ACCESSTIME: u32 = 0x10;
     const FD_WRITESTIME: u32 = 0x20;
+    // MS-RDPECLIP 2.2.5.2.3.1 defines lastWriteTime and requires reserved2 = 0.
     assert_eq!(
         flags & (FD_CREATETIME | FD_ACCESSTIME | FD_WRITESTIME),
-        FD_CREATETIME | FD_ACCESSTIME | FD_WRITESTIME
+        FD_WRITESTIME
     );
-    assert_eq!(
-        u64::from_le_bytes(descriptor[40..48].try_into().unwrap()),
-        to_filetime(metadata.created().ok()).unwrap()
-    );
-    assert_eq!(
-        u64::from_le_bytes(descriptor[48..56].try_into().unwrap()),
-        to_filetime(metadata.accessed().ok()).unwrap()
-    );
+    assert_eq!(&descriptor[40..56], &[0; 16]);
     assert_eq!(
         u64::from_le_bytes(descriptor[56..64].try_into().unwrap()),
         to_filetime(metadata.modified().ok()).unwrap()

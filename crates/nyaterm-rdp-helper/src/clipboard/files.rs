@@ -535,12 +535,8 @@ fn append_local_entry(
     if metadata.is_file() {
         descriptor = descriptor.with_file_size(metadata.len());
     }
-    if let Some(time) = to_filetime(metadata.created().ok()) {
-        descriptor = descriptor.with_creation_time(time);
-    }
-    if let Some(time) = to_filetime(metadata.accessed().ok()) {
-        descriptor = descriptor.with_last_access_time(time);
-    }
+    // MS-RDPECLIP 2.2.5.2.3.1 reserves the creation/access slots and requires
+    // zeroes on the wire; only lastWriteTime is defined for this descriptor.
     if let Some(time) = to_filetime(metadata.modified().ok()) {
         descriptor = descriptor.with_last_write_time(time);
     }
@@ -769,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn local_snapshot_descriptors_carry_file_times() {
+    fn local_snapshot_descriptors_carry_last_write_time() {
         let root = std::env::temp_dir().join(format!("nyaterm-clip-time-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("timed.bin");
@@ -782,20 +778,7 @@ mod tests {
             descriptor.last_write_time,
             to_filetime(metadata.modified().ok())
         );
-        assert_eq!(
-            descriptor.last_access_time,
-            to_filetime(metadata.accessed().ok())
-        );
-        assert_eq!(
-            descriptor.creation_time,
-            to_filetime(metadata.created().ok())
-        );
         assert!(descriptor.last_write_time.is_some());
-        #[cfg(windows)]
-        {
-            assert!(descriptor.creation_time.is_some());
-            assert!(descriptor.last_access_time.is_some());
-        }
         fs::remove_dir_all(root).unwrap();
     }
 
