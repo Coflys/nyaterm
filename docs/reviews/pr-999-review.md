@@ -2,6 +2,33 @@
 
 审查日期：2026-10-27。本报告记录独立 worktree 中的修复与验证结果；后续提交和推送状态以 PR 历史为准。未执行 PR 评论或合并。
 
+## CI 后续修复：macOS 复制与纯文本超时诊断
+
+本轮从 `ba16569f3d061862580517bbdac3d5abfb9588d9` 继续，main 仍为 `a2479c898b36d3e5fd22f452991d8241ec8e8c79`。下面两节保留前轮结果；本节为最新结果。
+
+- 读取 Rust CI run `40464944074` 的 macOS job `122058295922` 原始日志，失败为 `session_info_values_can_be_selected_and_copied`，desktop 汇总 2218 passed / 1 failed / 8 ignored。核对固定 gpui-kit `5aca244` 的 `crates/base/src/text/state.rs:49`，复制绑定在 macOS 为 `cmd-c`，其他平台为 `ctrl-c`。测试改用对应平台的按键，保留真实鼠标拖选、事件派发和剪贴板内容断言，没有跳过测试、直接调用复制 action 或修改生产快捷键。位置：[session_overlays.rs](../../crates/nyaterm-desktop/src/features/panels/session_overlays.rs)。
+- 远端 FormatData 超时检查移出仅文件模式启动的 watcher，由 Helper 控制循环持有 750 ms Tokio interval，通过 `receive_control` 同时等待控制消息和检查超时。使用 Skip 跳过积压 tick；无需增加后台线程，文件剪贴板策略继续由原 watcher 执行。位置：[main.rs](../../crates/nyaterm-rdp-helper/src/main.rs)、[clipboard.rs](../../crates/nyaterm-rdp-helper/src/clipboard.rs)。
+- 新编码协议回归在关闭文件功能的情况下发出并排队文本请求，实际等待主控制接收路径：旧逻辑在 8 秒等待后未报告超时，测试失败；修复后约 5.25 秒收到非致命 typed Clipboard 错误，仍能接收 Ping，超时不发送新请求，迟到旧文本被丢弃，随后最新文本正常发布。日志：`target/pr999-text-timeout-red.log`（预期失败）、`pr999-text-timeout-targeted.log`（165 项通过）。位置：[protocol_tests.rs](../../crates/nyaterm-rdp-helper/src/clipboard/protocol_tests.rs)。
+
+修复提交：`1f0f5b007`（纯文本超时诊断）、`06cd002ec`（平台复制快捷键）。
+
+本轮不改变 IPC 版本、持久化格式、依赖 revision 或认证/证书策略。超时仅补齐诊断；若远端永久不应答，仍需重连，不能绕过无编号响应的配对约束。RDP/VNC 服务端与 Windows 系统剪贴板实机验证尚无可用环境。
+
+已核对上一轮 `ba16569f3` 的 Windows CI job `122058296032` 最终为 success；Linux、Lint、Plugin SDK、Release helpers、Workflow syntax 和 Docs 也通过，Rust gate 的阻断来自上述 macOS 复制测试。
+
+本轮 Windows 相关验证：RDP/VNC/IPC 165 项通过；`cargo test -p nyaterm-desktop --lib --locked session_info_` 的 5 项通过；格式与架构检查通过。全量验证如下：
+
+| 实际命令 | 结果 | target 下日志 |
+| --- | --- | --- |
+| `cargo fmt --all -- --check` | exit 0 | pr999-ci-followup-fmt.log |
+| `python scripts/ci/check_architecture.py` | exit 0 | pr999-ci-followup-architecture.log |
+| `cargo check --workspace --locked` | exit 0 | pr999-ci-followup-check.log |
+| `cargo test --workspace --locked` | exit 0；4397 passed，0 failed，30 ignored，46 suites | pr999-ci-followup-tests.log |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 | pr999-ci-followup-clippy.log |
+| `cargo build -p nyaterm-rdp-helper -p nyaterm-vnc-helper --locked` | exit 0 | pr999-ci-followup-helpers.log |
+
+退出码与统计汇总为 `target/pr999-ci-followup-validation.json`。本轮 GUI 选择复制验证来自 GPUI 测试，未重复实际应用启动冒烟。新 HEAD 推送后重新运行跨平台 CI；实时结果以 PR 检查页为准，不将旧 HEAD 的成功视为新 HEAD 的验证结果。合并建议仍为等待新 macOS/Windows/Linux CI，并补做真实服务端验证，本轮不合并 PR。
+
 ## 后续审查：作者新增剪贴板改动与 main 集成
 
 本节为 2026-10-27 对当前 PR 的追加审查。下文“首次审查”记录保留为历史证据；其中旧依赖版本、4323 项通过及 GUI 冒烟结果不代表本轮重新验证。
@@ -36,7 +63,7 @@ CI 的架构检查还发现会话信息窗口缺少 raw-scroll 允许项。该�
 
 每条命令的退出码另存同名 `.exit`；workspace 数量见 `pr999-current-test-summary.json`。有意失败的修复前回归测试见 `pr999-current-timeout-red.log`；修复后的同项测试及新增编码协议回归均已通过。代理测试在本轮 workspace 中通过，尚未取得本修复的 macOS CI 结果。
 
-额外限制：若对端永远不回应未完成的 FormatData 请求，后续取值会继续等待，需要重连恢复；不能在同一无编号通道上直接重试并声称配对安全。文本请求与文件列表共用此串行状态；现有文件 watcher 负责超时提示，关闭文件剪贴板时不启动该 watcher。
+额外限制：若对端永远不回应未完成的 FormatData 请求，后续取值会继续等待，需要重连恢复；不能在同一无编号通道上直接重试并声称配对安全。文本请求与文件列表共用此串行状态；现有文件 watcher 负责超时提示，关闭文件剪贴板时不启动该 watcher（本节记录的诊断缺口已由上方最新一轮修复）。
 
 本轮没有可用真实 RDP/VNC 服务端，也未执行 macOS/Linux 实机、系统剪贴板交互或硬件/WARP 切换。首次审查的 GUI 冒烟未在本轮重复；不得将协议模拟测试等同真实服务端验证。
 
