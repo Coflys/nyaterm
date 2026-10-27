@@ -296,6 +296,8 @@ pub(in crate::features) struct AiSettingsPresentation {
     pub(in crate::features) config: Arc<AiSettings>,
     pub(in crate::features) manual_model_drafts: Arc<HashMap<String, String>>,
     pub(in crate::features) credential_draft_key_ids: Arc<HashSet<String>>,
+    pub(in crate::features) header_errors:
+        Arc<HashMap<(String, String), nyaterm_core::ai::provider_settings::CustomHeaderError>>,
     pub(in crate::features) agent_management: AgentManagementView,
 }
 
@@ -306,6 +308,7 @@ impl AiSettingsPresentation {
             config: Arc::new(AiSettings::default()),
             manual_model_drafts: Arc::new(HashMap::new()),
             credential_draft_key_ids: Arc::new(HashSet::new()),
+            header_errors: Arc::new(HashMap::new()),
             agent_management: AgentManagementView::default(),
         }
     }
