@@ -3286,14 +3286,20 @@ fn dropping_telnet_manager_interrupts_idle_writer() {
 
 #[test]
 fn telnet_slow_write_starts_a_new_idle_interval_instead_of_catching_up() {
-    struct FirstWriteGate {
-        started: mpsc::Sender<()>,
+    struct ApplicationWriteGate {
+        started: mpsc::Sender<Instant>,
         release: Option<mpsc::Receiver<()>>,
     }
-    impl Write for FirstWriteGate {
+    impl Write for ApplicationWriteGate {
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            self.started.send(()).unwrap();
-            if let Some(release) = self.release.take() {
+            // A busy runner may let the writer send an idle NOP before the test
+            // queues its input. Gate the application payload, not the first NOP.
+            if data == b"x" || self.release.is_none() {
+                self.started.send(Instant::now()).unwrap();
+            }
+            if data == b"x"
+                && let Some(release) = self.release.take()
+            {
                 release.recv().unwrap();
             }
             Ok(data.len())
@@ -3306,7 +3312,7 @@ fn telnet_slow_write_starts_a_new_idle_interval_instead_of_catching_up() {
     let (release_tx, release_rx) = mpsc::channel();
     let interval = Duration::from_millis(100);
     let mut writer = test_telnet_writer(
-        FirstWriteGate {
+        ApplicationWriteGate {
             started: started_tx,
             release: Some(release_rx),
         },
@@ -3320,12 +3326,16 @@ fn telnet_slow_write_starts_a_new_idle_interval_instead_of_catching_up() {
         started_rx.recv_timeout(interval * 2),
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
+    let released_at = Instant::now();
     release_tx.send(()).unwrap();
-    assert!(matches!(
-        started_rx.recv_timeout(Duration::from_millis(50)),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    ));
-    started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // The observing test thread may resume after a complete idle interval on a
+    // busy runner. Measure when the writer sends, rather than when we receive.
+    std::thread::sleep(interval * 2);
+    let next_write_at = started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(
+        next_write_at.duration_since(released_at) >= interval,
+        "a slow send must start a full idle interval before the next NOP"
+    );
     writer.close();
 }
 

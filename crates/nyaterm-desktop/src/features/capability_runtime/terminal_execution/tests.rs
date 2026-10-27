@@ -337,6 +337,7 @@ fn automatic_execution_records_logical_commands_and_streamed_output_without_chan
 
 #[cfg(windows)]
 #[gpui::test]
+#[ignore = "requires Windows ConPTY and PowerShell; explicitly run by Windows CI in isolation"]
 fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_terminal(
     cx: &mut gpui::TestAppContext,
 ) {

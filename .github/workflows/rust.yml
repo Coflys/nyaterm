@@ -96,6 +96,15 @@ jobs:
           }
           cargo test -p nyaterm-transport --lib local_shell_integration::lifecycle_tests --locked -- --ignored --test-threads=1
 
+      # Cold PowerShell startup must not compete with thousands of parallel UI
+      # and worker tests. Keep real ConPTY execution covered in its own step.
+      - name: Test Windows shared terminal execution
+        if: runner.os == 'Windows'
+        run: >-
+          cargo test -p nyaterm-desktop --lib
+          shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_terminal
+          --locked -- --ignored --test-threads=1
+
       # --no-fail-fast so one crate's failure stops masking every crate after it.
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
