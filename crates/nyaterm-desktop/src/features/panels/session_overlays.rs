@@ -1,16 +1,39 @@
 use rust_i18n::t;
 
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _,
-    div, prelude::*, px, rgb, rgba,
+    AnyElement, Context, FontWeight, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement as _, SharedString, Styled as _, div, prelude::*, px, rgb, rgba,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::NyaNumberInputOptions;
+use nyaterm_ui::{NyaNumberInputOptions, NyaScrollable as _, NyaSelectableText};
 
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
-use crate::widgets::{session_info_row, small_button};
+use crate::widgets::small_button;
 
 use super::TAB_PRESET_COLORS;
+
+const SESSION_INFO_DIALOG_WIDTH: f32 = 560.;
+const SESSION_INFO_VIEWPORT_MARGIN: f32 = 8.;
+
+/// Keep the whole dialog inside the viewport while its header is dragged.
+///
+/// The dialog height comes from prepaint because it is content-sized; assuming
+/// a fixed height lets a tall report be dragged off-screen. Before the first
+/// measurement, fall back to the modal's own maximum height, which is the
+/// conservative choice.
+fn session_info_drag_limits(viewport: (f32, f32), dialog_height: f32) -> (f32, f32) {
+    let (viewport_width, viewport_height) = viewport;
+    let fallback_height = (viewport_height - 32.).max(240.);
+    let dialog_height = if dialog_height > 0. {
+        dialog_height
+    } else {
+        fallback_height
+    };
+    (
+        ((viewport_width - SESSION_INFO_DIALOG_WIDTH) / 2. - SESSION_INFO_VIEWPORT_MARGIN).max(0.),
+        ((viewport_height - dialog_height) / 2. - SESSION_INFO_VIEWPORT_MARGIN).max(0.),
+    )
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn rename_session_dialog_content(
@@ -144,7 +167,13 @@ impl NyaTermApp {
             .find(|(label, _)| *label == t!("sessionInfo.name"))
             .map(|(_, value)| value.clone())
             .unwrap_or_else(|| t!("tabCtx.sessionInfo").to_string());
-        let mut rows = div().mt_4().flex().flex_col().gap_2();
+        let mut rows = div()
+            .id(SharedString::from("session-info-rows"))
+            .debug_selector(|| "session-info-rows".to_string())
+            .mt_3()
+            .flex()
+            .flex_col()
+            .gap_1();
         if details.is_empty() {
             rows = rows.child(
                 div()
@@ -158,12 +187,70 @@ impl NyaTermApp {
                     .child(t!("tabCtx.noSessionDetails")),
             );
         } else {
-            for (label, value) in details {
-                rows = rows.child(session_info_row(palette, label, value));
+            for (index, (label, value)) in details.iter().enumerate() {
+                if value.is_empty() {
+                    // Empty value marks a section header (RDP connection report), so
+                    // the dialog reads like the Windows "connection quality" sheet.
+                    rows = rows.child(
+                        div()
+                            .mt_2()
+                            .text_sm()
+                            .font_weight(FontWeight(700.))
+                            .text_color(rgb(palette.text))
+                            .child(NyaSelectableText::new(
+                                SharedString::from(format!("session-info-section-{index}")),
+                                label.to_string(),
+                            )),
+                    );
+                } else {
+                    // Selectable text rather than painted rows: the values are what
+                    // users copy, and window selection can span all of them at once.
+                    rows = rows.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .text_xs()
+                            .debug_selector(move || format!("session-info-row-{index}"))
+                            .child(div().flex_none().text_color(rgb(palette.text_muted)).child(
+                                NyaSelectableText::new(
+                                    SharedString::from(format!("session-info-label-{index}")),
+                                    label.to_string(),
+                                ),
+                            ))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .text_color(rgb(palette.text))
+                                    .child(NyaSelectableText::new(
+                                        SharedString::from(format!("session-info-value-{index}")),
+                                        value.clone(),
+                                    )),
+                            ),
+                    );
+                }
             }
         }
 
+        let (_, viewport_height) = self.shell.viewport_size();
+        let offset = self.session.dialog_session_info_offset();
+        let dialog_max_height = (viewport_height - 32.).max(240.);
+        // Header, footer, the rows' top margin and the dialog's padding/border
+        // stay outside the scrolling body. Reserve their fixed height so the
+        // dialog can keep a content-driven height and still stay in the viewport.
+        let body_max_height = (dialog_max_height - 160.).max(120.);
+        let scroll = self.session.dialog_session_info_scroll();
+
         div()
+            .on_children_prepainted(cx.processor(
+                |this, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, _| {
+                    let Some(dialog) = bounds.first() else {
+                        return;
+                    };
+                    this.session
+                        .dialog_set_session_info_dialog_height(f32::from(dialog.size.height));
+                },
+            ))
             .id(SharedString::from("session-info-overlay"))
             .absolute()
             .top_0()
@@ -185,21 +272,67 @@ impl NyaTermApp {
                     this.close_active_session_info(cx);
                 }
             }))
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if !this.session.dialog_session_info_drag_active() {
+                    return;
+                }
+                if !event.dragging() {
+                    this.session.dialog_end_session_info_drag();
+                    cx.notify();
+                    return;
+                }
+                let pointer = (f32::from(event.position.x), f32::from(event.position.y));
+                let limits = session_info_drag_limits(
+                    this.shell.viewport_size(),
+                    this.session.dialog_session_info_dialog_height(),
+                );
+                if this.session.dialog_drag_session_info(pointer, limits) {
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.session.dialog_session_info_drag_active() {
+                        this.session.dialog_end_session_info_drag();
+                        cx.notify();
+                    }
+                }),
+            )
             .child(
                 div()
                     .id(SharedString::from("session-info-dialog"))
-                    .w(px(520.))
+                    .debug_selector(|| "session-info-dialog".to_string())
+                    .w(px(SESSION_INFO_DIALOG_WIDTH))
+                    .max_h(px(dialog_max_height))
+                    .relative()
+                    .left(px(offset.0))
+                    .top(px(offset.1))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(self.shell_surface_color(palette.bg))
                     .shadow_lg()
+                    .overflow_hidden()
                     .p_4()
                     .child(
                         div()
+                            .id(SharedString::from("session-info-header"))
+                            .debug_selector(|| "session-info-header".to_string())
                             .flex()
                             .items_start()
                             .gap_3()
+                            .cursor(gpui::CursorStyle::OpenHand)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                    this.session.dialog_begin_session_info_drag((
+                                        f32::from(event.position.x),
+                                        f32::from(event.position.y),
+                                    ));
+                                    cx.stop_propagation();
+                                }),
+                            )
                             .child(
                                 div()
                                     .size(px(10.))
@@ -227,9 +360,29 @@ impl NyaTermApp {
                                     ),
                             ),
                     )
-                    .child(rows)
                     .child(
                         div()
+                            .id(SharedString::from("session-info-body-frame"))
+                            .debug_selector(|| "session-info-body-frame".to_string())
+                            .relative()
+                            .max_h(px(body_max_height))
+                            .child(
+                                div()
+                                    .id(SharedString::from("session-info-body"))
+                                    .max_h(px(body_max_height))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&scroll)
+                                    .child(rows),
+                            )
+                            // A caller-owned handle instead of `overflow_y_scrollbar`:
+                            // that wrapper is height:100%, which a content-sized dialog
+                            // cannot resolve against without inflating itself.
+                            .vertical_scrollbar(&scroll),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from("session-info-footer"))
+                            .debug_selector(|| "session-info-footer".to_string())
                             .mt_4()
                             .flex()
                             .items_center()
@@ -336,5 +489,299 @@ impl NyaTermApp {
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use gpui::{
+        AppContext as _, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, px,
+        size,
+    };
+    use nyaterm_remote_desktop::RdpSessionConfig;
+
+    use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+    fn rdp_session_app(cx: &mut TestAppContext, root: &Path) -> Entity<NyaTermApp> {
+        let app = app_with_visible_local_session(cx, root, "remote");
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.session.metadata_mut("remote").unwrap().launch_config =
+                SessionLaunchConfig::Rdp(RdpSessionConfig {
+                    relay: None,
+                    name: "103".into(),
+                    host: "10.168.10.103".into(),
+                    port: 3389,
+                    username: String::new(),
+                    domain: String::new(),
+                    password: None,
+                    use_nla: true,
+                    certificate_policy: Default::default(),
+                    administrative_session: false,
+                    display: Default::default(),
+                    clipboard: Default::default(),
+                    reconnect: Default::default(),
+                });
+        });
+        app
+    }
+
+    fn host_app(
+        cx: &mut TestAppContext,
+        app: Entity<NyaTermApp>,
+        window_height: f32,
+    ) -> &mut VisualTestContext {
+        let window = cx.open_window(size(px(760.), px(window_height)), move |window, cx| {
+            nyaterm_ui::nya_root(app, window, cx)
+        });
+        let _ = window.root(cx).expect("test window root");
+        VisualTestContext::from_window(*std::ops::Deref::deref(&window), cx).into_mut()
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+    }
+
+    fn open_session_info(cx: &mut VisualTestContext, app: &Entity<NyaTermApp>) {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| app.open_active_session_info(window, cx));
+        });
+        draw(cx);
+    }
+
+    #[test]
+    fn drag_limits_follow_the_measured_dialog_height() {
+        let (horizontal, vertical) = super::session_info_drag_limits((760., 560.), 480.);
+        assert!((horizontal - 92.).abs() < 0.01);
+        assert!((vertical - 32.).abs() < 0.01);
+
+        let (_, short_dialog) = super::session_info_drag_limits((760., 560.), 160.);
+        assert!((short_dialog - 192.).abs() < 0.01);
+
+        // Before the first prepaint there is no measured height; fall back to
+        // the dialog's maximum height so the first drag cannot escape.
+        let (_, unmeasured) = super::session_info_drag_limits((760., 560.), 0.);
+        assert!((unmeasured - 8.).abs() < 0.01);
+    }
+
+    #[test]
+    fn session_info_dialog_stays_inside_the_viewport_when_dragged_far() {
+        let root = TestConfigDir::new("nyaterm-session-info-drag-bounds");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = TestAppCleanup::new(&cx);
+        let app = rdp_session_app(&mut cx, root.path());
+        let vcx = host_app(&mut cx, app.clone(), 360.);
+        draw(vcx);
+
+        open_session_info(vcx, &app);
+        let header = vcx.debug_bounds("session-info-header").expect("header");
+        let start = header.center();
+
+        vcx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        // A tall report used to get a limit based on a fixed 160px height, so
+        // dragging to the bottom edge pushed the footer outside the window.
+        vcx.simulate_mouse_move(
+            gpui::point(start.x, px(359.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(vcx);
+        let dragged_down = vcx
+            .debug_bounds("session-info-dialog")
+            .expect("dragged dialog");
+        assert!(
+            f32::from(dragged_down.top()) >= 0.,
+            "dialog escaped the top edge: {dragged_down:?}"
+        );
+        assert!(
+            f32::from(dragged_down.bottom()) <= 360. + 1.,
+            "dialog escaped the bottom edge: {dragged_down:?}"
+        );
+
+        // And the header must remain reachable after dragging back up.
+        vcx.simulate_mouse_move(
+            gpui::point(start.x, px(1.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(vcx);
+        let dragged_up = vcx
+            .debug_bounds("session-info-dialog")
+            .expect("dragged dialog");
+        assert!(
+            f32::from(dragged_up.top()) >= 0.,
+            "dialog escaped the top edge: {dragged_up:?}"
+        );
+        assert!(
+            f32::from(dragged_up.bottom()) <= 360. + 1.,
+            "dialog escaped the bottom edge: {dragged_up:?}"
+        );
+        vcx.simulate_mouse_up(
+            gpui::point(start.x, px(1.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+    }
+
+    #[test]
+    fn session_info_dialog_fits_its_content_and_drags_from_the_header() {
+        let root = TestConfigDir::new("nyaterm-session-info-layout");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = TestAppCleanup::new(&cx);
+        let app = rdp_session_app(&mut cx, root.path());
+        let vcx = host_app(&mut cx, app.clone(), 560.);
+        draw(vcx);
+
+        open_session_info(vcx, &app);
+        let dialog = vcx.debug_bounds("session-info-dialog").expect("dialog");
+        let footer = vcx.debug_bounds("session-info-footer").expect("footer");
+        let rows = vcx.debug_bounds("session-info-rows").expect("rows");
+
+        assert!(
+            f32::from(dialog.size.height) <= 560. - 32. + 1.,
+            "dialog outgrew the viewport: {:?}",
+            dialog
+        );
+        let footer_gap = f32::from(dialog.bottom()) - f32::from(footer.bottom());
+        assert!(
+            footer_gap <= 24.,
+            "dialog left {footer_gap}px of empty space below its footer: {dialog:?}"
+        );
+        assert!(
+            rows.size.height > footer.top() - rows.top(),
+            "the RDP report should overflow the dialog body: rows {:?}, dialog {:?}",
+            rows,
+            dialog
+        );
+
+        let body = vcx
+            .debug_bounds("session-info-body-frame")
+            .expect("body frame");
+        let scroll = vcx.update(|_, cx| app.read(cx).session.dialog_session_info_scroll());
+        assert_eq!(scroll.offset().y, px(0.));
+        vcx.simulate_event(gpui::ScrollWheelEvent {
+            position: body.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -3.)),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        draw(vcx);
+        assert!(
+            scroll.offset().y < px(0.),
+            "the report should scroll inside the capped body: {:?}",
+            scroll.offset()
+        );
+
+        let header = vcx.debug_bounds("session-info-header").expect("header");
+        let start = header.center();
+        let (dx, dy) = (48., 24.);
+        vcx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_move(
+            gpui::point(start.x + px(dx), start.y + px(dy)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(vcx);
+        let dragged = vcx
+            .debug_bounds("session-info-dialog")
+            .expect("dragged dialog");
+        assert!(
+            (f32::from(dragged.origin.x) - f32::from(dialog.origin.x) - dx).abs() < 2.,
+            "dialog did not follow the pointer horizontally: {dialog:?} -> {dragged:?}"
+        );
+        assert!(
+            (f32::from(dragged.origin.y) - f32::from(dialog.origin.y) - dy).abs() < 2.,
+            "dialog did not follow the pointer vertically: {dialog:?} -> {dragged:?}"
+        );
+        vcx.simulate_mouse_up(
+            gpui::point(start.x + px(dx), start.y + px(dy)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(vcx);
+
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| app.close_active_session_info(cx));
+        });
+        draw(vcx);
+        open_session_info(vcx, &app);
+        let reopened = vcx
+            .debug_bounds("session-info-dialog")
+            .expect("reopened dialog");
+        assert!(
+            (f32::from(reopened.origin.x) - f32::from(dialog.origin.x)).abs() < 2.
+                && (f32::from(reopened.origin.y) - f32::from(dialog.origin.y)).abs() < 2.,
+            "reopening should center the dialog again: {dialog:?} vs {reopened:?}"
+        );
+    }
+
+    #[test]
+    fn short_session_info_stays_content_sized() {
+        let root = TestConfigDir::new("nyaterm-session-info-short");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "terminal");
+        cx.update_entity(&app, |app, cx| app.sync_component_theme(cx));
+        let vcx = host_app(&mut cx, app.clone(), 560.);
+        draw(vcx);
+
+        open_session_info(vcx, &app);
+        let dialog = vcx.debug_bounds("session-info-dialog").expect("dialog");
+        let footer = vcx.debug_bounds("session-info-footer").expect("footer");
+        assert!(
+            f32::from(dialog.size.height) < 420.,
+            "a short report should not stretch the dialog: {dialog:?}"
+        );
+        let footer_gap = f32::from(dialog.bottom()) - f32::from(footer.bottom());
+        assert!(
+            footer_gap <= 24.,
+            "dialog left {footer_gap}px of empty space below its footer: {dialog:?}"
+        );
+    }
+
+    #[test]
+    fn session_info_values_can_be_selected_and_copied() {
+        let root = TestConfigDir::new("nyaterm-session-info-selection");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = TestAppCleanup::new(&cx);
+        let app = rdp_session_app(&mut cx, root.path());
+        let vcx = host_app(&mut cx, app.clone(), 700.);
+        draw(vcx);
+
+        open_session_info(vcx, &app);
+        let value = vcx
+            .debug_bounds("session-info-row-4")
+            .expect("endpoint row");
+        let start = gpui::point(value.left() + px(2.), value.center().y);
+        let end = gpui::point(value.right() - px(2.), value.center().y);
+        // Establish the hover hitbox before pressing; selection only begins on a
+        // TextView the window considers hovered.
+        vcx.simulate_mouse_move(start, None, Modifiers::none());
+        vcx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        draw(vcx);
+
+        vcx.simulate_keystrokes("ctrl-c");
+        draw(vcx);
+        let copied = vcx
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text());
+        assert!(
+            copied
+                .as_deref()
+                .is_some_and(|text| text.contains("10.168.10.103:3389")),
+            "selecting the endpoint and pressing ctrl-c should copy it, got {copied:?}"
+        );
     }
 }

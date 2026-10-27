@@ -20,13 +20,14 @@ use ironrdp_input::{
 };
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
+use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use nyaterm_remote_desktop::{
     CursorPosition, CursorShape, CursorVisibility, PROTOCOL_VERSION, Packet, PixelFormat,
     RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpCertificateRequest, RdpCertificateResponse,
-    RdpControlMessage, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpServerCapabilities,
-    RdpSessionConfig, RdpSessionState, RemoteCursorEvent, RemotePoint, RemotePointerButton,
-    RemotePointerEvent, RemoteWheelAxis, decode_control, encode_control, encode_cursor_packet,
-    encode_frame_packet_owned, read_packet, validate_committed_text,
+    RdpControlMessage, RdpDisplayConfig, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent,
+    RdpServerCapabilities, RdpSessionConfig, RdpSessionState, RemoteCursorEvent, RemotePoint,
+    RemotePointerButton, RemotePointerEvent, RemoteWheelAxis, decode_control, encode_control,
+    encode_cursor_packet, encode_frame_packet_owned, read_packet, validate_committed_text,
     validate_framebuffer_dimensions, write_packet_into,
 };
 use sha2::{Digest, Sha256};
@@ -586,6 +587,27 @@ fn build_config(
     );
     let clipboard_factory = clipboard.clone();
     let use_credssp = config.use_nla && config.password.is_some();
+    // The pinned egfx decoder drops RemoteFxProgressive tiles a real Windows host
+    // sends, and a dropped tile is a hole that only fills in with a later update —
+    // the desktop then looks like blocks being pasted in. Until the fork decodes
+    // them, negotiate *without* the channel whatever the stored switch says; the
+    // requested value is still logged so the switch stays diagnosable.
+    let gfx_effective = false;
+    // One line per connection, always: it is the only record that this process
+    // negotiated a session at all, and it carries no host, account, or password.
+    // Options are what separate "the graphics pipeline was never asked for" from
+    // "the server refused it" when a log is all you have.
+    eprintln!(
+        "RDP session options width={} height={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
+        config.display.width,
+        config.display.height,
+        color_depth,
+        u8::from(config.display.graphics_pipeline),
+        u8::from(gfx_effective),
+        performance_flags_bits(&config.display),
+        u8::from(use_credssp),
+        u8::from(config.administrative_session),
+    );
     let mut builder = ConfigBuilder::new()
         .with_destination(destination)
         .with_username(config.username.clone())
@@ -604,9 +626,25 @@ fn build_config(
         .with_desktop_width(u16::try_from(config.display.width).unwrap_or(1920))
         .with_desktop_height(u16::try_from(config.display.height).unwrap_or(1080))
         .with_color_depth(color_depth)
+        // What the server is allowed to skip. IronRDP's own default already
+        // disables full-window drag and menu animations but says nothing about
+        // wallpaper, themes, or the cursor, so those pixels used to be sent and
+        // painted for nothing.
+        .with_performance_flags(PerformanceFlags::from_bits_truncate(
+            performance_flags_bits(&config.display),
+        ))
+        // See `gfx_effective` above: the channel stays off until the pinned decoder
+        // can handle every tile the host sends.
+        .with_graphics_pipeline(gfx_effective)
         // `none` authentication must not submit a password or enter CredSSP.
         .with_credssp(use_credssp)
         .with_tls(!use_credssp)
+        // mRemoteNG `ConnectToAdministerServer`: a logon request for the console
+        // session. It changes which session the server hands back, nothing else.
+        .with_administrative_session(config.administrative_session)
+        // An empty codec list is not "no codecs": IronRDP fills in its default set
+        // from this, which is RemoteFX. It only reaches the screen when the graphics
+        // pipeline below is advertised.
         .with_codecs(Vec::new())
         .with_pointer_software_rendering(false)
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict)
@@ -626,6 +664,49 @@ fn build_config(
     }
     let config = builder.build()?;
     Ok((config, clipboard))
+}
+
+/// [MS-RDPBCGR] 2.2.1.11.1 performance flags, as a raw bit pattern.
+///
+/// Kept as a plain `u32` so the mapping can be tested without an IronRDP value.
+/// The four `disable_*` settings are inverted on purpose: they match the names
+/// mRemoteNG uses, where enabling the switch means the effect is turned off.
+fn performance_flags_bits(display: &RdpDisplayConfig) -> u32 {
+    const DISABLE_WALLPAPER: u32 = 0x0000_0001;
+    const DISABLE_FULL_WINDOW_DRAG: u32 = 0x0000_0002;
+    const DISABLE_MENU_ANIMATIONS: u32 = 0x0000_0004;
+    const DISABLE_THEMING: u32 = 0x0000_0008;
+    const DISABLE_CURSOR_SHADOW: u32 = 0x0000_0020;
+    const DISABLE_CURSOR_BLINKING: u32 = 0x0000_0040;
+    const ENABLE_FONT_SMOOTHING: u32 = 0x0000_0080;
+    const ENABLE_DESKTOP_COMPOSITION: u32 = 0x0000_0100;
+
+    let mut flags = 0;
+    if !display.display_wallpaper {
+        flags |= DISABLE_WALLPAPER;
+    }
+    if display.disable_full_window_drag {
+        flags |= DISABLE_FULL_WINDOW_DRAG;
+    }
+    if display.disable_menu_animations {
+        flags |= DISABLE_MENU_ANIMATIONS;
+    }
+    if !display.display_themes {
+        flags |= DISABLE_THEMING;
+    }
+    if display.disable_cursor_shadow {
+        flags |= DISABLE_CURSOR_SHADOW;
+    }
+    if display.disable_cursor_blinking {
+        flags |= DISABLE_CURSOR_BLINKING;
+    }
+    if display.enable_font_smoothing {
+        flags |= ENABLE_FONT_SMOOTHING;
+    }
+    if display.enable_desktop_composition {
+        flags |= ENABLE_DESKTOP_COMPOSITION;
+    }
+    flags
 }
 
 struct DesktopPayload {
@@ -1377,8 +1458,8 @@ mod tests {
     use super::{
         CertificateGate, DesktopOutputState, DesktopPayload, Outbound, classify_error,
         convert_and_send_input, convert_input, desktop_update_payload, forward_full_frame_request,
-        forward_output, install_crypto_provider, output_channel, report_ironrdp_panic,
-        secure_attention_input, send_iron_input, send_reliable_iron_input,
+        forward_output, install_crypto_provider, output_channel, performance_flags_bits,
+        report_ironrdp_panic, secure_attention_input, send_iron_input, send_reliable_iron_input,
         validate_active_session_id, validate_input_events,
     };
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
@@ -1388,8 +1469,8 @@ mod tests {
     use ironrdp_pdu::input::mouse::PointerFlags;
     use ironrdp_pdu::input::mouse_x::PointerXFlags;
     use nyaterm_remote_desktop::{
-        RdpControlMessage, RdpErrorKind, RdpInputEvent, RemotePoint, RemotePointerButton,
-        RemotePointerEvent, RemoteWheelAxis,
+        RdpControlMessage, RdpDisplayConfig, RdpErrorKind, RdpInputEvent, RemotePoint,
+        RemotePointerButton, RemotePointerEvent, RemoteWheelAxis,
     };
 
     #[test]
@@ -1543,6 +1624,28 @@ mod tests {
             (1, true, 0, 0, 2, 1, 8)
         );
         assert_eq!(pixels, [0x33, 0x22, 0x11, 0xff, 0xcc, 0xbb, 0xaa, 0xff]);
+    }
+
+    #[test]
+    fn performance_flags_follow_the_saved_connection_settings() {
+        // Defaults ask the server to skip everything that costs pixels.
+        assert_eq!(
+            performance_flags_bits(&RdpDisplayConfig::default()),
+            0x1 | 0x2 | 0x4 | 0x8 | 0x20 | 0x40 | 0x80
+        );
+
+        let display = RdpDisplayConfig {
+            display_wallpaper: true,
+            display_themes: true,
+            enable_font_smoothing: false,
+            enable_desktop_composition: true,
+            disable_full_window_drag: false,
+            disable_menu_animations: false,
+            disable_cursor_shadow: false,
+            disable_cursor_blinking: false,
+            ..Default::default()
+        };
+        assert_eq!(performance_flags_bits(&display), 0x100);
     }
 
     #[test]

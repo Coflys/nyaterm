@@ -81,7 +81,52 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Bridges the `log` facade into `tracing`, and remembers which render adapter
+/// GPUI reported.
+///
+/// GPUI logs `Using GPU: …` through `log`, not `tracing`; without the bridge that
+/// line is lost and the render backend is unobservable. The same line is the only
+/// signal that GPUI fell back to a software rasterizer, which the UI and the
+/// remote-desktop frame path both act on.
+fn install_log_bridge() {
+    struct LogBridge(tracing_log::LogTracer);
+
+    impl log::Log for LogBridge {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            self.0.enabled(metadata)
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if record.target().starts_with("gpui_windows::directx_devices") {
+                let message = record.args().to_string();
+                if let Some(name) = message.strip_prefix("Using GPU: ") {
+                    let name = name.trim();
+                    nyaterm_core::diagnostics::record_renderer_name(name);
+                    // Recorded here because this is the only place the adapter name
+                    // exists; every later decision (material, effects) reads the
+                    // registry instead of re-querying D3D.
+                    tracing::info!(
+                        renderer = name,
+                        software = nyaterm_core::diagnostics::uses_software_renderer(),
+                        "render adapter"
+                    );
+                }
+            }
+            self.0.log(record);
+        }
+
+        fn flush(&self) {
+            self.0.flush();
+        }
+    }
+
+    if log::set_boxed_logger(Box::new(LogBridge(tracing_log::LogTracer::new()))).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+}
+
 fn init_tracing(runtime: &AppRuntime) -> Option<WorkerGuard> {
+    install_log_bridge();
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("nyaterm=info,nyaterm_core=info,nyaterm_transport=info,warn")
     });

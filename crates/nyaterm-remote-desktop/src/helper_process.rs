@@ -280,13 +280,19 @@ pub(crate) fn resolve_helper(package: &str, env_var: &str) -> Result<PathBuf, St
     }
 }
 
-/// Spawn a helper with piped stdin/stdout and a discarded stderr.
-pub(crate) fn spawn_helper(path: &Path) -> io::Result<HelperProcess> {
+/// Spawn a helper with piped stdin/stdout and a piped, forwarded stderr.
+///
+/// The helper owns the protocol decoders, so its stderr is the only place a
+/// decoder warning, a rejected PDU, or a session-option line appears. A reader
+/// thread is required, not optional: a child that writes more than the pipe
+/// buffer while nobody reads stalls on its next write, which looks exactly like
+/// a hung helper. The thread ends by itself at EOF when the child exits.
+pub(crate) fn spawn_helper(path: &Path, log_target: &'static str) -> io::Result<HelperProcess> {
     let mut command = Command::new(path);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     configure_child(&mut command);
     let mut child = command.spawn()?;
     let stdin = child
@@ -297,11 +303,44 @@ pub(crate) fn spawn_helper(path: &Path) -> io::Result<HelperProcess> {
         .stdout
         .take()
         .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "helper stdout is unavailable"))?;
+    if let Some(stderr) = child.stderr.take() {
+        let thread_name = format!("nyaterm-{log_target}-stderr");
+        if let Err(error) = std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                forward_stderr_lines(io::BufReader::new(stderr), |line| {
+                    // Only helper diagnostics: never terminal contents or
+                    // credentials. Forward at info because the application's
+                    // default filter is info for nyaterm targets, so a debug
+                    // line would be dropped and the helper would look silent.
+                    tracing::info!(helper = log_target, "{line}");
+                });
+            })
+        {
+            tracing::warn!(%error, helper = log_target, "could not start helper stderr reader");
+        }
+    }
     Ok(HelperProcess {
         child,
         stdin,
         stdout,
     })
+}
+
+fn forward_stderr_lines(mut reader: impl io::BufRead, mut log: impl FnMut(&str)) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = line.trim_end();
+                if !line.is_empty() {
+                    log(line);
+                }
+            }
+        }
+    }
 }
 
 /// Reap a helper, then join its reader thread.
@@ -347,7 +386,10 @@ mod tests {
 
     use crate::{PROTOCOL_VERSION, RdpControlMessage, encode_control};
 
-    use super::{IpcWriter, RELIABLE_INPUT_LIMIT, WriterInner, WriterState, resolve_helper};
+    use super::{
+        IpcWriter, RELIABLE_INPUT_LIMIT, WriterInner, WriterState, forward_stderr_lines,
+        resolve_helper,
+    };
 
     fn packet(version: u32) -> crate::Packet {
         encode_control(&RdpControlMessage::ClientHello { version }).expect("small control packet")
@@ -361,6 +403,25 @@ mod tests {
             }),
             worker: None,
         }
+    }
+
+    #[test]
+    fn helper_stderr_lines_are_forwarded_without_blank_or_trailing_cr() {
+        let mut lines = Vec::new();
+        forward_stderr_lines(
+            std::io::Cursor::new(
+                "RDP session options console=1\r\n\r\nVNC helper stopped: boom\nlast line",
+            ),
+            |line| lines.push(line.to_string()),
+        );
+        assert_eq!(
+            lines,
+            [
+                "RDP session options console=1",
+                "VNC helper stopped: boom",
+                "last line"
+            ]
+        );
     }
 
     #[test]

@@ -68,6 +68,9 @@ pub struct RdpSessionConfig {
     pub password: Option<SecretString>,
     pub use_nla: bool,
     pub certificate_policy: RdpCertificatePolicy,
+    /// Ask the server for its console session (mRemoteNG `ConnectToAdministerServer`).
+    #[serde(default)]
+    pub administrative_session: bool,
     pub display: RdpDisplayConfig,
     pub clipboard: RdpClipboardConfig,
     pub reconnect: RdpReconnectConfig,
@@ -85,6 +88,7 @@ impl fmt::Debug for RdpSessionConfig {
             .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
             .field("use_nla", &self.use_nla)
             .field("certificate_policy", &self.certificate_policy)
+            .field("administrative_session", &self.administrative_session)
             .field("display", &self.display)
             .field("clipboard", &self.clipboard)
             .field("reconnect", &self.reconnect)
@@ -111,6 +115,17 @@ pub struct RdpDisplayConfig {
     pub width: u32,
     pub height: u32,
     pub color_depth: u8,
+    /// RDPEGFX surface updates. See `nyaterm_core::RdpDisplaySettings`.
+    pub graphics_pipeline: bool,
+    pub display_wallpaper: bool,
+    pub display_themes: bool,
+    pub enable_font_smoothing: bool,
+    pub enable_desktop_composition: bool,
+    /// Inverted: true asks the server to turn the effect off.
+    pub disable_full_window_drag: bool,
+    pub disable_menu_animations: bool,
+    pub disable_cursor_shadow: bool,
+    pub disable_cursor_blinking: bool,
 }
 
 /// Ephemeral client display information sent to the helper. This is not part
@@ -130,6 +145,40 @@ impl Default for RdpDisplayConfig {
             width: 1920,
             height: 1080,
             color_depth: 32,
+            graphics_pipeline: true,
+            display_wallpaper: false,
+            display_themes: false,
+            enable_font_smoothing: true,
+            enable_desktop_composition: false,
+            disable_full_window_drag: true,
+            disable_menu_animations: true,
+            disable_cursor_shadow: true,
+            disable_cursor_blinking: true,
+        }
+    }
+}
+
+/// Build the helper's display configuration from a saved connection.
+///
+/// Both launch paths (opening a connection and restoring one at startup) go
+/// through here, so a setting can never be honoured when opening a tab and
+/// ignored after a restart.
+impl From<&nyaterm_core::RdpDisplaySettings> for RdpDisplayConfig {
+    fn from(settings: &nyaterm_core::RdpDisplaySettings) -> Self {
+        Self {
+            mode: parse_rdp_display_mode(&settings.mode),
+            width: settings.width,
+            height: settings.height,
+            color_depth: settings.color_depth,
+            graphics_pipeline: settings.graphics_pipeline,
+            display_wallpaper: settings.display_wallpaper,
+            display_themes: settings.display_themes,
+            enable_font_smoothing: settings.enable_font_smoothing,
+            enable_desktop_composition: settings.enable_desktop_composition,
+            disable_full_window_drag: settings.disable_full_window_drag,
+            disable_menu_animations: settings.disable_menu_animations,
+            disable_cursor_shadow: settings.disable_cursor_shadow,
+            disable_cursor_blinking: settings.disable_cursor_blinking,
         }
     }
 }

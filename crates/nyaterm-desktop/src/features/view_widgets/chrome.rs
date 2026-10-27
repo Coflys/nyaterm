@@ -394,6 +394,28 @@ pub(in crate::features) fn full_window_overlay_layer(
     deferred(full_window_input_layer(id).child(content)).with_priority(APP_OVERLAY_PRIORITY)
 }
 
+/// Overlay layer that keeps the window's text-selection listeners alive.
+///
+/// [`full_window_input_layer`] stops mouse propagation, and window-level mouse
+/// listeners run in paint order, so its `stop_propagation` also starves a
+/// selectable text painted inside the overlay. `occlude()` already keeps the
+/// pointer away from the elements behind the layer.
+pub(in crate::features) fn selectable_overlay_layer(
+    id: impl Into<String>,
+    content: impl IntoElement,
+) -> gpui::Deferred {
+    deferred(
+        div()
+            .id(SharedString::from(id.into()))
+            .key_context(crate::shortcuts::MODAL_KEY_CONTEXT)
+            .absolute()
+            .inset_0()
+            .occlude()
+            .child(content),
+    )
+    .with_priority(APP_OVERLAY_PRIORITY)
+}
+
 /// Lifts an overlay that deliberately owns no input layer above the resize
 /// handles. Hover-driven surfaces must not block the pointer underneath them.
 pub(in crate::features) fn passive_overlay_layer(content: impl IntoElement) -> gpui::Deferred {

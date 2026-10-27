@@ -636,6 +636,12 @@ pub struct RdpSecuritySettings {
     pub use_nla: bool,
     #[serde(default = "default_rdp_certificate_policy")]
     pub certificate_policy: String,
+    /// mRemoteNG `ConnectToAdministerServer` (`UseConsoleSession`): ask the server
+    /// for its console session instead of a new one. It rides with the logon
+    /// request, which is why it lives beside the other negotiation options rather
+    /// than with the picture settings.
+    #[serde(default)]
+    pub administrative_session: bool,
 }
 
 impl Default for RdpSecuritySettings {
@@ -643,6 +649,7 @@ impl Default for RdpSecuritySettings {
         Self {
             use_nla: true,
             certificate_policy: default_rdp_certificate_policy(),
+            administrative_session: false,
         }
     }
 }
@@ -657,6 +664,36 @@ pub struct RdpDisplaySettings {
     pub height: u32,
     #[serde(default = "default_rdp_color_depth")]
     pub color_depth: u8,
+    /// RDPEGFX surface updates (RemoteFX / ClearCodec). Off by default: the pinned
+    /// IronRDP revision cannot decode every tile a real Windows host sends
+    /// (RemoteFxProgressive surfaces are dropped as undecodable), and a dropped
+    /// tile is a hole that arrives later as a separate patch — the desktop then
+    /// looks like blocks being pasted in. The bitmap path always works.
+    #[serde(default)]
+    pub graphics_pipeline: bool,
+    /// mRemoteNG `DisplayWallpaper`. Polarity is the client's: false means the
+    /// server is told not to send wallpaper at all.
+    #[serde(default)]
+    pub display_wallpaper: bool,
+    /// mRemoteNG `DisplayThemes`, same inverted polarity.
+    #[serde(default)]
+    pub display_themes: bool,
+    /// mRemoteNG `EnableFontSmoothing`. This one is not inverted.
+    #[serde(default = "default_true")]
+    pub enable_font_smoothing: bool,
+    /// mRemoteNG `EnableDesktopComposition`. Not inverted.
+    #[serde(default)]
+    pub enable_desktop_composition: bool,
+    /// The four below carry mRemoteNG's `DisableXxx` names and are inverted like
+    /// it: true asks the server to turn that effect off.
+    #[serde(default = "default_true")]
+    pub disable_full_window_drag: bool,
+    #[serde(default = "default_true")]
+    pub disable_menu_animations: bool,
+    #[serde(default = "default_true")]
+    pub disable_cursor_shadow: bool,
+    #[serde(default = "default_true")]
+    pub disable_cursor_blinking: bool,
 }
 
 impl Default for RdpDisplaySettings {
@@ -666,6 +703,15 @@ impl Default for RdpDisplaySettings {
             width: default_rdp_width(),
             height: default_rdp_height(),
             color_depth: default_rdp_color_depth(),
+            graphics_pipeline: false,
+            display_wallpaper: false,
+            display_themes: false,
+            enable_font_smoothing: true,
+            enable_desktop_composition: false,
+            disable_full_window_drag: true,
+            disable_menu_animations: true,
+            disable_cursor_shadow: true,
+            disable_cursor_blinking: true,
         }
     }
 }

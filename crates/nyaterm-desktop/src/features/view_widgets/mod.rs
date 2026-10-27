@@ -2,7 +2,7 @@ mod chrome;
 pub(in crate::features) use chrome::{
     APP_OVERLAY_PRIORITY, bounded_dialog_width, child_window_header, dialog_action_button,
     full_window_input_layer, full_window_overlay_layer, horizontal_resize_handle_visual, logo_mark,
-    modal_dialog_shell, panel_header_with_actions, passive_overlay_layer,
+    modal_dialog_shell, panel_header_with_actions, passive_overlay_layer, selectable_overlay_layer,
     vertical_resize_handle_visual, window_control_button,
 };
 

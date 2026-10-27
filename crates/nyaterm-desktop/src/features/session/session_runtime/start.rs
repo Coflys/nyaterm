@@ -11,8 +11,8 @@ use nyaterm_core::{
 use nyaterm_remote_desktop::{
     RdpClipboardConfig, RdpDisplayConfig, RdpReconnectConfig, RdpSessionConfig, VncClipboardConfig,
     VncDisplayConfig, VncReconnectConfig, VncSecurityConfig, VncSessionConfig,
-    parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
-    parse_vnc_scale_mode, parse_vnc_security_mode,
+    parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_vnc_scale_mode,
+    parse_vnc_security_mode,
 };
 use nyaterm_store::{StoreBlockingClient, StoreDomain, store_request};
 use nyaterm_transport::{
@@ -596,12 +596,8 @@ impl NyaTermApp {
                     password: inline_connection_password(connection.auth.as_ref()),
                     use_nla: security.use_nla,
                     certificate_policy: parse_rdp_certificate_policy(&security.certificate_policy),
-                    display: RdpDisplayConfig {
-                        mode: parse_rdp_display_mode(&display.mode),
-                        width: display.width,
-                        height: display.height,
-                        color_depth: display.color_depth,
-                    },
+                    administrative_session: security.administrative_session,
+                    display: RdpDisplayConfig::from(&display),
                     clipboard: RdpClipboardConfig {
                         mode: parse_rdp_clipboard_mode(&clipboard.mode),
                     },

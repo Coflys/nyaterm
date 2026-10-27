@@ -182,6 +182,19 @@ fn rdp_security(
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpUseNla, cx)
             }),
         ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-administrative-session",
+            t!("dialog.rdpAdministrativeSession"),
+            t!("dialog.rdpAdministrativeSessionDesc"),
+            editor.rdp_security.administrative_session,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(
+                    ConnectionEditorToggle::RdpAdministrativeSession,
+                    cx,
+                )
+            }),
+        ))
         .child(connection_editor_select(
             ConnectionEditorRenderContext {
                 palette,
@@ -278,6 +291,99 @@ fn rdp_display(
                     ))),
             )
         })
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-graphics-pipeline",
+            t!("dialog.rdpGraphicsPipeline"),
+            t!("dialog.rdpGraphicsPipelineDesc"),
+            editor.rdp_display.graphics_pipeline,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpGraphicsPipeline, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-display-wallpaper",
+            t!("dialog.rdpWallpaper"),
+            t!("dialog.rdpWallpaperDesc"),
+            editor.rdp_display.display_wallpaper,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpDisplayWallpaper, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-display-themes",
+            t!("dialog.rdpThemes"),
+            t!("dialog.rdpThemesDesc"),
+            editor.rdp_display.display_themes,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpDisplayThemes, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-font-smoothing",
+            t!("dialog.rdpFontSmoothing"),
+            t!("dialog.rdpFontSmoothingDesc"),
+            editor.rdp_display.enable_font_smoothing,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpFontSmoothing, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-desktop-composition",
+            t!("dialog.rdpDesktopComposition"),
+            t!("dialog.rdpDesktopCompositionDesc"),
+            editor.rdp_display.enable_desktop_composition,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(
+                    ConnectionEditorToggle::RdpDesktopComposition,
+                    cx,
+                )
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-disable-full-window-drag",
+            t!("dialog.rdpDisableFullWindowDrag"),
+            t!("dialog.rdpDisableFullWindowDragDesc"),
+            editor.rdp_display.disable_full_window_drag,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpFullWindowDrag, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-disable-menu-animations",
+            t!("dialog.rdpDisableMenuAnimations"),
+            t!("dialog.rdpDisableMenuAnimationsDesc"),
+            editor.rdp_display.disable_menu_animations,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpMenuAnimations, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-disable-cursor-shadow",
+            t!("dialog.rdpDisableCursorShadow"),
+            t!("dialog.rdpDisableCursorShadowDesc"),
+            editor.rdp_display.disable_cursor_shadow,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpCursorShadow, cx)
+            }),
+        ))
+        .child(rdp_switch_row(
+            palette,
+            "connection-rdp-disable-cursor-blinking",
+            t!("dialog.rdpDisableCursorBlinking"),
+            t!("dialog.rdpDisableCursorBlinkingDesc"),
+            editor.rdp_display.disable_cursor_blinking,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpCursorBlinking, cx)
+            }),
+        ))
 }
 
 fn rdp_session(

@@ -13,6 +13,29 @@ pub(crate) struct WindowMaterialCapabilities {
     pub blurred: bool,
 }
 
+/// Whether GPUI reported a software rasterizer (WARP) at startup.
+pub(crate) fn uses_software_renderer() -> bool {
+    nyaterm_core::diagnostics::uses_software_renderer()
+}
+
+/// Whether this process is running inside a Remote Desktop session.
+///
+/// Inside RDP the host normally exposes only a basic adapter, so GPUI renders
+/// through WARP: every blurred or translucent surface then costs tens of
+/// milliseconds of software composition per frame.
+pub(crate) fn is_remote_session() -> bool {
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            windows_sys::Win32::UI::WindowsAndMessaging::SM_REMOTESESSION,
+        ) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Probe once outside rendering. GPUI exposes no result for applying a material,
 /// so these describe known support, not confirmation of the visible effect.
 pub(crate) fn window_material_capabilities() -> WindowMaterialCapabilities {

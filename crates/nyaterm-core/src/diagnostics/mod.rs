@@ -13,6 +13,37 @@ pub const LOG_FILE_PREFIX: &str = "nyaterm-diagnostics";
 pub const LOG_FILE_SUFFIX: &str = "jsonl";
 const DEFAULT_RETENTION_DAYS: u32 = 7;
 
+/// The render adapter GPUI reported at startup, captured from its `log::info!`.
+///
+/// GPUI logs this through the `log` facade before any window has painted, so the
+/// application records it while bridging `log` into `tracing`; the UI reads it to
+/// avoid paying for effects the adapter cannot afford.
+static RENDERER_NAME: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub fn record_renderer_name(name: &str) {
+    if let Ok(mut slot) = RENDERER_NAME.write() {
+        *slot = Some(name.to_string());
+    }
+}
+
+pub fn renderer_name() -> Option<String> {
+    RENDERER_NAME.read().ok().and_then(|slot| slot.clone())
+}
+
+/// Whether GPUI fell back to a software rasterizer.
+///
+/// WARP reports itself as "Microsoft Basic Render Driver"; a Remote Desktop host
+/// without a GPU reports "Microsoft Basic Display Driver". Both composite every
+/// frame on the CPU, where window blur/transparency costs tens of milliseconds.
+pub fn uses_software_renderer() -> bool {
+    renderer_name().is_some_and(|name| {
+        let name = name.to_ascii_lowercase();
+        name.contains("basic render driver")
+            || name.contains("basic display driver")
+            || name.contains("warp")
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum DiagnosticsError {
     #[error("failed to create diagnostics directory {path}: {source}")]

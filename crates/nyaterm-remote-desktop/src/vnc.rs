@@ -381,7 +381,7 @@ impl VncSessionManager {
             mut child,
             stdin,
             stdout,
-        } = helper_process::spawn_helper(&helper).map_err(|error| {
+        } = helper_process::spawn_helper(&helper, "vnc").map_err(|error| {
             VncError::new(
                 VncErrorKind::HelperMissing,
                 format!("failed to spawn the VNC helper: {error}"),

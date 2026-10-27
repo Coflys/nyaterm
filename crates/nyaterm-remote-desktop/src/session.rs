@@ -411,7 +411,7 @@ impl RdpSessionManager {
             mut child,
             stdin,
             stdout,
-        } = helper_process::spawn_helper(&helper).map_err(|error| {
+        } = helper_process::spawn_helper(&helper, "rdp").map_err(|error| {
             RdpError::new(
                 RdpErrorKind::HelperMissing,
                 format!("failed to spawn the RDP helper: {error}"),

@@ -14,7 +14,7 @@ use super::mcp::{McpApprovalDecision, McpApprovalRequest};
 use super::terminal::{FULL_SHELL_PAINT_COUNT, terminal_surface_paint_count};
 use super::view_widgets::{
     APP_OVERLAY_PRIORITY, full_window_input_layer, full_window_overlay_layer, modal_scrim_is_drawn,
-    passive_overlay_layer,
+    passive_overlay_layer, selectable_overlay_layer,
 };
 use crate::features::perf::{GpuiPerfContext, record_gpui_perf_sample};
 use crate::features::runtime_jobs::ActivitySide;
@@ -746,7 +746,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.session_info_open, |this| {
-                this.child(full_window_overlay_layer(
+                this.child(selectable_overlay_layer(
                     "session-info-input-layer",
                     self.session_info_overlay(cx),
                 ))

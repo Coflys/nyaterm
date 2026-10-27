@@ -113,6 +113,7 @@ fn test_config() -> RdpSessionConfig {
         password: None,
         use_nla: false,
         certificate_policy: RdpCertificatePolicy::Prompt,
+        administrative_session: false,
         display: RdpDisplayConfig::default(),
         clipboard: RdpClipboardConfig::default(),
         reconnect: RdpReconnectConfig::default(),
