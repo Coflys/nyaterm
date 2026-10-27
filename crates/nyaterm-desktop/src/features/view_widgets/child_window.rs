@@ -248,6 +248,8 @@ pub(in crate::features) fn child_window_options(
                 .to_string(),
         ),
         titlebar: child_window_titlebar(spec.title.clone()),
+        #[cfg(target_os = "linux")]
+        window_decorations: Some(gpui::WindowDecorations::Client),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: spec.min_size,
         display_id,

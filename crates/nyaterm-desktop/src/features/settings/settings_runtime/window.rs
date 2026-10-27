@@ -97,6 +97,7 @@ impl Render for SettingsWindow {
                 Some("icons/settings.svg"),
                 self.chrome,
                 window,
+                cx,
                 move |_, window, cx| header_close(window, cx),
             ))
             .child(div().flex_1().min_h_0().overflow_hidden().child(content))
