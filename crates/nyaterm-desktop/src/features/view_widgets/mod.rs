@@ -34,3 +34,5 @@ pub(in crate::features) use icons::{
 
 pub(in crate::features) mod markdown;
 pub(in crate::features) use markdown::markdown_content_view;
+
+pub(in crate::features) mod cloud_sync_conflict;

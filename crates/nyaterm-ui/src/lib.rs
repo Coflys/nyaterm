@@ -30,6 +30,7 @@ mod theme;
 mod theme_bridge;
 mod tooltip;
 mod widgets;
+pub mod window_chrome;
 
 pub use app_menu_bar::{NyaAppMenu, NyaAppMenuBar};
 pub use button::{NyaButton, NyaButtonVariant, NyaIconButton};

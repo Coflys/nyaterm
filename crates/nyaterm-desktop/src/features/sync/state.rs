@@ -32,6 +32,7 @@ pub(in crate::features) struct CloudSyncFeatureState {
     history: Vec<CloudSyncHistoryEntry>,
     history_expanded: HashSet<String>,
     conflict: Option<CloudSyncConflictState>,
+    pending_resolution: Option<nyaterm_core::cloud_sync::conflict::CloudResolutionRequest>,
     secret_draft: CloudSyncSecretDraft,
     status: String,
     /// Prevent overlapping network jobs from applying cloud state out of order.
@@ -89,6 +90,7 @@ impl CloudSyncFeatureState {
             history,
             history_expanded: HashSet::new(),
             conflict: None,
+            pending_resolution: None,
             secret_draft: CloudSyncSecretDraft::default(),
             status: String::new(),
             live_state: CloudSyncLiveState::Idle,
@@ -175,6 +177,21 @@ impl CloudSyncFeatureState {
         secret_draft: &CloudSyncSecretDraft,
     ) -> bool {
         settings == &self.settings && secret_draft == &self.secret_draft
+    }
+
+    pub(in crate::features) fn rebase_credential_rotation(
+        &mut self,
+        base: &mut CloudSyncSettings,
+        current: &CloudSyncSettings,
+    ) {
+        let mut effective = self.pending_settings();
+        nyaterm_core::cloud_sync::credentials::rebase_rotated_tokens(base, &mut effective, current);
+        let mut previous = self.settings.clone();
+        nyaterm_core::cloud_sync::credentials::rebase_rotated_tokens(
+            &mut previous,
+            &mut self.settings,
+            current,
+        );
     }
 
     pub(in crate::features) fn replace_settings(
@@ -346,10 +363,57 @@ impl CloudSyncFeatureState {
     ) {
         if let CloudSyncError::Conflict(preview) = error {
             self.conflict = Some(CloudSyncConflictState {
+                selected_revision: {
+                    let readable: Vec<_> = preview.branches.iter().filter(|b| b.readable).collect();
+                    (readable.len() == 1).then(|| readable[0].revision.clone())
+                },
                 preview: preview.as_ref().clone(),
                 provider_action,
             });
         }
+    }
+
+    pub(in crate::features) fn select_conflict_branch(&mut self, revision: &str) {
+        if let Some(conflict) = &mut self.conflict
+            && conflict
+                .preview
+                .branches
+                .iter()
+                .any(|branch| branch.readable && branch.revision == revision)
+        {
+            conflict.selected_revision = Some(revision.to_string());
+        }
+    }
+
+    pub(super) fn prepare_resolution(&mut self, use_cloud: bool) -> bool {
+        let Some(conflict) = &self.conflict else {
+            return false;
+        };
+        let Some(local_content_hash) = conflict.preview.local_content_hash.clone() else {
+            return false;
+        };
+        if (!use_cloud && conflict.preview.overwrite_blocked)
+            || (use_cloud && conflict.selected_revision.is_none())
+        {
+            return false;
+        }
+        self.pending_resolution =
+            Some(nyaterm_core::cloud_sync::conflict::CloudResolutionRequest {
+                observed_revisions: conflict.preview.observed_revisions.clone(),
+                selected_revision: if use_cloud {
+                    conflict.selected_revision.clone()
+                } else {
+                    None
+                },
+                local_content_hash,
+            });
+        true
+    }
+
+    pub(super) fn take_resolution(
+        &mut self,
+    ) -> Option<nyaterm_core::cloud_sync::conflict::CloudResolutionRequest> {
+        self.pending_resolution.take()
     }
 
     pub(super) fn begin_github_auth(
@@ -740,6 +804,9 @@ mod tests {
         assert!(!cloud_sync.begin_job());
         cloud_sync.fail_job(
             &CloudSyncError::Conflict(Box::new(CloudConflictPreview {
+                branches: Vec::new(),
+                observed_revisions: Vec::new(),
+                local_content_hash: None,
                 detected_at_ms: 1,
                 provider: "webdav".to_string(),
                 kind: CloudConflictKind::ContentConflict,
@@ -784,6 +851,9 @@ mod tests {
             Vec::new(),
         );
         let preview = CloudConflictPreview {
+            branches: Vec::new(),
+            observed_revisions: Vec::new(),
+            local_content_hash: None,
             detected_at_ms: 1,
             provider: "s3".to_string(),
             kind: CloudConflictKind::RemoteInconsistent,
@@ -853,5 +923,97 @@ mod tests {
         cloud_sync.cancel_github_auth();
         assert!(cancel.load(Ordering::Relaxed));
         assert!(!cloud_sync.github_auth().pending);
+    }
+    #[test]
+    fn conflict_resolution_requires_an_explicit_readable_branch_and_pins_the_preview() {
+        use nyaterm_core::cloud_sync::conflict::CloudConflictBranch;
+        let mut state = CloudSyncFeatureState::new(
+            CloudSyncSettings::default(),
+            CloudSyncState::default(),
+            Vec::new(),
+        );
+        let mut preview: CloudConflictPreview = serde_json::from_value(serde_json::json!({
+            "detected_at_ms": 1, "provider": "test", "local_payload_hash": "local",
+            "remote_payload_hash": "remote", "remote_revision": "a", "remote_created_at_ms": 1,
+            "remote_device_id": "a", "message": "conflict", "local_content_hash": "local-content",
+            "observed_revisions": ["a", "b", "c"]
+        }))
+        .unwrap();
+        preview.branches = ["a", "b", "c"]
+            .into_iter()
+            .map(|id| CloudConflictBranch {
+                revision: id.into(),
+                device_id: id.into(),
+                device_name: None,
+                created_at_ms: 1,
+                readable: id != "c",
+                differences: Vec::new(),
+            })
+            .collect();
+        state.capture_conflict(
+            &CloudSyncError::Conflict(Box::new(preview.clone())),
+            "test".into(),
+            true,
+        );
+        assert!(state.conflict().unwrap().selected_revision.is_none());
+        assert!(!state.prepare_resolution(true));
+        state.select_conflict_branch("c");
+        assert!(!state.prepare_resolution(true));
+        state.select_conflict_branch("b");
+        assert!(state.prepare_resolution(true));
+        let request = state.take_resolution().unwrap();
+        assert_eq!(request.selected_revision.as_deref(), Some("b"));
+        assert_eq!(request.observed_revisions, preview.observed_revisions);
+        assert_eq!(request.local_content_hash, "local-content");
+        assert!(state.take_resolution().is_none());
+        assert!(state.prepare_resolution(false));
+        assert!(state.take_resolution().unwrap().selected_revision.is_none());
+        preview.branches[1].readable = false;
+        state.capture_conflict(
+            &CloudSyncError::Conflict(Box::new(preview)),
+            "test".into(),
+            true,
+        );
+        assert_eq!(
+            state.conflict().unwrap().selected_revision.as_deref(),
+            Some("a")
+        );
+    }
+    #[test]
+    fn cloud_sync_rotated_tokens_keep_clean_drafts_clean_and_preserve_explicit_secret_edits() {
+        let mut base = CloudSyncSettings::default();
+        base.google_drive.access_token = Some("old-access".into());
+        base.google_drive.refresh_token = Some("old-refresh".into());
+        let original = base.clone();
+        let mut state =
+            CloudSyncFeatureState::new(base.clone(), CloudSyncState::default(), Vec::new());
+        let mut current = base.clone();
+        current.google_drive.access_token = Some("new-access".into());
+        current.google_drive.refresh_token = Some("new-refresh".into());
+        state.rebase_credential_rotation(&mut base, &current);
+        assert!(state.settings_draft_matches(&base, &CloudSyncSecretDraft::default()));
+        assert_eq!(state.settings().google_drive, current.google_drive);
+
+        let mut state =
+            CloudSyncFeatureState::new(original.clone(), CloudSyncState::default(), Vec::new());
+        state.secret_draft.google_drive_refresh_token = "user-refresh".into();
+        let mut base = original;
+        state.rebase_credential_rotation(&mut base, &current);
+        assert_eq!(
+            state
+                .pending_settings()
+                .google_drive
+                .refresh_token
+                .as_deref(),
+            Some("user-refresh")
+        );
+        assert_eq!(
+            state.settings().google_drive.access_token.as_deref(),
+            Some("new-access")
+        );
+        assert_ne!(
+            base, current,
+            "an explicit edit retains the save-time conflict baseline"
+        );
     }
 }

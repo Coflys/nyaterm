@@ -3,6 +3,7 @@
 mod auto_sync;
 mod cloud_sync_provider;
 mod cloud_sync_runtime;
+pub(crate) mod io_runtime;
 pub(crate) mod operation;
 mod state;
 

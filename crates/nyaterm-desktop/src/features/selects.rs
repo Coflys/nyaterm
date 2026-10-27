@@ -442,6 +442,11 @@ impl NyaTermApp {
                 self.apply_temporary_serial_port_name(value.to_string(), cx);
             }
             "cloud-provider-select" => self.update_cloud_sync_provider(value, cx),
+            "cloud-conflict-branch" => {
+                self.cloud_sync.select_conflict_branch(value);
+                self.request_settings_panel_refresh(cx);
+                cx.notify();
+            }
             "ai-proxy-mode" | "ai-proxy-protocol" => {
                 self.ai.set_proxy_selection(id, value);
                 cx.notify();

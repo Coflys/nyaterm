@@ -623,6 +623,7 @@ impl Render for NoteEditorWindow {
                 Some("icons/notes.svg"),
                 self.chrome,
                 window,
+                cx,
                 move |_, window, cx| header_close(window, cx),
             ))
             .child(

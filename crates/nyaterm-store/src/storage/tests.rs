@@ -1667,6 +1667,7 @@ fn cloud_pull_store_worker_flushes_and_reopens_with_local_provider_secrets() {
     target.save_cloud_sync_settings(local.clone()).unwrap();
     drop(target);
     let options = LocalCloudSyncOptions {
+        device_name: None,
         config_dir: target_dir.to_path_buf(),
         portable_key_path: None,
         remote_dir: source_dir.to_path_buf(),
@@ -7675,4 +7676,110 @@ fn telnet_keepalive_survives_storage_backup_and_sync_round_trips() {
     }
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cloud_sync_rotated_credentials_survive_restart_and_reject_stale_accounts() {
+    use nyaterm_core::cloud_sync::credentials::{
+        CloudCredentialUpdate, CredentialUpdateResult, DriveProvider,
+    };
+    for provider in [
+        DriveProvider::Google,
+        DriveProvider::OneDrive,
+        DriveProvider::Aliyun,
+    ] {
+        let dir = unique_temp_dir("cloud-token-rotation");
+        let store = ConnectionStore::open(&dir).unwrap();
+        let mut settings = CloudSyncSettings::default();
+        match provider {
+            DriveProvider::Google => {
+                settings.google_drive.client_id = Some("client".into());
+                settings.google_drive.refresh_token = Some("refresh-before".into());
+            }
+            DriveProvider::OneDrive => {
+                settings.onedrive.client_id = Some("client".into());
+                settings.onedrive.refresh_token = Some("refresh-before".into());
+            }
+            DriveProvider::Aliyun => {
+                settings.aliyun_drive.client_id = Some("client".into());
+                settings.aliyun_drive.refresh_token = Some("refresh-before".into());
+            }
+        }
+        store.save_cloud_sync_settings(settings).unwrap();
+        let mut raw = store.load_settings_value().unwrap();
+        raw["cloud_sync"]["future_option"] = serde_json::json!({"keep": true});
+        store.save_settings_value(&raw).unwrap();
+        let mut update = CloudCredentialUpdate {
+            provider,
+            client_id: Some("client".into()),
+            client_secret: None,
+            expected_access_token: None,
+            expected_refresh_token: Some("refresh-before".into()),
+            access_token: "access-after".into(),
+            refresh_token: Some("refresh-after".into()),
+        };
+        assert_eq!(
+            store.update_cloud_credentials(&update).unwrap(),
+            CredentialUpdateResult::Applied
+        );
+        assert_eq!(
+            store.update_cloud_credentials(&update).unwrap(),
+            CredentialUpdateResult::Superseded
+        );
+        // An access-only refresh must retain the last rotated refresh token.
+        update.expected_access_token = Some("access-after".into());
+        update.expected_refresh_token = Some("refresh-after".into());
+        update.refresh_token = None;
+        assert_eq!(
+            store.update_cloud_credentials(&update).unwrap(),
+            CredentialUpdateResult::Applied
+        );
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["cloud_sync"]["future_option"]["keep"], true);
+        let text = serde_json::to_string(&raw).unwrap();
+        assert!(!text.contains("access-after"));
+        assert!(!text.contains("refresh-after"));
+        drop(store);
+        let reopened = ConnectionStore::open(&dir).unwrap();
+        let settings = reopened.load_cloud_sync_settings().unwrap();
+        let (access, refresh) = match provider {
+            DriveProvider::Google => (
+                settings.google_drive.access_token,
+                settings.google_drive.refresh_token,
+            ),
+            DriveProvider::OneDrive => (
+                settings.onedrive.access_token,
+                settings.onedrive.refresh_token,
+            ),
+            DriveProvider::Aliyun => (
+                settings.aliyun_drive.access_token,
+                settings.aliyun_drive.refresh_token,
+            ),
+        };
+        assert_eq!(access.as_deref(), Some("access-after"));
+        assert_eq!(refresh.as_deref(), Some("refresh-after"));
+        // Reauthorization may retain a refresh token but replace access credentials.
+        let mut reauthorized = reopened.load_cloud_sync_settings().unwrap();
+        match provider {
+            DriveProvider::Google => {
+                reauthorized.google_drive.access_token = Some("reauthorized".into())
+            }
+            DriveProvider::OneDrive => {
+                reauthorized.onedrive.access_token = Some("reauthorized".into())
+            }
+            DriveProvider::Aliyun => {
+                reauthorized.aliyun_drive.access_token = Some("reauthorized".into())
+            }
+        }
+        reopened.save_cloud_sync_settings(reauthorized).unwrap();
+        assert_eq!(
+            reopened.update_cloud_credentials(&update).unwrap(),
+            CredentialUpdateResult::Superseded
+        );
+        update.client_id = Some("replaced-account".into());
+        assert_eq!(
+            reopened.update_cloud_credentials(&update).unwrap(),
+            CredentialUpdateResult::Superseded
+        );
+    }
 }

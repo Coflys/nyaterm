@@ -140,3 +140,110 @@ staged/committed snapshot GC protection, compatibility-write failures, cancellat
 readback delays, and redb file/memory codec compatibility. Native provider behavior
 still depends on each service honoring successful object writes and eventually
 consistent listing semantics; no real cloud credentials are used by unit tests.
+
+
+## Credentials, diagnostics and scheduling
+
+HTTP failures expose only a controlled provider/operation, status and error
+classification. Request URLs, query parameters, authorization headers and raw
+response bodies never become user-visible or logged diagnostics. Capacity
+classification retains the public `gist_capacity` code. Numeric and HTTP-date
+`Retry-After` values extend retry backoff; authentication failures without a
+rate-limit hint pause background work until settings change.
+
+Google Drive, OneDrive and Aliyun Drive persist refreshed access tokens and any
+returned refresh token through the serialized store before another authenticated
+request. Missing refresh tokens retain the previous value. The update compares
+client identity and both previous tokens, updates only credentials, and uses the
+existing encrypted storage/unknown-field merge. Stale updates are rejected and
+save failures stop the operation. Subsequent sync failure or cancellation does
+not roll back a completed credential save. Settings drafts rebase unedited token
+fields; explicit credential edits retain ordinary conflict checks.
+
+All providers, including GitHub Gist, share startup checks (when enabled),
+15-minute checks, focus checks throttled to 120 seconds, change debounce, safe
+pull deferral and failure backoff. Active sessions and unsaved drafts continue to
+block automatic application. One process coordinator records actual transfers,
+conflicts, failures and successful recovery before notifying windows. Busy,
+disabled, debounce and unchanged checks do not add history. Identical
+classification/trigger/revision failures are deduplicated for 15 minutes; history
+I/O failure does not alter the sync outcome.
+
+## Conflict previews and device labels
+
+Snapshot metadata may include `device_name` inside the encrypted payload. The
+UUID remains the device identity. Older snapshots omit the field and display a
+short UUID. Renaming takes effect on the next actual publication and does not
+change the entity content hash or trigger a name-only upload. Snapshot schema
+version, encryption envelope, payload/content hash definitions, tables and keys
+are unchanged.
+
+A conflict preview lists every maximal concurrent revision, device, timestamp,
+readability and counts relative to the local content. Known collections use
+stable record IDs; settings show categories and unknown entities only a change
+marker. Previews never return record names, secret values, notes or command text.
+Exactly one readable branch is selected automatically; multiple readable branches
+require an explicit choice. Choosing local resolves only the displayed observed
+branches, and choosing cloud pins the selected immutable revision.
+
+Resolution requests carry the observed maximal revision set and preview local
+content hash. They revalidate at execution and before publication. Changed
+branches, missing/unreadable selected snapshots and changed local content refresh
+the preview instead of selecting a substitute. A new commit arriving after the
+publication check remains concurrent and is reported on the next check. Existing
+master-password guards, checked local apply, session restrictions, safety backup
+and causal resolution commits remain in force. There is no field-level merge.
+
+
+## Bounded checks and application-body traffic
+
+The desktop process shares an in-memory I/O runtime across windows and provider
+instances. S3 conditionally reads `latest.redb` and device heads with opaque
+ETags. Every effective check still lists device heads: an unchanged compatibility
+pointer does not prove the absence of a concurrent device commit. Fresh LIST
+validators can reuse unchanged head bytes. Missing validators require reads;
+unsupported conditionals fall back to GET without bypassing auth or rate limits.
+Metadata uses a 16 MiB / 1,024-entry LRU. Writes and deletes invalidate before
+I/O, so upload readback cannot be satisfied by pre-write cached bytes.
+
+All providers can reuse authenticated snapshot summaries for automatic checks
+for at most 24 hours. Receipts match the complete pointer, including causal clock;
+only a successful full validation advances their timestamp. Changed pointers,
+remote configuration, credentials, master passwords, cold startup or cache
+eviction require full reads. Receipts and secret-free conflict differences are
+memory-only; decrypted entity bodies are not retained. Conflict summaries also
+match the full branch set and local content hash. Unreadable branches and failed
+validations never become successful cache entries. Actual push, pull, recovery
+and conflict confirmation still validate snapshots; an already decoded snapshot
+from the same check can be reused. GC retains its full authentication and
+pre-deletion checks, daily throttle and existing retention policy.
+
+Providers without conditional metadata capabilities still transfer their pointer
+and directory API responses. Gist/Snippet container responses can include file
+contents, so avoiding an explicit snapshot read does not imply that the provider
+transfers metadata alone. The S3 traffic fixture does not predict those APIs.
+
+Pure local-change notifications whose entity hash equals the synchronized
+baseline can skip network I/O when no remote state is pending. Startup, periodic,
+settings and retry requests are not discarded by local notifications. Periodic
+inspection still runs during continuous changes while upload debounce remains
+in force. Successful device-head inspections, including manual synchronization,
+reset the 15-minute timer and suppress focus checks for 120 seconds; connection
+tests and local no-ops do not count as inspections. Disabling startup checks
+continues to leave periodic checks enabled.
+
+Controlled operation summaries report requests, submitted upload-body bytes,
+received download-body bytes (including error bodies and retries), 304 responses,
+cache hits and full-validation attempts. All providers count at their HTTP
+boundary, including authentication retries and consumed error bodies. Upload
+bytes are the buffered body submitted for each attempt; download bytes include
+partial reads before a failure. Statistics omit headers, TLS and billing-specific
+accounting.
+No URLs, paths, ETags, credentials or entity data appear in these summaries.
+
+The deterministic regression models three devices, 1 MiB snapshots, the existing
+1,056,768-byte pointer, 64 checks/day for 30 days, and unchanged data. Warm checks
+receive no object bodies until daily validation; modeled object-body downloads
+must decrease by at least 95%. This is a simulation, not a real-provider billing
+measurement. No remote filenames, serialization/encryption formats, database
+keys or persisted sync-state fields change for this optimization.

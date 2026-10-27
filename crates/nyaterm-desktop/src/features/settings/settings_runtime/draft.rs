@@ -322,7 +322,7 @@ impl NyaTermApp {
             return;
         }
         let ai_settings = self.pending_ai_settings();
-        let cloud_sync_settings = self.cloud_sync.pending_settings();
+        let mut cloud_sync_settings = self.cloud_sync.pending_settings();
         let translation_settings = self.translation.pending_settings();
         let keyword_highlights = self.settings.keyword_config().clone();
         let master_password_update = if master_password.draft.is_empty() {
@@ -374,7 +374,14 @@ impl NyaTermApp {
                 if ai_changed && store.load_ai_settings()? != base.ai_settings {
                     return Err(conflict());
                 }
-                if cloud_changed && store.load_cloud_sync_settings()? != base.cloud_sync_settings {
+                let current_cloud = store.load_cloud_sync_settings()?;
+                let mut cloud_base = base.cloud_sync_settings.clone();
+                nyaterm_core::cloud_sync::credentials::rebase_rotated_tokens(
+                    &mut cloud_base,
+                    &mut cloud_sync_settings,
+                    &current_cloud,
+                );
+                if cloud_changed && current_cloud != cloud_base {
                     return Err(conflict());
                 }
                 if translation_changed
