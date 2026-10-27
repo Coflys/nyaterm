@@ -4,7 +4,8 @@
 use gpui::Context;
 use nyaterm_transport::{
     FileBrowserBackendKind, LocalShellPathStyle, SftpCwdFollowMode, file_browser_path_eq,
-    local_shell_cwd_to_browser_path,
+    local_shell_cwd_to_browser_path, local_shell_cwd_to_browser_path_with_distro,
+    wsl_distro_from_launcher,
 };
 use rust_i18n::t;
 
@@ -13,7 +14,6 @@ use crate::models::{SessionLaunchConfig, TransferCwdSyncReason};
 
 pub(super) fn cwd_paths_equal(backend: FileBrowserBackendKind, left: &str, right: &str) -> bool {
     let normalize = |path: &str| {
-        let path = path.trim();
         if backend == FileBrowserBackendKind::Local {
             return std::path::Path::new(path)
                 .components()
@@ -33,20 +33,46 @@ pub(super) fn cwd_paths_equal(backend: FileBrowserBackendKind, left: &str, right
 
 /// WSL, Git Bash, and drive-letter OSC 7 payloads report POSIX paths the
 /// Windows local browser cannot list; only a Windows host may translate them.
+/// A WSL cwd with no `\\wsl.localhost` representation cannot be browsed at all,
+/// so it is dropped (`None`) rather than handed to the browser as a POSIX path
+/// Windows would silently resolve against the current drive. Every other case
+/// passes through unchanged.
 fn translate_local_browser_cwd(
     backend: FileBrowserBackendKind,
     style: LocalShellPathStyle,
+    wsl_distro: Option<&str>,
     cwd: String,
-) -> String {
-    match backend {
-        FileBrowserBackendKind::Local if cfg!(target_os = "windows") => {
-            local_shell_cwd_to_browser_path(style, &cwd).unwrap_or(cwd)
+) -> Option<String> {
+    if backend != FileBrowserBackendKind::Local || !cfg!(target_os = "windows") {
+        return Some(cwd);
+    }
+    match style {
+        LocalShellPathStyle::Wsl if cwd.starts_with('/') => {
+            local_shell_cwd_to_browser_path_with_distro(style, &cwd, wsl_distro)
         }
-        _ => cwd,
+        _ => Some(local_shell_cwd_to_browser_path(style, &cwd).unwrap_or(cwd)),
     }
 }
 
 impl NyaTermApp {
+    fn local_shell_path_style_for_cwd(&self, session_id: &str) -> LocalShellPathStyle {
+        self.session
+            .manager()
+            .local_shell_path_style(session_id)
+            .or_else(|| {
+                self.session.metadata(session_id).and_then(|metadata| {
+                    match &metadata.launch_config {
+                        SessionLaunchConfig::Local(config) => config
+                            .shell_path
+                            .as_deref()
+                            .map(LocalShellPathStyle::from_program),
+                        _ => None,
+                    }
+                })
+            })
+            .unwrap_or_default()
+    }
+
     pub(in crate::features) fn apply_session_cwd(
         &mut self,
         session_id: &str,
@@ -62,9 +88,23 @@ impl NyaTermApp {
         let backend = self
             .session
             .file_browser_backend_support_for_session(session_id);
-        let equivalent = backend
-            .zip(self.session.cwd(session_id))
-            .is_some_and(|(backend, previous)| cwd_paths_equal(backend, previous, &cwd));
+        let equivalent =
+            backend
+                .zip(self.session.cwd(session_id))
+                .is_some_and(|(backend, previous)| {
+                    if backend == FileBrowserBackendKind::Local
+                        && self.local_shell_path_style_for_cwd(session_id)
+                            == LocalShellPathStyle::Wsl
+                        && previous.starts_with('/')
+                        && cwd.starts_with('/')
+                    {
+                        // These are guest paths, before translation to a Windows
+                        // browser path. Never fold their case or trim whitespace.
+                        previous.trim_end_matches('/') == cwd.trim_end_matches('/')
+                    } else {
+                        cwd_paths_equal(backend, previous, &cwd)
+                    }
+                });
         let changed = self.session.update_cwd(session_id, cwd);
         if !changed || equivalent || self.session.active_id() != Some(session_id) {
             return false;
@@ -125,27 +165,35 @@ impl NyaTermApp {
             matches!(&metadata.launch_config, SessionLaunchConfig::Ssh(config)
                 if config.sftp.cwd_follow_mode == SftpCwdFollowMode::Off)
         });
-        let style = self
+        let style = self.local_shell_path_style_for_cwd(&session_id);
+        let wsl_distro = self
             .session
             .manager()
-            .local_shell_path_style(&session_id)
+            .local_wsl_distro(&session_id)
             .or_else(|| {
                 self.session.metadata(&session_id).and_then(|metadata| {
                     match &metadata.launch_config {
-                        SessionLaunchConfig::Local(config) => config
-                            .shell_path
-                            .as_deref()
-                            .map(LocalShellPathStyle::from_program),
+                        SessionLaunchConfig::Local(config) => wsl_distro_from_launcher(
+                            config.shell_path.as_deref()?,
+                            &config.shell_args,
+                        ),
                         _ => None,
                     }
                 })
-            })
-            .unwrap_or_default();
+            });
         let cwd = self
             .session
             .cwd(&session_id)
-            .map(str::trim)
-            .map(|cwd| translate_local_browser_cwd(backend, style, cwd.to_string()))
+            .map(|cwd| {
+                if backend == FileBrowserBackendKind::Local && style == LocalShellPathStyle::Wsl {
+                    cwd
+                } else {
+                    cwd.trim()
+                }
+            })
+            .and_then(|cwd| {
+                translate_local_browser_cwd(backend, style, wsl_distro.as_deref(), cwd.to_string())
+            })
             .filter(|cwd| {
                 !follow_disabled
                     && !cwd.is_empty()
