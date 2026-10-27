@@ -98,8 +98,10 @@ pub use file_browser::{
     FileBrowserBackendKind, FileBrowserCapabilities, FileBrowserService, LocalShellPathStyle,
     file_browser_copy_destination_invalid, file_browser_identity, file_browser_join,
     file_browser_name, file_browser_parent, file_browser_path_eq, file_browser_path_is_root,
-    file_browser_root, local_shell_cwd_to_browser_path, valid_file_browser_child_name,
+    file_browser_root, local_shell_cwd_to_browser_path,
+    local_shell_cwd_to_browser_path_with_distro, valid_file_browser_child_name,
 };
+pub use local_shell_integration::wsl_distro_from_launcher;
 pub use session_config::{
     LocalSessionConfig, SerialSessionConfig, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
     SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAgentForwardingSources, SshAgentPrompt,
@@ -614,6 +616,7 @@ enum ManagedSession {
 pub struct LocalPtyTransport {
     info: SessionInfo,
     cwd_path_style: LocalShellPathStyle,
+    wsl_distro: Option<String>,
     startup_files: Option<tempfile::TempDir>,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: QueuedTransportWriter,
@@ -1085,6 +1088,16 @@ impl SessionManager {
         }
     }
 
+    /// The WSL distribution a local WSL session targets, used to map WSL-only
+    /// working directories onto the `\\wsl.localhost` namespace.
+    pub fn local_wsl_distro(&self, session_id: &str) -> Option<String> {
+        let sessions = self.sessions.lock().ok()?;
+        match sessions.get(session_id)? {
+            ManagedSession::Local(session) => session.wsl_distro.clone(),
+            _ => None,
+        }
+    }
+
     pub fn create_local_session(
         &self,
         config: LocalSessionConfig,
@@ -1131,6 +1144,7 @@ impl SessionManager {
             .as_ref()
             .map(|integration| integration.path_style)
             .unwrap_or_else(|| LocalShellPathStyle::from_program(&shell.program));
+        let wsl_distro = local_shell_integration::wsl_distro(&shell);
         let startup_files = integration
             .as_mut()
             .and_then(|integration| integration.startup_files.take());
@@ -1212,6 +1226,7 @@ impl SessionManager {
         let session = LocalPtyTransport {
             info: info.clone(),
             cwd_path_style,
+            wsl_distro,
             startup_files,
             master: Some(pair.master),
             writer,

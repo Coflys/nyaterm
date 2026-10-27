@@ -61,6 +61,146 @@ fn program_name(program: &str) -> String {
     name.strip_suffix(".exe").unwrap_or(&name).to_string()
 }
 
+/// The WSL distribution the session targets: an explicit `--distro`/`-d`
+/// launcher argument wins, otherwise the host default distribution. Only WSL
+/// launchers carry one; other shells return `None`.
+pub(super) fn wsl_distro(shell: &ResolvedLocalShell) -> Option<String> {
+    if program_name(&shell.program) != "wsl" {
+        return None;
+    }
+    wsl_distro_from_launcher(&shell.program, &shell.args).or_else(wsl_default_distro)
+}
+
+/// Distribution selection carried by a WSL launcher configuration
+/// (`-d`/`--distribution`), for callers that reason about a launch
+/// configuration without a live session. The host default distribution is only
+/// known once the session exists.
+pub fn wsl_distro_from_launcher(program: &str, args: &[String]) -> Option<String> {
+    if program_name(program) != "wsl" {
+        return None;
+    }
+    wsl_distro_from_args(args)
+}
+
+/// Read just the distribution selector, tolerating launcher switches this
+/// module does not otherwise understand. `wsl_target` rejects unfamiliar
+/// switches on purpose because it rewrites the launch, but path translation
+/// still needs the distribution for those sessions.
+fn wsl_distro_from_args(args: &[String]) -> Option<String> {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        // Distribution switches only exist before `--exec`/`-e`/`--`.
+        if matches!(arg.as_str(), "--exec" | "-e" | "--") {
+            return None;
+        }
+        if matches!(arg.as_str(), "--distribution" | "-d") {
+            return args
+                .get(index + 1)
+                .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                .cloned();
+        }
+        if let Some(value) = arg.strip_prefix("--distribution=") {
+            return (!value.is_empty()).then(|| value.to_string());
+        }
+        index += 1;
+    }
+    None
+}
+
+#[cfg(windows)]
+fn wsl_default_distro() -> Option<String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW,
+        RegQueryValueExW,
+    };
+
+    fn wide(value: &str) -> Vec<u16> {
+        OsStr::new(value).encode_wide().chain(Some(0)).collect()
+    }
+
+    fn read_string(key: HKEY, name: &[u16]) -> Option<String> {
+        let mut kind: REG_VALUE_TYPE = 0;
+        let mut size: u32 = 0;
+        let status = unsafe {
+            RegQueryValueExW(
+                key,
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        if status != ERROR_SUCCESS || kind != REG_SZ || size < 2 {
+            return None;
+        }
+        let mut buffer = vec![0_u16; size as usize / 2];
+        let status = unsafe {
+            RegQueryValueExW(
+                key,
+                name.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        while buffer.last() == Some(&0) {
+            buffer.pop();
+        }
+        (!buffer.is_empty()).then(|| String::from_utf16_lossy(&buffer))
+    }
+
+    const LXSS_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Lxss";
+    let mut lxss: HKEY = std::ptr::null_mut();
+    if unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            wide(LXSS_KEY).as_ptr(),
+            0,
+            KEY_READ,
+            &mut lxss,
+        )
+    } != ERROR_SUCCESS
+    {
+        return None;
+    }
+    let distro = (|| {
+        let guid = read_string(lxss, &wide("DefaultDistribution"))?;
+        let mut key: HKEY = std::ptr::null_mut();
+        if unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                wide(&format!("{LXSS_KEY}\\{guid}")).as_ptr(),
+                0,
+                KEY_READ,
+                &mut key,
+            )
+        } != ERROR_SUCCESS
+        {
+            return None;
+        }
+        let name = read_string(key, &wide("DistributionName"));
+        unsafe { RegCloseKey(key) };
+        name
+    })();
+    unsafe { RegCloseKey(lxss) };
+    distro
+}
+
+#[cfg(not(windows))]
+fn wsl_default_distro() -> Option<String> {
+    None
+}
+
 fn interactive_args(kind: &str, args: &[String]) -> bool {
     // This deliberately accepts only known startup switches. Commands, scripts,
     // option values, '--', and unfamiliar switches must not be rewritten.
