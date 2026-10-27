@@ -6363,7 +6363,6 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-appender",
- "tracing-log",
  "tracing-subscriber",
  "usvg 0.46.0",
  "uuid",

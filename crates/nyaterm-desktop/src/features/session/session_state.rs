@@ -126,6 +126,18 @@ impl NyaTermApp {
                     env!("CARGO_PKG_VERSION").to_string(),
                 ));
                 details.push((t!("sessionInfo.localOs"), local_os_summary()));
+                details.push((
+                    t!("sessionInfo.nla"),
+                    if config.use_nla { yes() } else { no() },
+                ));
+                details.push((
+                    t!("sessionInfo.remoteSession"),
+                    match crate::platform::is_remote_session() {
+                        Some(true) => yes(),
+                        Some(false) => no(),
+                        None => t!("sessionInfo.notAvailable").to_string(),
+                    },
+                ));
                 details.push((t!("sessionInfo.sectionNetwork"), String::new()));
                 details.push((
                     t!("sessionInfo.transport"),
@@ -141,7 +153,7 @@ impl NyaTermApp {
                 ));
                 details.push((
                     t!("sessionInfo.frameRate"),
-                    t!("sessionInfo.notEnabled").to_string(),
+                    t!("sessionInfo.notMeasured").to_string(),
                 ));
                 details.push((t!("sessionInfo.sectionGraphics"), String::new()));
                 details.push((
@@ -168,18 +180,20 @@ impl NyaTermApp {
                     t!("sessionInfo.colorDepth"),
                     format!("{}-bit", config.display.color_depth),
                 ));
+                let renderer = self.shell.renderer();
+                let kind = match crate::platform::RendererKind::from_specs(renderer) {
+                    crate::platform::RendererKind::Hardware => t!("sessionInfo.hardware"),
+                    crate::platform::RendererKind::Software => t!("sessionInfo.software"),
+                    crate::platform::RendererKind::Unknown => t!("sessionInfo.unknown"),
+                };
                 details.push((
                     t!("sessionInfo.renderer"),
-                    format!(
-                        "{} ({})",
-                        nyaterm_core::diagnostics::renderer_name()
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        if crate::platform::uses_software_renderer() {
-                            t!("sessionInfo.software")
-                        } else {
-                            t!("sessionInfo.hardware")
+                    match renderer {
+                        Some(specs) if !specs.device_name.trim().is_empty() => {
+                            format!("{} ({kind})", specs.device_name)
                         }
-                    ),
+                        _ => kind.to_string(),
+                    },
                 ));
                 details.push((t!("sessionInfo.sectionRemote"), String::new()));
                 details.push((
@@ -192,11 +206,7 @@ impl NyaTermApp {
                 ));
                 details.push((
                     t!("sessionInfo.logonMethod"),
-                    if config.use_nla {
-                        "NLA / CredSSP".to_string()
-                    } else {
-                        "Standard RDP Security".to_string()
-                    },
+                    t!("sessionInfo.notAvailable").to_string(),
                 ));
                 details.push((t!("sessionInfo.host"), config.host.clone()));
                 details.push((t!("sessionInfo.port"), config.port.to_string()));
@@ -204,14 +214,6 @@ impl NyaTermApp {
                 details.push((
                     t!("sessionInfo.consoleSession"),
                     if config.administrative_session {
-                        yes()
-                    } else {
-                        no()
-                    },
-                ));
-                details.push((
-                    t!("sessionInfo.remoteSession"),
-                    if crate::platform::is_remote_session() {
                         yes()
                     } else {
                         no()

@@ -179,6 +179,7 @@ impl NyaTermApp {
     }
 
     pub(crate) fn start_after_window_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shell.capture_renderer(window);
         if let Some(handle) = window.window_handle().downcast::<nyaterm_ui::NyaRoot>() {
             self.shell.remember_main_window(handle);
         }

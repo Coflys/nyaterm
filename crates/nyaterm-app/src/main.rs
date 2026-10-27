@@ -34,7 +34,7 @@ fn main() -> anyhow::Result<()> {
     };
     let activation_tx = instance_owner.activation_sender();
     let activation_rx = instance_owner.take_activation_receiver();
-    let _log_guard = init_tracing(&runtime);
+    let _log_guard = init_tracing(&runtime)?;
     #[cfg(windows)]
     if let Err(error) = nyaterm_transport::local_conpty::configure_from_executable() {
         tracing::warn!(%error, "could not configure bundled ConPTY");
@@ -81,52 +81,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Bridges the `log` facade into `tracing`, and remembers which render adapter
-/// GPUI reported.
-///
-/// GPUI logs `Using GPU: …` through `log`, not `tracing`; without the bridge that
-/// line is lost and the render backend is unobservable. The same line is the only
-/// signal that GPUI fell back to a software rasterizer, which the UI and the
-/// remote-desktop frame path both act on.
-fn install_log_bridge() {
-    struct LogBridge(tracing_log::LogTracer);
-
-    impl log::Log for LogBridge {
-        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-            self.0.enabled(metadata)
-        }
-
-        fn log(&self, record: &log::Record<'_>) {
-            if record.target().starts_with("gpui_windows::directx_devices") {
-                let message = record.args().to_string();
-                if let Some(name) = message.strip_prefix("Using GPU: ") {
-                    let name = name.trim();
-                    nyaterm_core::diagnostics::record_renderer_name(name);
-                    // Recorded here because this is the only place the adapter name
-                    // exists; every later decision (material, effects) reads the
-                    // registry instead of re-querying D3D.
-                    tracing::info!(
-                        renderer = name,
-                        software = nyaterm_core::diagnostics::uses_software_renderer(),
-                        "render adapter"
-                    );
-                }
-            }
-            self.0.log(record);
-        }
-
-        fn flush(&self) {
-            self.0.flush();
-        }
-    }
-
-    if log::set_boxed_logger(Box::new(LogBridge(tracing_log::LogTracer::new()))).is_ok() {
-        log::set_max_level(log::LevelFilter::Info);
-    }
-}
-
-fn init_tracing(runtime: &AppRuntime) -> Option<WorkerGuard> {
-    install_log_bridge();
+fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("nyaterm=info,nyaterm_core=info,nyaterm_transport=info,warn")
     });
@@ -134,10 +89,9 @@ fn init_tracing(runtime: &AppRuntime) -> Option<WorkerGuard> {
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(LOG_FILE_PREFIX)
         .filename_suffix(LOG_FILE_SUFFIX)
-        .build(runtime.log_dir())
-        .ok();
+        .build(runtime.log_dir());
 
-    if let Some(file_appender) = file_appender {
+    if let Ok(file_appender) = file_appender {
         let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
         tracing_subscriber::registry()
             .with(filter)
@@ -148,13 +102,129 @@ fn init_tracing(runtime: &AppRuntime) -> Option<WorkerGuard> {
                     .with_writer(file_writer),
             )
             .try_init()
-            .ok();
-        Some(guard)
+            .context("initialize tracing subscriber and log bridge")?;
+        Ok(Some(guard))
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
+            .finish()
             .try_init()
-            .ok();
-        None
+            .context("initialize tracing subscriber and log bridge")?;
+        if let Err(error) = file_appender {
+            tracing::warn!(%error, "file logging unavailable; using console logging");
+        }
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::init_tracing;
+    use nyaterm_core::AppRuntime;
+    use nyaterm_core::runtime::RuntimeMode;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    #[test]
+    fn logging_child() {
+        let Some(root) = std::env::var_os("NYATERM_LOGGING_TEST_DIR") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let log_dir = root.join("logs");
+        let fallback = std::env::var_os("NYATERM_LOGGING_TEST_FALLBACK").is_some();
+        if fallback {
+            std::fs::write(&log_dir, b"blocked").unwrap();
+        }
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.clone(),
+            root.clone(),
+            log_dir,
+            root.join("cache"),
+            None,
+        );
+        let guard = init_tracing(&runtime).expect("initialize logging once");
+        assert_eq!(guard.is_none(), fallback);
+        assert!(
+            init_tracing(&runtime).is_err(),
+            "duplicate initialization must be visible"
+        );
+        tracing::trace!(target: "nyaterm", "trace-event-marker");
+        log::trace!(target: "nyaterm", "trace-log-marker");
+        tracing::debug!(target: "nyaterm", "debug-event-marker");
+        log::debug!(target: "nyaterm", "debug-log-marker");
+        tracing::error!(target: "nyaterm", "error-event-marker");
+        log::error!(target: "nyaterm", "error-log-marker");
+        drop(guard);
+    }
+
+    #[test]
+    fn logging_bridges_once_and_filters_console_and_jsonl_in_subprocesses() {
+        for (filter, fallback) in [
+            ("nyaterm=trace", false),
+            ("nyaterm=debug", false),
+            ("nyaterm=error", false),
+            ("nyaterm=trace", true),
+        ] {
+            let root =
+                std::env::temp_dir().join(format!("nyaterm-logging-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "tests::logging_child", "--nocapture"])
+                .env("NYATERM_LOGGING_TEST_DIR", &root)
+                .env("RUST_LOG", filter);
+            if fallback {
+                command.env("NYATERM_LOGGING_TEST_FALLBACK", "1");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let console = String::from_utf8_lossy(&output.stdout);
+            let jsonl = if fallback {
+                String::new()
+            } else {
+                std::fs::read_dir(root.join("logs"))
+                    .unwrap()
+                    .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+                    .collect::<String>()
+            };
+            for (level, expected) in [
+                ("trace", filter.ends_with("trace")),
+                ("debug", !filter.ends_with("error")),
+                ("error", true),
+            ] {
+                for source in ["event", "log"] {
+                    let marker = format!("{level}-{source}-marker");
+                    assert_eq!(
+                        console.matches(&marker).count(),
+                        usize::from(expected),
+                        "console: {filter}, {marker}"
+                    );
+                    if !fallback {
+                        let events: Vec<serde_json::Value> = jsonl
+                            .lines()
+                            .map(|line| serde_json::from_str(line).unwrap())
+                            .collect();
+                        assert_eq!(
+                            events
+                                .iter()
+                                .filter(|event| event["fields"]["message"] == marker)
+                                .count(),
+                            usize::from(expected),
+                            "jsonl: {filter}, {marker}"
+                        );
+                    }
+                }
+            }
+            if fallback {
+                assert!(console.contains("file logging unavailable"));
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }
