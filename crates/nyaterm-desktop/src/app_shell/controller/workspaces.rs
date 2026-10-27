@@ -142,7 +142,7 @@ impl DesktopController {
                         .then(|| point(px(9.), px(11.))),
                 }),
                 #[cfg(target_os = "linux")]
-                window_decorations: Some(gpui::WindowDecorations::Client),
+                window_decorations: Some(self.effective_window_decorations(cx)),
                 window_bounds: Some(placement.window_bounds),
                 display_id: placement.display_id,
                 ..Default::default()
@@ -333,9 +333,10 @@ impl DesktopController {
         }
     }
 
-    pub fn release_settings_owner(&mut self, workspace_id: WorkspaceId) {
+    pub fn release_settings_owner(&mut self, workspace_id: WorkspaceId, cx: &mut Context<Self>) {
         if self.settings_owner_workspace_id == Some(workspace_id) {
             self.settings_owner_workspace_id = None;
+            crate::window_chrome::request_window_decoration_refresh(cx);
         }
     }
 

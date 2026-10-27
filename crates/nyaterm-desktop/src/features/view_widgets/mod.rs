@@ -24,7 +24,7 @@ pub(in crate::features) use inspector_widgets::{
 mod stats;
 pub(in crate::features) use stats::stats_progress_bar;
 mod rows;
-pub(in crate::features) use rows::{CloudSyncHistoryRowLabels, cloud_sync_history_row};
+pub(in crate::features) use rows::cloud_sync_history_row;
 
 mod icons;
 pub(in crate::features) use icons::{

@@ -1078,6 +1078,53 @@ mod tests {
     }
 
     #[test]
+    fn window_decorations_preview_cancels_and_apply_persists() {
+        use nyaterm_core::models::window_decoration::WindowDecoration;
+
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_window_decorations(WindowDecoration::Client, cx);
+            assert!(app.settings.draft_dirty_domains().is_empty());
+            app.set_window_decorations(WindowDecoration::Server, cx);
+            assert_eq!(
+                app.window_decoration_preview(),
+                Some(WindowDecoration::Server)
+            );
+            assert!(app.settings_draft_dirty());
+            let stored = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(stored.window_decorations, WindowDecoration::Client);
+            app.cancel_settings(cx);
+            assert_eq!(
+                app.settings.summary().window_decorations,
+                WindowDecoration::Client
+            );
+            assert!(app.window_decoration_preview().is_none());
+            app.begin_settings_draft(cx);
+            app.set_window_decorations(WindowDecoration::Server, cx);
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+        app.update(&mut cx, |app, cx| {
+            let stored = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(stored.window_decorations, WindowDecoration::Server);
+            app.cancel_settings(cx);
+        });
+    }
+
+    #[test]
     fn shared_native_material_settings_refresh_other_workspaces_and_respect_dirty_drafts() {
         use crate::app_shell::{SharedStateDomain, SharedStateEvent};
         use nyaterm_core::models::window_material::WindowMaterial;

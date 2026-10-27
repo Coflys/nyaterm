@@ -26,11 +26,35 @@ pub(in crate::features) enum CloudSyncLiveState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::features) enum SyncHistoryFilter {
+    #[default]
+    All,
+    Success,
+    Failed,
+    Conflict,
+}
+
+impl SyncHistoryFilter {
+    pub(in crate::features) fn matches(self, entry: &CloudSyncHistoryEntry) -> bool {
+        match self {
+            Self::All => true,
+            Self::Success => entry.status == "success",
+            Self::Failed => entry.status == "failed",
+            Self::Conflict => entry.status == "conflict",
+        }
+    }
+}
+
+const HISTORY_PAGE_SIZE: usize = 20;
+
 pub(in crate::features) struct CloudSyncFeatureState {
     settings: CloudSyncSettings,
     state: CloudSyncState,
     history: Vec<CloudSyncHistoryEntry>,
     history_expanded: HashSet<String>,
+    history_filter: SyncHistoryFilter,
+    history_visible_limit: usize,
     conflict: Option<CloudSyncConflictState>,
     pending_resolution: Option<nyaterm_core::cloud_sync::conflict::CloudResolutionRequest>,
     secret_draft: CloudSyncSecretDraft,
@@ -89,6 +113,8 @@ impl CloudSyncFeatureState {
             state,
             history,
             history_expanded: HashSet::new(),
+            history_filter: SyncHistoryFilter::All,
+            history_visible_limit: HISTORY_PAGE_SIZE,
             conflict: None,
             pending_resolution: None,
             secret_draft: CloudSyncSecretDraft::default(),
@@ -130,6 +156,37 @@ impl CloudSyncFeatureState {
 
     pub(in crate::features) fn history_expanded(&self) -> &HashSet<String> {
         &self.history_expanded
+    }
+
+    pub(in crate::features) fn history_filter(&self) -> SyncHistoryFilter {
+        self.history_filter
+    }
+
+    pub(in crate::features) fn filter_history(&mut self, filter: SyncHistoryFilter) {
+        self.history_filter = filter;
+        self.history_visible_limit = HISTORY_PAGE_SIZE;
+    }
+
+    pub(in crate::features) fn history_visible_limit(&self) -> usize {
+        self.history_visible_limit
+    }
+
+    pub(in crate::features) fn show_more_history(&mut self) {
+        self.history_visible_limit = self.history_visible_limit.saturating_add(HISTORY_PAGE_SIZE);
+    }
+
+    /// Historical success is evidence of an earlier operation, never of current
+    /// equality. Only the live conflict owner authorizes resolution actions.
+    pub(in crate::features) fn activity_status(&self) -> &'static str {
+        if self.job_running() {
+            "running"
+        } else if self.conflict.is_some() {
+            "conflict"
+        } else if !self.settings.enabled {
+            "disabled"
+        } else {
+            "idle"
+        }
     }
 
     pub(in crate::features) fn conflict(&self) -> Option<&CloudSyncConflictState> {
@@ -344,6 +401,8 @@ impl CloudSyncFeatureState {
     }
 
     pub(super) fn replace_history(&mut self, history: Vec<CloudSyncHistoryEntry>) {
+        self.history_expanded
+            .retain(|id| history.iter().any(|entry| &entry.id == id));
         self.history = history;
     }
 
@@ -722,7 +781,60 @@ mod tests {
         CloudSyncInputField, CloudSyncSecretDraft, GithubGistAuthEvent, GithubGistAuthJobEvent,
     };
 
-    use super::{CloudSyncFeatureState, CloudSyncLiveState};
+    use super::{CloudSyncFeatureState, CloudSyncLiveState, SyncHistoryFilter};
+
+    #[test]
+    fn historical_success_and_cancelled_prompts_do_not_claim_current_sync_health() {
+        let mut cloud_sync = CloudSyncFeatureState::new(
+            CloudSyncSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            CloudSyncState::default(),
+            vec![CloudSyncHistoryEntry::sync(
+                "success",
+                "manual_provider_push",
+                None,
+                None,
+                "uploaded",
+            )],
+        );
+        assert_eq!(cloud_sync.activity_status(), "idle");
+        cloud_sync.complete_job(CloudSyncState::default(), "uploaded".to_string());
+        cloud_sync.set_status("cancelled");
+        assert_eq!(cloud_sync.activity_status(), "idle");
+        assert_eq!(cloud_sync.status(), "cancelled");
+        assert!(cloud_sync.begin_job());
+        assert_eq!(cloud_sync.activity_status(), "running");
+    }
+
+    #[test]
+    fn history_filter_resets_paging_and_refresh_prunes_only_missing_expansions() {
+        let mut cloud_sync = CloudSyncFeatureState::new(
+            CloudSyncSettings::default(),
+            CloudSyncState::default(),
+            Vec::new(),
+        );
+        let conflict =
+            CloudSyncHistoryEntry::sync("conflict", "manual_provider_push", None, None, "conflict");
+        let success =
+            CloudSyncHistoryEntry::sync("success", "manual_provider_push", None, None, "uploaded");
+        cloud_sync.replace_history(vec![success.clone(), conflict.clone()]);
+        cloud_sync.toggle_history_details(&conflict.id);
+        cloud_sync.show_more_history();
+        assert_eq!(cloud_sync.history_visible_limit(), 40);
+        cloud_sync.filter_history(SyncHistoryFilter::Conflict);
+        assert_eq!(cloud_sync.history_visible_limit(), 20);
+        assert!(cloud_sync.history_filter().matches(&conflict));
+        assert!(!cloud_sync.history_filter().matches(&success));
+        assert!(cloud_sync.history_expanded().contains(&conflict.id));
+        assert!(
+            cloud_sync.conflict().is_none(),
+            "historical conflicts cannot authorize resolution"
+        );
+        cloud_sync.replace_history(vec![success]);
+        assert!(cloud_sync.history_expanded().is_empty());
+    }
 
     #[test]
     fn cloud_sync_state_owns_loaded_data_and_github_job_channel() {
@@ -802,6 +914,7 @@ mod tests {
 
         assert!(cloud_sync.begin_job());
         assert!(!cloud_sync.begin_job());
+        assert_eq!(cloud_sync.activity_status(), "running");
         cloud_sync.fail_job(
             &CloudSyncError::Conflict(Box::new(CloudConflictPreview {
                 branches: Vec::new(),
@@ -829,8 +942,20 @@ mod tests {
         assert_eq!(cloud_sync.live_state(), CloudSyncLiveState::Failed);
         assert_eq!(cloud_sync.status(), "push failed");
         assert_eq!(cloud_sync.conflict().unwrap().preview.provider, "webdav");
+        assert_eq!(cloud_sync.activity_status(), "conflict");
+        // A later failed attempt or a historical success cannot clear a live conflict.
+        cloud_sync.fail_job_with_status("cancelled attempt".to_string());
+        cloud_sync.replace_history(vec![CloudSyncHistoryEntry::sync(
+            "success",
+            "manual_push",
+            None,
+            None,
+            "old upload",
+        )]);
+        assert_eq!(cloud_sync.activity_status(), "conflict");
 
         assert!(cloud_sync.begin_job());
+        assert_eq!(cloud_sync.activity_status(), "running");
         let completed_state = CloudSyncState {
             device_id: "device-2".to_string(),
             ..CloudSyncState::default()

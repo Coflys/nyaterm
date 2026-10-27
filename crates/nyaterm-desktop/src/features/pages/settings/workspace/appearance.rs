@@ -91,6 +91,11 @@ impl SettingsPanel {
                     )),
             ))
             .child(self.window_background_section(cx))
+            .map(|element| {
+                #[cfg(target_os = "linux")]
+                let element = element.child(self.window_decorations_section(cx));
+                element
+            })
             .child(settings_form_section(
                 palette,
                 None,
