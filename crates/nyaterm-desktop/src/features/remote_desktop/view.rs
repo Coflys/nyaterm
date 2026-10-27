@@ -13,6 +13,7 @@ use nyaterm_remote_desktop::{
     LogicalRect, LogicalSize, RdpCertificateResponse, RdpPointerButton, RemoteDesktopViewState,
     VncScaleMode,
 };
+use nyaterm_ui::NyaSelectableText;
 
 use crate::features::NyaTermApp;
 use crate::widgets::small_button;
@@ -155,7 +156,13 @@ impl NyaTermApp {
                         .text_center()
                         .text_size(px(12.))
                         .text_color(rgb(palette.text_dimmed))
-                        .child(format_remote_desktop_error(&error)),
+                        // Selectable, because the protocol reason is exactly what gets
+                        // pasted into a bug report; the window root turns Ctrl+C into a
+                        // copy of the selection and propagates it when there is none.
+                        .child(NyaSelectableText::new(
+                            format!("rdp-error-{session_id}"),
+                            format_remote_desktop_error(&error),
+                        )),
                 )
                 .child(
                     div()
