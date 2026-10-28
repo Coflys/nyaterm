@@ -3468,6 +3468,7 @@
     "click": "单击",
     "connecting": "正在连接...",
     "connectionFailed": "连接失败",
+    "connectionCancelled": "连接已取消",
     "dropFoldersNotSupportedLocal": "本地终端不支持拖入文件夹，请只拖入文件。",
     "dropFoldersZmodemOnly": "文件夹无法通过 ZMODEM 上传，请使用文件浏览器进行 SFTP 上传。",
     "dropOverlayHintLocal": "文件路径将插入到命令行",

@@ -3475,6 +3475,7 @@
     "click": "클릭",
     "connecting": "연결 중...",
     "connectionFailed": "연결 실패",
+    "connectionCancelled": "연결이 취소되었습니다",
     "dropFoldersNotSupportedLocal": "로컬 터미널에서는 폴더를 경로로 삽입할 수 없습니다.",
     "dropFoldersZmodemOnly": "ZMODEM으로는 폴더를 업로드할 수 없습니다. SFTP 업로드는 파일 탐색기를 사용하세요.",
     "dropOverlayHintLocal": "파일 경로가 명령줄에 삽입됩니다",

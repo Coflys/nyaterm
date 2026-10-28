@@ -3474,6 +3474,7 @@
     "click": "クリック",
     "connecting": "接続中...",
     "connectionFailed": "接続に失敗しました",
+    "connectionCancelled": "接続をキャンセルしました",
     "dropFoldersNotSupportedLocal": "ローカルターミナルではフォルダーをパスとして挿入できません。",
     "dropFoldersZmodemOnly": "フォルダーは ZMODEM でアップロードできません。SFTP アップロードにはファイルエクスプローラーを使用してください。",
     "dropOverlayHintLocal": "ファイルパスがコマンドラインに挿入されます",

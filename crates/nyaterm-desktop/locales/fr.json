@@ -3474,6 +3474,7 @@
     "click": "Cliquer",
     "connecting": "Connexion…",
     "connectionFailed": "Échec de la connexion",
+    "connectionCancelled": "Connexion annulée",
     "dropFoldersNotSupportedLocal": "Les dossiers ne peuvent pas être insérés comme chemins dans un terminal local.",
     "dropFoldersZmodemOnly": "Les dossiers ne peuvent pas être téléversés via ZMODEM. Utilisez l'explorateur de fichiers pour les téléversements SFTP.",
     "dropOverlayHintLocal": "Les chemins de fichiers seront insérés dans la ligne de commande",

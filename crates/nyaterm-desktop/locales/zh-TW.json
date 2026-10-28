@@ -3475,6 +3475,7 @@
     "click": "單擊",
     "connecting": "正在連線...",
     "connectionFailed": "連線失敗",
+    "connectionCancelled": "連線已取消",
     "dropFoldersNotSupportedLocal": "本機終端不支援拖入資料夾，請只拖入檔案。",
     "dropFoldersZmodemOnly": "資料夾無法透過 ZMODEM 上傳，請使用檔案瀏覽器進行 SFTP 上傳。",
     "dropOverlayHintLocal": "檔案路徑將插入到命令列",
