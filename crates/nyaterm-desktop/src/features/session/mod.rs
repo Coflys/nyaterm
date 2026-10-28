@@ -14,6 +14,7 @@ mod session_lifecycle;
 mod session_order;
 mod session_runtime;
 mod session_state;
+mod start_tab_actions;
 mod startup_restore_runtime;
 mod state;
 mod temporary_ssh_link;

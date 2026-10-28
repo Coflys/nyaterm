@@ -1332,7 +1332,7 @@ fn session_state_owns_live_runtime_and_initializes_transient_state() {
     );
     assert!(matches!(
         sessions.dialogs.take_rename_submission(),
-        RenameSessionSubmission::Ready { session_id, name }
+        RenameSessionSubmission::Ready { target: crate::features::shell::tab_mouse::TabActionTarget::Session(session_id), name }
             if session_id == "session-a" && name == "renamed"
     ));
 
@@ -2244,6 +2244,7 @@ fn closing_pending_starts_preserves_non_reconnect_and_failed_fallback_order() {
         FailedSessionStart {
             pending: pending("failed"),
             error: "failed".to_string(),
+            reason: super::SessionStartEndReason::Failed,
         },
     );
 
@@ -2529,3 +2530,5 @@ fn zmodem_handoff_preserves_ui_then_bridge_order_and_other_sessions() {
     state.finish_zmodem_runtime("z", result.pending_events);
     assert_eq!(state.pending_event_count(), 3);
 }
+
+mod tab_actions;

@@ -711,7 +711,7 @@ impl NyaTermApp {
     ) -> Stateful<Div> {
         let terminal_overlays = self.terminal.overlay_visibility();
         let overlay = OverlayFlags {
-            tab_actions_open: self.session.dialog_tab_actions_session_id().is_some(),
+            tab_actions_open: self.session.dialog_tab_actions_target().is_some(),
             color_picker_open: self.session.dialog_color_picker_is_open(),
             session_info_open: self.session.dialog_session_info_is_open(),
             multi_line_paste_open: terminal_overlays.paste_review,

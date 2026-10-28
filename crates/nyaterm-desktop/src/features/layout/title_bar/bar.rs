@@ -971,7 +971,18 @@ impl NyaTermApp {
             return Some(IconDef::mono("icons/conn/connect.svg", 0x60a5fa));
         }
         if self.session.start_has_active_failed() {
-            return Some(IconDef::mono("icons/session/disconnect.svg", 0xf87171));
+            let cancelled = self
+                .session
+                .active_failed_request_id()
+                .is_some_and(|id| self.session.start_request_cancelled(id));
+            return Some(IconDef::mono(
+                "icons/session/disconnect.svg",
+                if cancelled {
+                    self.theme_palette().text_muted
+                } else {
+                    0xf87171
+                },
+            ));
         }
         if let Some(session_id) = self.session.active_id()
             && let Some(session) = self.session.session_info(session_id)
@@ -989,7 +1000,19 @@ impl NyaTermApp {
             return Some(IconDef::mono("icons/conn/connect.svg", 0x60a5fa));
         }
         if self.session.start_has_failed() || self.shell.last_connect_failure_name().is_some() {
-            return Some(IconDef::mono("icons/session/disconnect.svg", 0xf87171));
+            let only_cancelled = self.shell.last_connect_failure_name().is_none()
+                && self
+                    .session
+                    .start_failed_entries()
+                    .all(|(id, _)| self.session.start_request_cancelled(id));
+            return Some(IconDef::mono(
+                "icons/session/disconnect.svg",
+                if only_cancelled {
+                    self.theme_palette().text_muted
+                } else {
+                    0xf87171
+                },
+            ));
         }
         None
     }

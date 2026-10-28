@@ -29,6 +29,15 @@ impl NyaTermApp {
         &mut self,
         mut options: SavedConnectionStartOptions,
     ) -> SavedConnectionStartOptions {
+        if let Some(request_id) = options.retry_request_id.as_ref()
+            && let Some((_, pending)) = self
+                .session
+                .start
+                .pending_entries()
+                .find(|(id, _)| *id == request_id)
+        {
+            options.custom_name = pending.custom_name.clone();
+        }
         options.tab_placement = options
             .tab_placement
             .map(|p| self.session.start.resolve_placement(p));

@@ -3,11 +3,13 @@ use rust_i18n::t;
 use gpui::{Context, Window};
 use nyaterm_core::ConnectionType;
 use nyaterm_store::StoreDomain;
+use nyaterm_ui::NyaDialogWindowExt as _;
 
 use crate::features::NyaTermApp;
 use crate::models::{SessionLaunchConfig, StartupCommandAction};
 
 use super::state::RenameSessionSubmission;
+use crate::features::shell::tab_mouse::TabActionTarget;
 
 impl NyaTermApp {
     pub(in crate::features) fn open_rename_session(
@@ -16,28 +18,80 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(current_name) = self.session.display_name(&session_id) else {
+        self.open_rename_tab_target(TabActionTarget::Session(session_id), window, cx);
+    }
+
+    pub(in crate::features) fn open_rename_tab_target(
+        &mut self,
+        target: TabActionTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current_name) = self.session.tab_action_display_name(&target) else {
             self.shell
                 .set_status("session no longer exists".to_string());
             cx.notify();
             return;
         };
-        self.session.dialogs.open_rename(session_id, &current_name);
+        self.session.dialogs.open_tab_rename(target, &current_name);
         self.forget_text_inputs("session.rename");
         self.shell.set_status("rename tab opened".to_string());
-        self.open_form_dialog(
+        let handle = self.open_tracked_form_dialog(
             (
                 t!("tabCtx.renameTitle").to_string(),
                 320.,
                 t!("common.save").to_string(),
-                |app, _, cx| app.rename_session_dialog_content(cx),
+                |app, window, cx| {
+                    app.dismiss_missing_tab_rename(window, cx);
+                    app.rename_session_dialog_content(cx)
+                },
                 |app, _, cx| app.submit_rename_session(cx),
                 |app, cx| app.close_rename_session(cx),
             ),
             window,
             cx,
         );
+        self.session.dialogs.set_rename_dialog_handle(handle);
         cx.notify();
+    }
+
+    fn dismiss_missing_tab_rename(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.session.dialogs.rename_target().cloned() else {
+            return;
+        };
+        if self.session.tab_action_display_name(&target).is_some() {
+            return;
+        }
+        let Some(handle) = self.session.dialogs.rename_dialog_handle().cloned() else {
+            return;
+        };
+        if !handle.is_top(window, cx) {
+            return;
+        }
+        let app = cx.weak_entity();
+        let window = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                if !handle.is_top(window, cx) {
+                    return;
+                }
+                let close = app
+                    .update(cx, |app, cx| {
+                        if app.session.dialogs.rename_target() == Some(&target)
+                            && app.session.tab_action_display_name(&target).is_none()
+                        {
+                            app.close_rename_session(cx);
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
+                if close {
+                    window.close_nya_dialog(cx);
+                }
+            });
+        });
     }
 
     pub(in crate::features) fn close_rename_session(&mut self, cx: &mut Context<Self>) {
@@ -48,7 +102,16 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn submit_rename_session(&mut self, cx: &mut Context<Self>) -> bool {
-        let (session_id, trimmed) = match self.session.dialogs.take_rename_submission() {
+        if self
+            .session
+            .dialogs
+            .rename_target()
+            .is_some_and(|target| self.session.tab_action_display_name(target).is_none())
+        {
+            self.close_rename_session(cx);
+            return true;
+        }
+        let (target, trimmed) = match self.session.dialogs.take_rename_submission() {
             RenameSessionSubmission::Inactive => {
                 self.shell.set_status("no tab rename is active".to_string());
                 cx.notify();
@@ -60,12 +123,14 @@ impl NyaTermApp {
                 cx.notify();
                 return false;
             }
-            RenameSessionSubmission::Ready { session_id, name } => (session_id, name),
+            RenameSessionSubmission::Ready { target, name } => (target, name),
         };
         self.forget_text_inputs("session.rename");
-        self.session
-            .set_custom_name(session_id.clone(), trimmed.clone());
-        self.shell.set_status(format!("renamed tab to {trimmed}"));
+        if self.session.rename_tab_target(&target, trimmed.clone()) {
+            self.shell.set_status(format!("renamed tab to {trimmed}"));
+        } else {
+            self.shell.set_status("tab no longer exists".to_string());
+        }
         cx.notify();
         true
     }

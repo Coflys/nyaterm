@@ -90,12 +90,19 @@ impl NyaTermApp {
     ) -> impl IntoElement {
         let palette = self.theme_palette();
         let hover_bg = self.shell_surface_color(palette.hover);
+        let action_target = self
+            .session
+            .start_request_target(&request_id)
+            .expect("visible start has a placement");
+        let middle_target = action_target.clone();
+        let right_target = action_target.clone();
         let close_request_id = request_id.clone();
         let spinner_id = SharedString::from(format!("pending-session-spinner-{request_id}"));
         div()
             .id(SharedString::from(format!(
                 "pending-session-tab-{request_id}"
             )))
+            .debug_selector(|| format!("pending-session-tab-{request_id}"))
             .h_full()
             .min_w(px(SESSION_TAB_MIN_WIDTH))
             .max_w(px(SESSION_TAB_MAX_WIDTH))
@@ -172,6 +179,9 @@ impl NyaTermApp {
                     .id(SharedString::from(format!(
                         "pending-session-tab-close-{close_request_id}"
                     )))
+                    .debug_selector(|| format!("pending-session-tab-close-{close_request_id}"))
+                    .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .tooltip(|window, cx| {
                         nyaterm_ui::NyaTooltip::new(t!("common.close").to_string())
                             .build(window, cx)
@@ -204,9 +214,21 @@ impl NyaTermApp {
                         this.close_pending_session_start(close_request_id.clone(), cx);
                     })),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.select_pending_session_start(request_id.clone(), cx);
+            .on_click(cx.listener(move |this, event, window, cx| {
+                this.handle_tab_target_click(action_target.clone(), event, window, cx);
             }))
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, event, window, cx| {
+                    this.handle_tab_target_mouse_down(middle_target.clone(), event, window, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event, window, cx| {
+                    this.handle_tab_target_mouse_down(right_target.clone(), event, window, cx);
+                }),
+            )
     }
 
     fn failed_session_tab(
@@ -227,8 +249,19 @@ impl NyaTermApp {
             unreachable!("failed tab requires a failed connection attempt");
         };
         let palette = self.theme_palette();
+        let action_target = self
+            .session
+            .start_request_target(&request_id)
+            .expect("visible start has a placement");
+        let middle_target = action_target.clone();
+        let right_target = action_target.clone();
         let close_request_id = request_id.clone();
-        let select_request_id = request_id.clone();
+        let cancelled = self.session.start_request_cancelled(&request_id);
+        let accent = if cancelled {
+            palette.text_muted
+        } else {
+            palette.danger
+        };
         let key = SessionStripTabId::Start(sequence).layout_key();
         let motion = self.shell.tab_strip_motion(group.clone());
         let width = motion.borrow().width(&key).unwrap_or(188.);
@@ -245,9 +278,9 @@ impl NyaTermApp {
             kind_icon: "icons/session/disconnect.svg",
             preview_background: palette.surface,
             preview_border: palette.border,
-            preview_text: palette.danger,
+            preview_text: accent,
             preview_text_muted: palette.text_muted,
-            preview_accent: palette.danger,
+            preview_accent: accent,
         };
         let app = cx.weak_entity();
         let drop_request_id = request_id.clone();
@@ -269,9 +302,9 @@ impl NyaTermApp {
             .border_color(rgb(palette.border))
             .when(!active, |this| this.border_b_1())
             .bg(if active {
-                rgba((palette.danger << 8) | 0x24)
+                rgba((accent << 8) | 0x24)
             } else {
-                rgba((palette.danger << 8) | 0x12)
+                rgba((accent << 8) | 0x12)
             })
             .cursor_move()
             .when(source, |this| {
@@ -288,7 +321,7 @@ impl NyaTermApp {
                     app.drop_on_session_start_tab(payload, &group, &drop_request_id, cx);
                 }),
             )
-            .hover(|this| this.bg(rgba((palette.danger << 8) | 0x24)))
+            .hover(|this| this.bg(rgba((accent << 8) | 0x24)))
             .when(active, |this| {
                 this.child(
                     div()
@@ -298,7 +331,7 @@ impl NyaTermApp {
                         .left_0()
                         .right_0()
                         .h(px(2.))
-                        .bg(rgb(palette.danger)),
+                        .bg(rgb(accent)),
                 )
             })
             .child(
@@ -311,7 +344,7 @@ impl NyaTermApp {
                         svg()
                             .size(px(12.))
                             .path("icons/session/disconnect.svg")
-                            .text_color(rgb(palette.danger)),
+                            .text_color(rgb(accent)),
                     ),
             )
             .child(
@@ -332,7 +365,7 @@ impl NyaTermApp {
                     } else {
                         FontWeight(500.)
                     })
-                    .text_color(rgb(palette.danger))
+                    .text_color(rgb(accent))
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
@@ -343,6 +376,9 @@ impl NyaTermApp {
                     .id(SharedString::from(format!(
                         "failed-session-tab-close-{close_request_id}"
                     )))
+                    .debug_selector(|| format!("failed-session-tab-close-{close_request_id}"))
+                    .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .tooltip(|window, cx| {
                         nyaterm_ui::NyaTooltip::new(t!("common.close").to_string())
                             .build(window, cx)
@@ -357,7 +393,7 @@ impl NyaTermApp {
                     .rounded_sm()
                     .text_xs()
                     .text_color(rgb(palette.text_muted))
-                    .hover(|this| this.bg(rgb(palette.border)).text_color(rgb(palette.danger)))
+                    .hover(|this| this.bg(rgb(palette.border)).text_color(rgb(accent)))
                     .child(
                         svg()
                             .size(px(13.))
@@ -367,7 +403,7 @@ impl NyaTermApp {
                                 SharedString::from(format!(
                                     "failed-session-tab-close-group-{close_request_id}"
                                 )),
-                                |this| this.text_color(rgb(palette.danger)),
+                                |this| this.text_color(rgb(accent)),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -379,9 +415,21 @@ impl NyaTermApp {
                 cx.new(|_| SessionTabTooltip::new(failed_name.clone(), vec![failed_error.clone()]))
                     .into()
             })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.select_failed_session_start(select_request_id.clone(), cx);
+            .on_click(cx.listener(move |this, event, window, cx| {
+                this.handle_tab_target_click(action_target.clone(), event, window, cx);
             }))
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, event, window, cx| {
+                    this.handle_tab_target_mouse_down(middle_target.clone(), event, window, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event, window, cx| {
+                    this.handle_tab_target_mouse_down(right_target.clone(), event, window, cx);
+                }),
+            )
     }
 
     pub(in crate::features) fn main_surface(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
