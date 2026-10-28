@@ -1,7 +1,5 @@
 use rust_i18n::t;
 
-use std::borrow::Cow;
-
 use gpui::{
     Context, FontWeight, IntoElement, ScrollDelta, ScrollWheelEvent, SharedString, div, prelude::*,
     px, rgb, rgba, svg,
@@ -11,7 +9,7 @@ use nyaterm_transport::{
     CpuCoreUsage, RemoteGpu, RemoteGpuOverview, RemoteGpuProcess, RemoteNpu, RemoteNpuOverview,
     RemoteNpuProcess,
 };
-use nyaterm_ui::NyaScrollable;
+use nyaterm_ui::{NyaScrollable, NyaTooltip};
 
 use std::sync::Arc;
 
@@ -390,6 +388,7 @@ pub(in crate::features::pages::remote) fn gpu_panel(
     gpu_state: GpuPresentationState,
     processes: Arc<[RemoteGpuProcess]>,
     search: Entity<NyaInputState>,
+    panel_width: f32,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::AnyElement {
     let palette = chrome.palette;
@@ -406,6 +405,7 @@ pub(in crate::features::pages::remote) fn gpu_panel(
     let content = match gpu_state.data.as_ref() {
         Some(overview) if overview.available && !overview.gpus.is_empty() => rich_gpu_panel(
             palette,
+            panel_width,
             overview,
             &gpu_state,
             processes,
@@ -440,6 +440,7 @@ pub(in crate::features::pages::remote) fn npu_panel(
     npu_state: NpuPresentationState,
     processes: Arc<[RemoteNpuProcess]>,
     search: Entity<NyaInputState>,
+    panel_width: f32,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::AnyElement {
     let palette = chrome.palette;
@@ -454,6 +455,7 @@ pub(in crate::features::pages::remote) fn npu_panel(
     let content = match npu_state.data.as_ref() {
         Some(overview) if overview.available && !overview.npus.is_empty() => rich_npu_panel(
             palette,
+            panel_width,
             overview,
             &npu_state,
             processes,
@@ -481,9 +483,9 @@ pub(in crate::features::pages::remote) fn npu_panel(
         .into_any_element()
 }
 
-const ACCELERATOR_PROCESS_ROW_HEIGHT_PX: f32 = 56.;
-const ACCELERATOR_PROCESS_LIST_MAX_HEIGHT_PX: f32 = 320.;
-const ACCELERATOR_PROCESS_OVERSCAN: usize = 6;
+const ACCELERATOR_PROCESS_ROW_HEIGHT_PX: f32 = 72.;
+const ACCELERATOR_PROCESS_LIST_MAX_HEIGHT_PX: f32 =
+    ACCELERATOR_PROCESS_ROW_HEIGHT_PX * ACCELERATOR_PROCESS_VIEWPORT_ROWS as f32;
 
 #[derive(Clone)]
 struct GpuSummary {
@@ -505,6 +507,7 @@ struct NpuSummary {
 
 fn rich_gpu_panel(
     palette: crate::theme::ThemePalette,
+    panel_width: f32,
     overview: &RemoteGpuOverview,
     state: &GpuPresentationState,
     processes: Arc<[RemoteGpuProcess]>,
@@ -517,14 +520,21 @@ fn rich_gpu_panel(
     // them when the overview or the query changes. This pass only reads them.
     let total_processes = processes.len();
     let offset = state.process_list_offset;
-    let (visible_processes, pad_top, pad_bottom) = accelerator_visible_window(&processes, offset);
+    let visible_processes = accelerator_visible_window(&processes, offset);
     let list_height = accelerator_process_list_height(total_processes);
 
-    let mut cards = div().flex().flex_col().gap_2();
+    let mut cards = div()
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_2();
     for gpu in &overview.gpus {
         let key = gpu_device_key(gpu.index, &gpu.uuid);
         cards = cards.child(gpu_card(
             palette,
+            panel_width,
             gpu,
             state.expanded_devices.contains(&key),
             key,
@@ -535,13 +545,15 @@ fn rich_gpu_panel(
     div()
         .id(SharedString::from("gpu-monitor-scroll"))
         .size_full()
-        .overflow_scrollbar()
+        .overflow_x_hidden()
+        .overflow_y_scrollbar()
         .p(px(10.))
         .flex()
         .flex_col()
         .gap_2()
         .child(accelerator_summary_grid(
             palette,
+            panel_width,
             vec![
                 (&t!("gpuMonitor.gpus"), summary.count.to_string()),
                 (
@@ -572,8 +584,6 @@ fn rich_gpu_panel(
                     .into_iter()
                     .map(|process| gpu_process_row(palette, &process))
                     .collect(),
-                pad_top,
-                pad_bottom,
                 list_height,
             },
             if normalized_query.is_empty() {
@@ -597,6 +607,7 @@ fn rich_gpu_panel(
 
 fn rich_npu_panel(
     palette: crate::theme::ThemePalette,
+    panel_width: f32,
     overview: &RemoteNpuOverview,
     state: &NpuPresentationState,
     processes: Arc<[RemoteNpuProcess]>,
@@ -609,14 +620,21 @@ fn rich_npu_panel(
     // them when the overview or the query changes. This pass only reads them.
     let total_processes = processes.len();
     let offset = state.process_list_offset;
-    let (visible_processes, pad_top, pad_bottom) = accelerator_visible_window(&processes, offset);
+    let visible_processes = accelerator_visible_window(&processes, offset);
     let list_height = accelerator_process_list_height(total_processes);
 
-    let mut cards = div().flex().flex_col().gap_2();
+    let mut cards = div()
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_2();
     for npu in &overview.npus {
         let key = npu.device_key.clone();
         cards = cards.child(npu_card(
             palette,
+            panel_width,
             npu,
             state.expanded_devices.contains(&key),
             key,
@@ -627,13 +645,15 @@ fn rich_npu_panel(
     div()
         .id(SharedString::from("npu-monitor-scroll"))
         .size_full()
-        .overflow_scrollbar()
+        .overflow_x_hidden()
+        .overflow_y_scrollbar()
         .p(px(10.))
         .flex()
         .flex_col()
         .gap_2()
         .child(accelerator_summary_grid(
             palette,
+            panel_width,
             vec![
                 (&t!("ascendNpuMonitor.npus"), summary.count.to_string()),
                 (
@@ -664,8 +684,6 @@ fn rich_npu_panel(
                     .into_iter()
                     .map(|process| npu_process_row(palette, &process))
                     .collect(),
-                pad_top,
-                pad_bottom,
                 list_height,
             },
             if normalized_query.is_empty() {
@@ -689,9 +707,16 @@ fn rich_npu_panel(
 
 fn accelerator_summary_grid(
     palette: crate::theme::ThemePalette,
+    panel_width: f32,
     items: Vec<(&str, String)>,
 ) -> gpui::Div {
-    let mut grid = div().grid().grid_cols(2).gap_1();
+    let mut grid = div()
+        .flex_none()
+        .w_full()
+        .min_w_0()
+        .grid()
+        .grid_cols(if panel_width < 360. { 1 } else { 2 })
+        .gap_2();
     for (label, value) in items {
         grid = grid.child(
             div()
@@ -717,7 +742,8 @@ fn accelerator_summary_grid(
                         .text_size(px(14.))
                         .font_weight(FontWeight(700.))
                         .text_color(rgb(palette.text))
-                        .child(truncate_preview(&value, 22)),
+                        .whitespace_normal()
+                        .child(value),
                 ),
         );
     }
@@ -726,6 +752,7 @@ fn accelerator_summary_grid(
 
 fn gpu_card(
     palette: crate::theme::ThemePalette,
+    panel_width: f32,
     gpu: &RemoteGpu,
     expanded: bool,
     key: String,
@@ -745,14 +772,18 @@ fn gpu_card(
         }),
         AcceleratorDeviceCardContent {
             header: div()
+                .min_w_0()
                 .flex()
+                .flex_wrap()
                 .items_start()
                 .justify_between()
                 .gap_2()
                 .child(
                     div()
                         .min_w_0()
+                        .flex_1()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap_2()
                         .child(accelerator_badge(
@@ -768,15 +799,12 @@ fn gpu_card(
                                 .font_weight(FontWeight(700.))
                                 .text_size(px(13.))
                                 .text_color(rgb(palette.text))
-                                .child(truncate_preview(
-                                    if gpu.name.trim().is_empty() {
-                                        t!("gpuMonitor.unknownGpu")
-                                    } else {
-                                        Cow::Borrowed(gpu.name.as_str())
-                                    }
-                                    .as_ref(),
-                                    28,
-                                )),
+                                .whitespace_normal()
+                                .child(if gpu.name.trim().is_empty() {
+                                    t!("gpuMonitor.unknownGpu").into_owned()
+                                } else {
+                                    gpu.name.clone()
+                                }),
                         ),
                 )
                 .child(
@@ -818,7 +846,7 @@ fn gpu_card(
                     ),
                 )),
             details: if expanded {
-                gpu_details(palette, gpu).into_any_element()
+                gpu_details(palette, panel_width, gpu).into_any_element()
             } else {
                 div().into_any_element()
             },
@@ -828,6 +856,7 @@ fn gpu_card(
 
 fn npu_card(
     palette: crate::theme::ThemePalette,
+    panel_width: f32,
     npu: &RemoteNpu,
     expanded: bool,
     key: String,
@@ -847,14 +876,18 @@ fn npu_card(
         }),
         AcceleratorDeviceCardContent {
             header: div()
+                .min_w_0()
                 .flex()
+                .flex_wrap()
                 .items_start()
                 .justify_between()
                 .gap_2()
                 .child(
                     div()
                         .min_w_0()
+                        .flex_1()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap_2()
                         .child(accelerator_badge(
@@ -870,15 +903,12 @@ fn npu_card(
                                 .font_weight(FontWeight(700.))
                                 .text_size(px(13.))
                                 .text_color(rgb(palette.text))
-                                .child(truncate_preview(
-                                    if npu.name.trim().is_empty() {
-                                        t!("ascendNpuMonitor.unknownNpu")
-                                    } else {
-                                        Cow::Borrowed(npu.name.as_str())
-                                    }
-                                    .as_ref(),
-                                    28,
-                                )),
+                                .whitespace_normal()
+                                .child(if npu.name.trim().is_empty() {
+                                    t!("ascendNpuMonitor.unknownNpu").into_owned()
+                                } else {
+                                    npu.name.clone()
+                                }),
                         ),
                 )
                 .child(
@@ -924,7 +954,7 @@ fn npu_card(
                     },
                 )),
             details: if expanded {
-                npu_details(palette, npu).into_any_element()
+                npu_details(palette, panel_width, npu).into_any_element()
             } else {
                 div().into_any_element()
             },
@@ -954,6 +984,9 @@ fn accelerator_device_card(
     let accent = accelerator_accent_color(palette, severity_percent);
     div()
         .id(SharedString::from(format!("{id_prefix}-{key}")))
+        .w_full()
+        .min_w_0()
+        .flex_none()
         .rounded_md()
         .border_1()
         .border_color(rgb(accent))
@@ -961,7 +994,7 @@ fn accelerator_device_card(
         .px_3()
         .py_2()
         .cursor_pointer()
-        .hover(|this| this.bg(rgba(0x38bdf80f)))
+        .hover(|this| this.bg(rgb(palette.hover)))
         .on_click(on_toggle)
         .child(header)
         .child(metrics)
@@ -1020,13 +1053,16 @@ fn accelerator_metric_bar(
     let label: SharedString = label.into();
     let ratio = (value_percent / 100.).clamp(0., 1.);
     div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_1()
         .child(
             div()
                 .flex()
-                .items_center()
+                .flex_wrap()
+                .items_start()
                 .justify_between()
                 .gap_2()
                 .text_size(px(11.))
@@ -1039,6 +1075,8 @@ fn accelerator_metric_bar(
                     div()
                         .font_family(gpui_code_font_family())
                         .text_color(rgb(palette.text_muted))
+                        .min_w_0()
+                        .whitespace_normal()
                         .child(detail),
                 ),
         )
@@ -1058,9 +1096,14 @@ fn accelerator_metric_bar(
         )
 }
 
-fn gpu_details(palette: crate::theme::ThemePalette, gpu: &RemoteGpu) -> gpui::Div {
+fn gpu_details(
+    palette: crate::theme::ThemePalette,
+    panel_width: f32,
+    gpu: &RemoteGpu,
+) -> gpui::Div {
     accelerator_detail_grid(
         palette,
+        panel_width,
         vec![
             (
                 &t!("gpuMonitor.uuid"),
@@ -1090,9 +1133,14 @@ fn gpu_details(palette: crate::theme::ThemePalette, gpu: &RemoteGpu) -> gpui::Di
     )
 }
 
-fn npu_details(palette: crate::theme::ThemePalette, npu: &RemoteNpu) -> gpui::Div {
+fn npu_details(
+    palette: crate::theme::ThemePalette,
+    panel_width: f32,
+    npu: &RemoteNpu,
+) -> gpui::Div {
     accelerator_detail_grid(
         palette,
+        panel_width,
         vec![
             (
                 &t!("ascendNpuMonitor.device"),
@@ -1138,38 +1186,45 @@ fn npu_details(palette: crate::theme::ThemePalette, npu: &RemoteNpu) -> gpui::Di
 
 fn accelerator_detail_grid(
     palette: crate::theme::ThemePalette,
+    panel_width: f32,
     items: Vec<(&str, String)>,
 ) -> gpui::Div {
-    let mut grid = div().mt_2().grid().grid_cols(2).gap_1();
-    for (label, value) in items {
+    let columns = if panel_width < 520. { 1 } else { 2 };
+    let mut grid = div()
+        .flex_none()
+        .w_full()
+        .min_w_0()
+        .mt_2()
+        .grid()
+        .grid_cols(columns)
+        .gap_2();
+    for (index, (label, value)) in items.into_iter().enumerate() {
         grid = grid.child(
             div()
-                .rounded_md()
-                .bg(rgba((palette.input << 8) | 0x66))
+                .min_w_0()
+                .when(index == 0, |this| this.col_span(columns))
+                .flex()
+                .flex_col()
+                .gap_1()
                 .px_2()
                 .py_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap_1()
                 .child(
                     div()
-                        .min_w_0()
-                        .flex_1()
-                        .overflow_hidden()
                         .text_size(px(10.))
                         .text_color(rgb(palette.text_muted))
-                        .child(truncate_preview(label, 18)),
+                        .whitespace_normal()
+                        .child(label.to_string()),
                 )
                 .child(
                     div()
+                        .debug_selector(move || format!("accelerator-detail-value-{index}"))
                         .min_w_0()
-                        .overflow_hidden()
-                        .text_right()
+                        .w_full()
+                        .whitespace_normal()
                         .font_family(gpui_code_font_family())
-                        .text_size(px(10.))
+                        .text_size(px(11.))
                         .text_color(rgb(palette.text))
-                        .child(truncate_preview(&value, 28)),
+                        .child(value),
                 ),
         );
     }
@@ -1178,8 +1233,6 @@ fn accelerator_detail_grid(
 
 struct AcceleratorProcessWindow {
     rows: Vec<gpui::Div>,
-    pad_top: f32,
-    pad_bottom: f32,
     list_height: f32,
 }
 
@@ -1191,12 +1244,7 @@ fn accelerator_process_section(
     empty_message: impl Into<SharedString>,
     on_scroll: impl Fn(&ScrollWheelEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
-    let AcceleratorProcessWindow {
-        rows,
-        pad_top,
-        pad_bottom,
-        list_height,
-    } = window;
+    let AcceleratorProcessWindow { rows, list_height } = window;
     let empty_message: SharedString = empty_message.into();
     let mut list_rows = div().flex().flex_col();
     if total_processes == 0 {
@@ -1212,27 +1260,36 @@ fn accelerator_process_section(
                 .child(empty_message.to_string()),
         );
     } else {
-        if pad_top > 0. {
-            list_rows = list_rows.child(div().h(px(pad_top)).w_full().flex_none());
-        }
         for row in rows {
             list_rows = list_rows.child(row);
         }
-        if pad_bottom > 0. {
-            list_rows = list_rows.child(div().h(px(pad_bottom)).w_full().flex_none());
-        }
     }
 
-    div().flex().flex_col().gap_2().child(search_input).child(
-        div()
-            .h(px(list_height))
-            .max_h(px(ACCELERATOR_PROCESS_LIST_MAX_HEIGHT_PX))
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .on_scroll_wheel(on_scroll)
-            .child(list_rows),
-    )
+    div()
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .h(px(32.))
+                .w_full()
+                .min_w_0()
+                .flex_none()
+                .child(search_input),
+        )
+        .child(
+            div()
+                .h(px(list_height))
+                .max_h(px(ACCELERATOR_PROCESS_LIST_MAX_HEIGHT_PX))
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .on_scroll_wheel(on_scroll)
+                .child(list_rows),
+        )
 }
 
 fn gpu_process_row(palette: crate::theme::ThemePalette, process: &RemoteGpuProcess) -> gpui::Div {
@@ -1283,50 +1340,48 @@ fn accelerator_process_row(
     meta: String,
     memory: String,
 ) -> gpui::Div {
+    let full_name = name.clone();
     div()
+        .w_full()
+        .min_w_0()
         .h(px(ACCELERATOR_PROCESS_ROW_HEIGHT_PX))
         .flex_none()
         .pb_1()
         .child(
             div()
                 .size_full()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(palette.border))
-                .bg(rgba((palette.surface_elevated << 8) | 0x33))
+                .min_w_0()
                 .px_2()
-                .py_2()
+                .py_1()
                 .flex()
-                .items_center()
-                .gap_2()
+                .flex_col()
+                .justify_center()
+                .gap_1()
+                .border_b_1()
+                .border_color(rgb(palette.border))
                 .child(
                     div()
+                        .id(SharedString::from(format!("accelerator-process-{meta}")))
                         .min_w_0()
-                        .flex_1()
-                        .child(
-                            div()
-                                .overflow_hidden()
-                                .font_weight(FontWeight(700.))
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.text))
-                                .child(truncate_preview(&name, 32)),
-                        )
-                        .child(
-                            div()
-                                .mt(px(2.))
-                                .font_family(gpui_code_font_family())
-                                .text_size(px(10.))
-                                .text_color(rgb(palette.text_muted))
-                                .child(meta),
-                        ),
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.text))
+                        .tooltip(move |window, cx| {
+                            NyaTooltip::new(full_name.clone()).build(window, cx)
+                        })
+                        .child(name),
                 )
                 .child(
                     div()
-                        .flex_none()
+                        .min_w_0()
+                        .flex()
+                        .flex_wrap()
+                        .justify_between()
+                        .gap_x_2()
                         .font_family(gpui_code_font_family())
-                        .text_size(px(12.))
-                        .font_weight(FontWeight(700.))
-                        .text_color(rgb(palette.text))
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(meta)
                         .child(memory),
                 ),
         )
@@ -1367,15 +1422,15 @@ fn handle_accelerator_process_scroll(
     }
 }
 
-fn accelerator_visible_window<T: Clone>(items: &[T], offset: usize) -> (Vec<T>, f32, f32) {
-    let total = items.len();
-    let window_capacity = ACCELERATOR_PROCESS_VIEWPORT_ROWS + ACCELERATOR_PROCESS_OVERSCAN * 2;
-    let start = offset.saturating_sub(ACCELERATOR_PROCESS_OVERSCAN);
-    let end = (start + window_capacity).min(total);
-    let visible = items.get(start..end).unwrap_or(&[]).to_vec();
-    let pad_top = start as f32 * ACCELERATOR_PROCESS_ROW_HEIGHT_PX;
-    let pad_bottom = total.saturating_sub(end) as f32 * ACCELERATOR_PROCESS_ROW_HEIGHT_PX;
-    (visible, pad_top, pad_bottom)
+fn accelerator_visible_window<T: Clone>(items: &[T], offset: usize) -> Vec<T> {
+    // This is a manually advanced viewport, not a translated scroll container.
+    // Render only the visible slice; leading spacer rows would hide it below the clip.
+    let start = offset.min(max_list_offset(
+        items.len(),
+        ACCELERATOR_PROCESS_VIEWPORT_ROWS,
+    ));
+    let end = (start + ACCELERATOR_PROCESS_VIEWPORT_ROWS).min(items.len());
+    items[start..end].to_vec()
 }
 
 fn accelerator_process_list_height(total: usize) -> f32 {
@@ -1992,5 +2047,96 @@ mod tests {
         assert_eq!(format_resource_rate(4.6 * 1024.), "4.6 KB/s");
         assert_eq!(format_resource_percent(None), "--");
         assert_eq!(format_resource_percent(Some(23.2)), "23%");
+    }
+}
+
+#[cfg(test)]
+mod responsive_tests {
+    use super::{accelerator_detail_grid, accelerator_summary_grid};
+    use crate::test_support::TestAppCleanup;
+    use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px, size};
+
+    struct Host;
+    impl Render for Host {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let width = f32::from(window.viewport_size().width);
+            let palette = nyaterm_ui::theme_palette("dark");
+            div()
+                .w_full()
+                .min_w_0()
+                .p(px(10.))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(accelerator_summary_grid(
+                    palette,
+                    width,
+                    vec![
+                        ("Memory", "123456 MiB / 999999 MiB".into()),
+                        ("Utilization", "100%".into()),
+                    ],
+                ))
+                .child(accelerator_detail_grid(
+                    palette,
+                    width,
+                    vec![
+                        ("UUID", "abcdef0123456789".repeat(32)),
+                        ("Power", "400 W / 500 W".into()),
+                    ],
+                ))
+        }
+    }
+
+    #[test]
+    fn accelerator_process_viewport_reaches_the_last_row_without_spacers() {
+        use super::{
+            ACCELERATOR_PROCESS_ROW_HEIGHT_PX, ACCELERATOR_PROCESS_VIEWPORT_ROWS,
+            accelerator_process_list_height, accelerator_visible_window,
+        };
+        let items: Vec<_> = (0..100).collect();
+        assert_eq!(
+            accelerator_visible_window(&items, 0),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            accelerator_visible_window(&items, 1),
+            vec![1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(
+            accelerator_visible_window(&items, usize::MAX),
+            vec![94, 95, 96, 97, 98, 99]
+        );
+        assert_eq!(
+            accelerator_process_list_height(items.len()),
+            ACCELERATOR_PROCESS_ROW_HEIGHT_PX * ACCELERATOR_PROCESS_VIEWPORT_ROWS as f32
+        );
+        assert!(accelerator_visible_window::<usize>(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn accelerator_identifiers_wrap_at_narrow_widths_and_scale_factors() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let (_, vcx) = cx.add_window_view(|_, _| Host);
+        for scale in [1., 1.5, 2.] {
+            vcx.simulate_scale_factor_change(scale);
+            for width in [
+                200., 280., 320., 359., 360., 430., 519., 520., 540., 600., 720.,
+            ] {
+                vcx.simulate_resize(size(px(width), px(1600.)));
+                vcx.update(|window, cx| {
+                    _ = window.draw(cx);
+                });
+                vcx.run_until_parked();
+                let value = vcx
+                    .debug_bounds("accelerator-detail-value-0")
+                    .expect("identifier rendered");
+                assert!(
+                    value.right() <= px(width),
+                    "identifier overflow at {width}/{scale}: {value:?}"
+                );
+                assert!(value.size.height > px(24.), "identifier must wrap");
+            }
+        }
     }
 }

@@ -31,9 +31,7 @@ pub(in crate::features) use accelerator::{GpuPresentationState, NpuPresentationS
 use docker::DockerPaneState;
 pub(in crate::features) use docker::{DockerDerivedItems, DockerPresentationState};
 use process::ProcessPaneState;
-pub(in crate::features) use process::{
-    ProcessApplyOutcome, ProcessPresentationState, ProcessSortColumns,
-};
+pub(in crate::features) use process::{ProcessApplyOutcome, ProcessPresentationState};
 use stats::StatsPaneState;
 pub(in crate::features) use stats::{StatsApplyOutcome, StatsPresentationState};
 
@@ -135,17 +133,6 @@ impl RemoteOpsFeatureState {
     /// The filtered, sorted NPU process list. Read-only.
     pub(in crate::features) fn derived_npu_processes(&self) -> Arc<[RemoteNpuProcess]> {
         self.npu.derived()
-    }
-
-    /// Tell the process table which sort columns the panel width can show.
-    ///
-    /// Returns whether anything changed, so the caller can skip a repaint. This is the
-    /// one input to the pane's invariant that the pane cannot observe for itself.
-    pub(in crate::features) fn set_process_sort_columns(
-        &mut self,
-        columns: ProcessSortColumns,
-    ) -> bool {
-        self.process.set_sort_columns(columns)
     }
 
     /// Revision of what `stats_presentation` would return.

@@ -311,10 +311,18 @@ impl RemoteMonitorPanel {
                             reset_to_top
                                 || previous_processes.len() != processes.len()
                                 || previous_selected_index != selected_index
-                                || previous_mode != mode,
+                                || previous_mode != mode
+                                || previous.key.panel_width != snapshot.key.panel_width
+                                || (selected_index.is_some()
+                                    && previous.key.revision != snapshot.key.revision),
                         )
                     });
-                if needs_reset {
+                if needs_reset && !reset_to_top && self.process_list.item_count() == processes.len()
+                {
+                    // Width and expanded content can change heights without changing row identities.
+                    // Keep the position inside the current row instead of jumping to its top.
+                    self.process_list.remeasure();
+                } else if needs_reset {
                     let previous_top = self.process_list.logical_scroll_top();
                     let row_height =
                         process_row_height_px(process_display_mode(snapshot.key.panel_width));
@@ -442,7 +450,15 @@ impl Render for RemoteMonitorPanel {
                 } => {
                     let (state, processes, search) =
                         (state.clone(), processes.clone(), search.clone());
-                    gpu_panel(chrome, has_session, state, processes, search, cx)
+                    gpu_panel(
+                        chrome,
+                        has_session,
+                        state,
+                        processes,
+                        search,
+                        panel_width,
+                        cx,
+                    )
                 }
                 RemoteMonitorData::Npu {
                     state,
@@ -451,7 +467,15 @@ impl Render for RemoteMonitorPanel {
                 } => {
                     let (state, processes, search) =
                         (state.clone(), processes.clone(), search.clone());
-                    npu_panel(chrome, has_session, state, processes, search, cx)
+                    npu_panel(
+                        chrome,
+                        has_session,
+                        state,
+                        processes,
+                        search,
+                        panel_width,
+                        cx,
+                    )
                 }
                 RemoteMonitorData::Processes {
                     state,
@@ -604,11 +628,11 @@ impl NyaTermApp {
             chrome: self.panel_chrome(),
             has_session: self.session.active_ssh_config().is_some(),
             panel_width: match kind {
-                // Both read the width: the process table for its columns and row heights,
-                // Docker for its compose layout.
-                RemoteMonitorKind::Processes | RemoteMonitorKind::Docker => {
-                    self.shell.right_panel_width()
-                }
+                // Width is a presentation input, including accelerator card layouts.
+                RemoteMonitorKind::Processes
+                | RemoteMonitorKind::Docker
+                | RemoteMonitorKind::Gpu
+                | RemoteMonitorKind::Npu => self.shell.right_panel_width(),
                 _ => 0.,
             },
         }
@@ -1985,10 +2009,10 @@ mod isolation_tests {
         }
     }
 
-    /// Sorting by memory then narrowing the panel falls back to CPU immediately, and the
+    /// Sorting by memory then narrowing the panel preserves the selected ordering, and the
     /// snapshot follows -- the width is part of the key, so no pane revision has to move.
     #[test]
-    fn narrowing_the_panel_falls_back_to_cpu_sort_in_the_snapshot() {
+    fn narrowing_the_panel_preserves_memory_sort_in_the_snapshot() {
         let test_dir = TestConfigDir::new("nyaterm-panel-isolation");
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -1998,7 +2022,6 @@ mod isolation_tests {
                 app.remote_ops
                     .apply_processes((0..4).map(process).collect());
                 app.shell.set_right_panel_width_for_test(700.);
-                app.reconcile_remote_process_sort_columns();
                 app.remote_ops
                     .toggle_process_sort(crate::models::RemoteProcessSortKey::Memory);
                 app.flush_remote_panel_snapshots(cx);
@@ -2014,12 +2037,11 @@ mod isolation_tests {
             app.update(cx, |app, cx| {
                 // What a resize drag does, one move at a time.
                 app.shell.set_right_panel_width_for_test(360.);
-                app.reconcile_remote_process_sort_columns();
                 app.flush_remote_panel_snapshots(cx);
                 assert_eq!(
                     app.remote_ops.process_presentation().sort_key,
-                    crate::models::RemoteProcessSortKey::Cpu,
-                    "a narrow panel cannot sort by memory"
+                    crate::models::RemoteProcessSortKey::Memory,
+                    "sorting remains available in the narrow layout"
                 );
             });
             _ = window.draw(cx);
@@ -2028,6 +2050,67 @@ mod isolation_tests {
         assert!(
             vcx.update(|_, cx| process_paints(&app, cx)) > before,
             "the narrower width must reach the panel, even though it is not pane state"
+        );
+    }
+
+    #[test]
+    fn accelerator_snapshots_track_width_without_data_changes() {
+        let test_dir = TestConfigDir::new("nyaterm-accelerator-width");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        cx.update_entity(&app, |app, cx| {
+            for width in [200., 359., 360., 519., 520., 720.] {
+                app.shell.set_right_panel_width_for_test(width);
+                app.flush_remote_panel_snapshots(cx);
+                for kind in [RemoteMonitorKind::Gpu, RemoteMonitorKind::Npu] {
+                    let panel = app.remote_panels.entity(kind).read(cx);
+                    assert_eq!(
+                        panel.snapshot.as_ref().expect("snapshot").key.panel_width,
+                        width
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn expanded_process_height_is_remeasured_within_the_same_width_mode() {
+        let test_dir = TestConfigDir::new("nyaterm-process-wrap");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_processes(&mut cx, test_dir.path());
+        let mut heights = Vec::new();
+        for width in [720., 600.] {
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    if app.remote_ops.process_presentation().selected_pid.is_none() {
+                        let mut row = process(1);
+                        row.command_line = "long-command-without-spaces/".repeat(100);
+                        app.remote_ops.apply_processes(vec![row]);
+                        app.remote_ops.toggle_process_selection(1);
+                    }
+                    app.shell.set_right_panel_width_for_test(width);
+                    app.flush_remote_panel_snapshots(cx);
+                });
+                _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            heights.push(vcx.update(|_, cx| {
+                app.read(cx)
+                    .remote_panels
+                    .entity(RemoteMonitorKind::Processes)
+                    .read(cx)
+                    .process_list
+                    .bounds_for_item(0)
+                    .expect("expanded row")
+                    .size
+                    .height
+            }));
+        }
+        assert!(
+            heights[1] > heights[0],
+            "a narrower command must wrap to more lines: {heights:?}"
         );
     }
 

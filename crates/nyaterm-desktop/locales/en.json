@@ -3145,6 +3145,10 @@
     "advanced": "Advanced settings"
   },
   "sshAuth": {
+    "keyPassphraseRejected": "The previous passphrase could not unlock this key. Please try again.",
+    "saveFailed": "Connected, but credentials could not be saved.",
+    "credentialUnavailable": "The selected credential could not be loaded or prepared. Refresh the list, unlock the vault, or choose another credential.",
+    "sharedAccountWarning": "Updating this saved account also changes the password used by other connections linked to it.",
     "dockerElevation": "Docker requires sudo authorization. Enter your sudo password.",
     "keyRejectedPasswordFallback": "The server rejected the key. Enter a password to continue.",
     "agentWaitingTitle": "Waiting for SSH Agent approval",
@@ -3167,7 +3171,7 @@
     "passphrase": "Passphrase",
     "passwordMethod": "Password",
     "passwordRejected": "The previous password was rejected. Try again.",
-    "publickeyRejected": "The server rejected the current key. Choose another saved SSH key.",
+    "publickeyRejected": "The server rejected the current key.",
     "publickeyRequired": "The server only allows public key authentication.",
     "refreshKeys": "Refresh keys",
     "rememberCredential": "Remember after a successful login",
@@ -3468,6 +3472,7 @@
     "click": "Click",
     "connecting": "Connecting...",
     "connectionFailed": "Connection failed",
+    "connectionCancelled": "Connection cancelled",
     "dropFoldersNotSupportedLocal": "Folders cannot be inserted as paths in a local terminal.",
     "dropFoldersZmodemOnly": "Folders cannot be uploaded via ZMODEM. Use the file explorer for SFTP uploads.",
     "dropOverlayHintLocal": "File paths will be inserted into the command line",

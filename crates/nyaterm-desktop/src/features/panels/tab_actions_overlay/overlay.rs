@@ -65,6 +65,11 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if let Some(target @ crate::features::shell::tab_mouse::TabActionTarget::Start { .. }) =
+            self.session.dialog_tab_actions_target().cloned()
+        {
+            return self.start_tab_actions_menu(target, cx);
+        }
         let palette = self.theme_palette();
         let Some(tab_root_id) = self
             .session

@@ -19,12 +19,6 @@ pub(super) struct ProcessPaneState {
     revision: u64,
     data_generation: u64,
     derived: Option<ProcessDerivedCache>,
-    /// Which sort keys the current panel width can show a column for.
-    ///
-    /// Pushed by the app when the right panel is resized. Held here because the sort
-    /// key must be constrained to it whenever *either* changes, and the render pass is
-    /// no longer allowed to do that constraining itself.
-    sort_columns: ProcessSortColumns,
     snapshot_loaded: bool,
     status: String,
     search_draft: String,
@@ -33,25 +27,6 @@ pub(super) struct ProcessPaneState {
     selected_pid: Option<u32>,
     menu_pid: Option<u32>,
     nice_draft: String,
-}
-
-/// Whether the process table is wide enough to sort by memory and by user.
-///
-/// Defaults to permissive, matching the widest layout: a narrow panel pushes the real
-/// values in before anything is shown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::features) struct ProcessSortColumns {
-    pub allow_memory: bool,
-    pub allow_user: bool,
-}
-
-impl Default for ProcessSortColumns {
-    fn default() -> Self {
-        Self {
-            allow_memory: true,
-            allow_user: true,
-        }
-    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -245,24 +220,8 @@ impl ProcessPaneState {
     /// Cheap to call redundantly: the recompute is keyed, so an unchanged key returns
     /// the cached list.
     fn reconcile(&mut self) {
-        // Sort first: the derived list is keyed on the sort key, so constraining after
-        // recomputing would sort by a key the table cannot show.
-        if (!self.sort_columns.allow_user && self.sort_key == RemoteProcessSortKey::User)
-            || (!self.sort_columns.allow_memory && self.sort_key == RemoteProcessSortKey::Memory)
-        {
-            self.sort_key = RemoteProcessSortKey::Cpu;
-        }
         self.derived_items();
         self.touch();
-    }
-
-    pub(super) fn set_sort_columns(&mut self, columns: ProcessSortColumns) -> bool {
-        if self.sort_columns == columns {
-            return false;
-        }
-        self.sort_columns = columns;
-        self.reconcile();
-        true
     }
 
     /// The filtered, sorted list, without recomputing.
@@ -379,7 +338,6 @@ impl ProcessPaneState {
             revision: 0,
             data_generation: 0,
             derived: None,
-            sort_columns: ProcessSortColumns::default(),
             snapshot_loaded: false,
             status: "ready".to_string(),
             search_draft: String::new(),

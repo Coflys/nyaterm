@@ -1041,6 +1041,22 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
     visited_proxy_jumps: &mut Vec<String>,
     context: &SshSessionConfigBuildContext,
 ) -> Result<SshSessionConfig, String> {
+    // Resolve saved connections afresh, including reconnects and jump hosts.
+    // Capture the optimistic-write baseline in the same store-owner request.
+    let id = connection.id.clone();
+    let (fresh, snapshot) = context
+        .store
+        .request_fn(StoreDomain::Security, move |store| {
+            let fresh = store.get_connection(&id)?;
+            let snapshot = if fresh.is_some() {
+                Some(store.runtime_connection_snapshot(&id)?)
+            } else {
+                None
+            };
+            Ok((fresh, snapshot))
+        })
+        .map_err(|error| error.to_string())?;
+    let connection = fresh.as_ref().unwrap_or(connection);
     let ConnectionType::Ssh {
         host,
         port,
@@ -1084,7 +1100,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
         host_key_alias,
         username,
         password,
-        key_auth,
+        key_auth: key_auth.clone(),
         agent_auth: auth.mode == "agent",
         agent_endpoint: match normalize_ssh_agent_endpoint(auth_agent_endpoint.unwrap_or_default())
         {
@@ -1104,7 +1120,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
             .as_ref()
             .is_some_and(|config| config.enabled),
         agent_forwarding_config: agent_forwarding_config.map(map_agent_forwarding_config),
-        otp_id: auth.otp_id.filter(|value| !value.trim().is_empty()),
+        otp_id: auth.otp_id.clone().filter(|value| !value.trim().is_empty()),
         auto_fill_otp: auth.auto_fill_otp,
         proxy_jump,
         proxy,
@@ -1139,7 +1155,17 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
             policy: context.host_key_policy.clone(),
             prompt_broker: context.host_key_prompts.clone(),
         })),
-        credential_provider: Some(context.credential_prompts.clone()),
+        credential_provider: Some(Arc::new(
+            context
+                .credential_prompts
+                .for_attempt(context.attempt.clone())
+                .for_connection(
+                    snapshot,
+                    auth.saved_account_id().map(str::to_owned),
+                    auth.key_id.clone(),
+                    key_auth,
+                ),
+        )),
         agent_prompt_provider: Some(context.agent_prompts.clone()),
         agent_stored_key_provider: Some(Arc::new(StoreSshAgentKeyProvider {
             store: context.store.clone(),

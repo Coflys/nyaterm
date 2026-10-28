@@ -1,3 +1,4 @@
+pub mod runtime_auth;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};

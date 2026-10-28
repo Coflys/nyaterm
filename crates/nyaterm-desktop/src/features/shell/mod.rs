@@ -21,7 +21,7 @@ mod shortcut_action_runtime;
 mod state;
 mod status_clocks;
 mod tab_drag;
-mod tab_mouse;
+pub(in crate::features) mod tab_mouse;
 pub(in crate::features) mod tab_reorder;
 mod tab_windows_runtime;
 mod terminal_recovery;

@@ -1,3 +1,6 @@
+use crate::ssh_authentication::{
+    SshAuthenticationMaterial, SshAuthenticationRequest, SshAuthenticationResponse,
+};
 use nyaterm_core::SecretString;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -510,9 +513,12 @@ pub enum SshCredentialPromptKind {
 pub enum SshCredentialPromptReason {
     MissingPassword,
     PasswordRejected,
+    PublickeyRequired,
+    PublickeyRejected,
     KeyRejectedPasswordFallback,
     DockerElevation,
     KeyPassphraseRequired,
+    KeyPassphraseRejected,
     KeyboardInteractive,
 }
 
@@ -557,6 +563,26 @@ pub trait SshCredentialProvider: Send + Sync {
     }
 
     fn request_secret(&self, prompt: &SshCredentialPrompt) -> Result<Option<String>, String>;
+
+    fn request_authentication(
+        &self,
+        request: &SshAuthenticationRequest,
+    ) -> Result<Option<SshAuthenticationResponse>, String> {
+        self.request_secret(&request.prompt).map(|secret| {
+            secret.map(|secret| SshAuthenticationResponse {
+                material: if request.prompt.kind == SshCredentialPromptKind::KeyPassphrase {
+                    SshAuthenticationMaterial::KeyPassphrase(secret.into())
+                } else {
+                    SshAuthenticationMaterial::Password(secret.into())
+                },
+                response_id: None,
+            })
+        })
+    }
+
+    /// Called exactly once per authentication, including cancellation. Implementations
+    /// must enqueue any persistence work rather than block this notification.
+    fn authentication_finished(&self, _successful_responses: Option<&[String]>) {}
 
     fn request_keyboard_interactive(
         &self,

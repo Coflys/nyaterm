@@ -231,10 +231,10 @@ fn docker_container_row(
                         .child(div().flex_none().child(short.clone())),
                 ),
         )
-        .on_click(cx.listener(move |panel, _, _window, cx| {
+        .on_click(cx.listener(move |panel, _, window, cx| {
             panel.with_app(cx, |this, cx| {
                 this.remote_ops.close_docker_container_menu();
-                this.load_docker_details(details_id.clone(), cx);
+                this.open_docker_details(details_id.clone(), window, cx);
             });
         }))
         .child(

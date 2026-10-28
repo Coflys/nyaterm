@@ -256,7 +256,11 @@ impl NyaTermApp {
                                 title,
                                 subtitle: format!(
                                     "{} - {}",
-                                    t!("terminal.connectionFailed"),
+                                    if self.session.start_request_cancelled(request_id) {
+                                        t!("terminal.connectionCancelled")
+                                    } else {
+                                        t!("terminal.connectionFailed")
+                                    },
                                     session_kind_label(pending.kind)
                                 ),
                                 active: self.session.start_request_is_active(request_id),

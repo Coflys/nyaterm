@@ -571,6 +571,8 @@ impl NyaTermApp {
             self.apply_lock_password_input(text, cx);
         } else if id.as_ref() == "security.unlock.password" {
             self.apply_security_unlock_password_input(text, cx);
+        } else if id.as_ref() == "ssh.auth.name" {
+            self.apply_runtime_auth_name(text, cx);
         } else if let Some(prompt_id) = id.strip_prefix("ssh.credential.") {
             self.apply_ssh_credential_input(prompt_id, text, cx);
         } else if let Some(field_id) = id.strip_prefix("ssh.keyboard-interactive.") {

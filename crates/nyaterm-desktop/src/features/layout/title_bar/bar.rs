@@ -203,7 +203,9 @@ impl NyaTermApp {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .min_w_0()
                     .flex_1()
+                    .overflow_hidden()
                     .map(|this| {
                         let on_event = cx.listener(Self::handle_title_drag_event);
                         title_drag_region(
@@ -333,7 +335,8 @@ impl NyaTermApp {
         ]);
 
         div()
-            .max_w(px(520.))
+            .min_w_0()
+            .max_w(px(680.))
             .flex()
             .items_center()
             .gap_0()
@@ -515,11 +518,17 @@ impl NyaTermApp {
         }
 
         if !content.parts.is_empty() {
-            let mut row = div().min_w_0().flex().items_center().gap_1();
+            let mut row = div()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap_1()
+                .whitespace_nowrap();
             for (index, part) in content.parts.into_iter().enumerate() {
                 if index > 0 {
                     row = row.child(
                         div()
+                            .flex_none()
                             .px(px(2.))
                             .text_color(rgb(palette.text_dimmed))
                             .child("-"),
@@ -531,11 +540,12 @@ impl NyaTermApp {
                         .flex()
                         .items_center()
                         .gap_1()
+                        .whitespace_nowrap()
                         .child(connection_type_icon(palette, part.icon, false, 13.))
                         .child(
                             div()
                                 .min_w_0()
-                                .overflow_hidden()
+                                .truncate()
                                 .text_color(rgb(part.text_color.unwrap_or(palette.text_muted)))
                                 .child(part.text),
                         ),
@@ -552,7 +562,8 @@ impl NyaTermApp {
             .when_some(content.icon, |this, icon| {
                 this.child(connection_type_icon(palette, icon, false, 14.))
             })
-            .child(div().min_w_0().overflow_hidden().child(content.label))
+            .whitespace_nowrap()
+            .child(div().min_w_0().truncate().child(content.label))
             .into_any_element()
     }
 
@@ -960,7 +971,18 @@ impl NyaTermApp {
             return Some(IconDef::mono("icons/conn/connect.svg", 0x60a5fa));
         }
         if self.session.start_has_active_failed() {
-            return Some(IconDef::mono("icons/session/disconnect.svg", 0xf87171));
+            let cancelled = self
+                .session
+                .active_failed_request_id()
+                .is_some_and(|id| self.session.start_request_cancelled(id));
+            return Some(IconDef::mono(
+                "icons/session/disconnect.svg",
+                if cancelled {
+                    self.theme_palette().text_muted
+                } else {
+                    0xf87171
+                },
+            ));
         }
         if let Some(session_id) = self.session.active_id()
             && let Some(session) = self.session.session_info(session_id)
@@ -978,7 +1000,19 @@ impl NyaTermApp {
             return Some(IconDef::mono("icons/conn/connect.svg", 0x60a5fa));
         }
         if self.session.start_has_failed() || self.shell.last_connect_failure_name().is_some() {
-            return Some(IconDef::mono("icons/session/disconnect.svg", 0xf87171));
+            let only_cancelled = self.shell.last_connect_failure_name().is_none()
+                && self
+                    .session
+                    .start_failed_entries()
+                    .all(|(id, _)| self.session.start_request_cancelled(id));
+            return Some(IconDef::mono(
+                "icons/session/disconnect.svg",
+                if only_cancelled {
+                    self.theme_palette().text_muted
+                } else {
+                    0xf87171
+                },
+            ));
         }
         None
     }

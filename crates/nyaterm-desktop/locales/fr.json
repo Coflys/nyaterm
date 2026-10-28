@@ -3152,6 +3152,10 @@
     "unappliedChanges": "Modifications non appliquées"
   },
   "sshAuth": {
+    "keyPassphraseRejected": "La phrase secrète précédente n’a pas permis de déverrouiller cette clé. Réessayez.",
+    "saveFailed": "Connexion établie, mais les identifiants n’ont pas pu être enregistrés.",
+    "credentialUnavailable": "Impossible de charger ou de préparer les identifiants sélectionnés. Actualisez la liste, déverrouillez le coffre ou choisissez d’autres identifiants.",
+    "sharedAccountWarning": "La mise à jour de ce compte enregistré modifie aussi le mot de passe utilisé par les autres connexions associées.",
     "dockerElevation": "Docker nécessite une autorisation sudo. Saisissez votre mot de passe sudo.",
     "keyRejectedPasswordFallback": "Le serveur a refusé la clé. Saisissez un mot de passe pour continuer.",
     "agentWaitingTitle": "En attente de l'autorisation de l'agent SSH",
@@ -3174,7 +3178,7 @@
     "passphrase": "Phrase secrète",
     "passwordMethod": "Mot de passe",
     "passwordRejected": "Le mot de passe précédent a été rejeté. Réessayez.",
-    "publickeyRejected": "Le serveur a rejeté la clé actuelle. Choisissez une autre clé SSH enregistrée.",
+    "publickeyRejected": "Le serveur a rejeté la clé actuelle.",
     "publickeyRequired": "Le serveur n'autorise que l'authentification par clé publique.",
     "refreshKeys": "Actualiser les clés",
     "rememberCredential": "Se souvenir après une connexion réussie",
@@ -3474,6 +3478,7 @@
     "click": "Cliquer",
     "connecting": "Connexion…",
     "connectionFailed": "Échec de la connexion",
+    "connectionCancelled": "Connexion annulée",
     "dropFoldersNotSupportedLocal": "Les dossiers ne peuvent pas être insérés comme chemins dans un terminal local.",
     "dropFoldersZmodemOnly": "Les dossiers ne peuvent pas être téléversés via ZMODEM. Utilisez l'explorateur de fichiers pour les téléversements SFTP.",
     "dropOverlayHintLocal": "Les chemins de fichiers seront insérés dans la ligne de commande",

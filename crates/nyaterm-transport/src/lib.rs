@@ -48,6 +48,9 @@ mod ssh_agent;
 mod ssh_agent_broker;
 mod ssh_algorithms;
 mod ssh_auth;
+#[cfg(test)]
+mod ssh_auth_tests;
+pub mod ssh_authentication;
 mod ssh_mailbox;
 mod telnet_codec;
 mod telnet_input;

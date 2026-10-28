@@ -29,22 +29,33 @@ impl NyaTermApp {
                     .find(|connection| &connection.id == id)
             })
             .cloned();
-        if connection.is_none() && failed.pending.launch_config.is_none() {
+        if connection.is_none()
+            && !failed
+                .pending
+                .launch_config
+                .as_ref()
+                .is_some_and(|config| config.encoding().is_some())
+        {
             self.session
                 .start
                 .set_failed_error(&request_id, t!("terminal.retryUnavailable").to_string());
             cx.notify();
             return;
         }
-        if connection.as_ref().is_some_and(|connection| {
-            self.session
-                .start
-                .source_connection_is_pending(&connection.id)
-                || self
-                    .session
+        if failed
+            .pending
+            .source_connection_id
+            .as_ref()
+            .is_some_and(|connection_id| {
+                self.session
                     .start
-                    .saved_connection_is_preparing(&connection.id)
-        }) {
+                    .source_connection_is_pending(connection_id)
+                    || self
+                        .session
+                        .start
+                        .saved_connection_is_preparing(connection_id)
+            })
+        {
             self.session
                 .start
                 .set_failed_error(&request_id, t!("tabCtx.reconnecting").to_string());

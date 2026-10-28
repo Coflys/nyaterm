@@ -13,7 +13,7 @@ use super::ai::AiFullAccessSetting;
 use super::mcp::{McpApprovalDecision, McpApprovalRequest};
 use super::terminal::{FULL_SHELL_PAINT_COUNT, terminal_surface_paint_count};
 use super::view_widgets::{
-    APP_OVERLAY_PRIORITY, full_window_input_layer, full_window_overlay_layer, modal_scrim_is_drawn,
+    full_window_input_layer, full_window_overlay_layer, modal_scrim_is_drawn,
     passive_overlay_layer, selectable_overlay_layer,
 };
 use crate::features::perf::{GpuiPerfContext, record_gpui_perf_sample};
@@ -224,7 +224,6 @@ impl NyaTermApp {
         self.start_shell_persistence_debounce(cx);
         // The restored panel width decides which process-table sort columns exist, and
         // nothing has resized yet, so this is where the initial value goes in.
-        self.reconcile_remote_process_sort_columns();
         // The first snapshot. Nothing has mutated yet, so no boundary has fired, and a
         // panel with no snapshot renders empty.
         self.flush_remote_panel_snapshots(cx);
@@ -702,7 +701,7 @@ impl NyaTermApp {
     ) -> Stateful<Div> {
         let terminal_overlays = self.terminal.overlay_visibility();
         let overlay = OverlayFlags {
-            tab_actions_open: self.session.dialog_tab_actions_session_id().is_some(),
+            tab_actions_open: self.session.dialog_tab_actions_target().is_some(),
             color_picker_open: self.session.dialog_color_picker_is_open(),
             session_info_open: self.session.dialog_session_info_is_open(),
             multi_line_paste_open: terminal_overlays.paste_review,
@@ -718,11 +717,6 @@ impl NyaTermApp {
         let ssh_auth_prompt_open = self.session.prompt_has_active_ssh_auth();
         let full_access_confirmation = self.pending_ai_full_access();
         let mcp_approval = self.mcp_pending_approval_requests().into_iter().next();
-        let docker_details_open = self
-            .remote_ops
-            .docker_presentation()
-            .details_container_id
-            .is_some();
 
         content
             .when(overlay.tab_actions_open, |this| {
@@ -847,11 +841,6 @@ impl NyaTermApp {
                     "quick-command-variable-input-layer",
                     self.quick_command_variable_prompt_overlay(cx),
                 ))
-            })
-            .when(docker_details_open, |this| {
-                this.child(
-                    deferred(self.docker_details_overlay(cx)).with_priority(APP_OVERLAY_PRIORITY),
-                )
             })
             .when(quick_switch_open, |this| {
                 this.child(full_window_overlay_layer(
@@ -1216,6 +1205,8 @@ impl NyaTermApp {
                 div()
                     .w(px(dialog_width))
                     .max_w_full()
+                    .max_h_full()
+                    .min_h_0()
                     .when_some(host_key_prompt, |this, prompt| {
                         this.child(self.host_key_prompt_banner(prompt, cx))
                     })

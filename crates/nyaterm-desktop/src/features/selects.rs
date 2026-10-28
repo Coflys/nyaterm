@@ -212,6 +212,10 @@ impl NyaTermApp {
             return;
         };
 
+        if self.change_runtime_auth_select(id, value, cx) {
+            return;
+        }
+
         if id == "connection-editor-kind" {
             if let Some(kind) = [
                 crate::models::ConnectionKindTab::Ssh,

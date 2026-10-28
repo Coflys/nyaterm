@@ -103,6 +103,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn cancel_security_unlock_prompt(&mut self, cx: &mut Context<Self>) {
         self.security.cancel_unlock_prompt();
+        self.session.prompt_restore_credential_focus();
         self.forget_text_inputs("security.unlock.password");
         cx.notify();
     }
@@ -112,6 +113,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.security.close_master_required_prompt();
+        self.session.prompt_restore_credential_focus();
         cx.notify();
     }
 
@@ -254,6 +256,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         match action {
+            SecurityUnlockAction::SubmitSshAuthentication(id) => {
+                if self
+                    .session
+                    .prompt_active_credential()
+                    .is_some_and(|state| state.id == id)
+                {
+                    self.submit_runtime_authentication(window, cx);
+                }
+            }
             SecurityUnlockAction::SavePasswordEditor(token) => {
                 if self.security.account_editor_token() == Some(token) {
                     self.save_security_password_editor(window, cx);

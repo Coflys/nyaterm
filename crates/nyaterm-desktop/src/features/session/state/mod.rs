@@ -12,6 +12,7 @@ use nyaterm_transport::{
 };
 
 use crate::features::runtime_jobs::SessionStartResult;
+use crate::features::shell::tab_mouse::TabActionTarget;
 use crate::models::event_wake::{ANY_INTEREST, EventWake};
 use crate::models::{
     SessionEventBridge, SessionEventBridgeDrain, SessionEventBridgeStats, SessionLaunchConfig,
@@ -164,13 +165,16 @@ pub(in crate::features) struct PromptInputTarget {
 
 /// Session-scoped overlays, confirmations and editing dialogs.
 pub(super) struct SessionDialogState {
-    tab_actions_session_id: Option<String>,
+    tab_actions_target: Option<TabActionTarget>,
+    tab_actions_start_snapshot: Option<StartTabActionSnapshot>,
     tab_actions_anchor: Option<(f32, f32)>,
     tab_actions_submenu: Option<TabActionsSubmenu>,
     tab_actions_focus: FocusHandle,
+    tab_actions_restore_focus: Option<FocusHandle>,
     pending_quit_after_close_all: bool,
     pending_window_quit: bool,
-    rename_session_id: Option<String>,
+    rename_target: Option<TabActionTarget>,
+    rename_dialog_handle: Option<nyaterm_ui::NyaDialogHandle>,
     rename_draft: String,
     color_picker_open: bool,
     color_picker_focus: FocusHandle,
@@ -195,7 +199,10 @@ pub(super) struct SessionDialogState {
 pub(in crate::features) enum RenameSessionSubmission {
     Inactive,
     Empty,
-    Ready { session_id: String, name: String },
+    Ready {
+        target: TabActionTarget,
+        name: String,
+    },
 }
 
 /// Pointer and offset at the moment the session-info header was grabbed, so
@@ -448,13 +455,16 @@ impl SessionFeatureState {
             events: SessionEventQueueState::default(),
             prompts: SessionPromptState::new(otp_provider, focus.credential),
             dialogs: SessionDialogState {
-                tab_actions_session_id: None,
+                tab_actions_target: None,
+                tab_actions_start_snapshot: None,
                 tab_actions_anchor: None,
                 tab_actions_submenu: None,
                 tab_actions_focus: focus.tab_actions,
+                tab_actions_restore_focus: None,
                 pending_quit_after_close_all: false,
                 pending_window_quit: false,
-                rename_session_id: None,
+                rename_target: None,
+                rename_dialog_handle: None,
                 rename_draft: String::new(),
                 color_picker_open: false,
                 color_picker_focus: focus.color_picker,
@@ -664,6 +674,12 @@ impl SessionFeatureState {
         self.prompts.active_credential()
     }
 
+    pub(in crate::features) fn prompt_restore_credential_focus(&mut self) {
+        if self.prompts.has_active_credential() {
+            self.prompts.credential_prompt_focus_pending = true;
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::features) fn prompt_request_credential_focus_for_test(&mut self) {
         self.prompts.credential_prompt_focus_pending = true;
@@ -727,6 +743,16 @@ impl SessionFeatureState {
 
     pub(in crate::features) fn dialog_tab_actions_session_id(&self) -> Option<&str> {
         self.dialogs.tab_actions_session_id()
+    }
+
+    pub(in crate::features) fn dialog_tab_actions_target(&self) -> Option<&TabActionTarget> {
+        self.dialogs.tab_actions_target.as_ref()
+    }
+
+    pub(in crate::features) fn dialog_tab_actions_start_snapshot(
+        &self,
+    ) -> Option<&StartTabActionSnapshot> {
+        self.dialogs.tab_actions_start_snapshot.as_ref()
     }
 
     pub(in crate::features) fn dialog_tab_actions_anchor(&self) -> Option<(f32, f32)> {
@@ -1602,6 +1628,13 @@ impl SessionFeatureState {
     }
 
     pub(in crate::features) fn clear_start_tab_placements(&mut self) {
+        // Placement reservations are temporary; an open rename must retain the
+        // formal session identity before the last reservation is released.
+        if let Some(target @ TabActionTarget::Start { .. }) = self.dialogs.rename_target.as_ref()
+            && let Some(id) = self.resolved_tab_action_session(target)
+        {
+            self.dialogs.rename_target = Some(TabActionTarget::Session(id));
+        }
         self.start_tab_placements.clear();
         self.start.placements.clear();
     }
@@ -2254,7 +2287,7 @@ impl SessionPromptState {
     /// Freeing the single active slot is what lets the next queued prompt in, and
     /// nothing is enqueued at that moment, so the activation pass has to be woken
     /// explicitly. Every `take_*` below does this.
-    fn signal_wake(&self) {
+    pub(in crate::features) fn signal_wake(&self) {
         self.wake.signal(ANY_INTEREST);
     }
 
@@ -2286,6 +2319,12 @@ impl SessionPromptState {
         }
         self.signal_wake();
         PromptResolution::Ready(prompt)
+    }
+
+    pub(in crate::features) fn active_credential_mut(
+        &mut self,
+    ) -> Option<&mut CredentialPromptState> {
+        self.active_credential_prompt.as_mut()
     }
 
     pub(in crate::features) fn take_credential(&mut self) -> Option<CredentialPromptState> {
@@ -2432,7 +2471,12 @@ impl SessionPromptState {
         let Some(state) = self.active_credential_prompt.as_mut() else {
             return false;
         };
-        if state.id != prompt_id {
+        if state.id != prompt_id
+            || state
+                .authentication
+                .as_ref()
+                .is_some_and(|form| form.is_busy())
+        {
             return false;
         }
         state.value = text;
@@ -2476,6 +2520,13 @@ impl SessionPromptState {
 
     pub(in crate::features) fn active_input_target(&self) -> Option<PromptInputTarget> {
         if let Some(state) = self.active_credential_prompt.as_ref() {
+            if state
+                .authentication
+                .as_ref()
+                .is_some_and(|form| !form.uses_secret_input())
+            {
+                return None;
+            }
             return Some(PromptInputTarget {
                 id: format!("ssh.credential.{}", state.id),
                 seed: state.value.clone(),
@@ -2624,7 +2675,10 @@ impl SessionPromptState {
 
 impl SessionDialogState {
     pub(in crate::features) fn tab_actions_session_id(&self) -> Option<&str> {
-        self.tab_actions_session_id.as_deref()
+        match self.tab_actions_target.as_ref()? {
+            TabActionTarget::Session(id) => Some(id),
+            TabActionTarget::Start { .. } => None,
+        }
     }
 
     pub(in crate::features) fn tab_actions_anchor(&self) -> Option<(f32, f32)> {
@@ -2644,13 +2698,35 @@ impl SessionDialogState {
         session_id: String,
         anchor: Option<(f32, f32)>,
     ) {
-        self.tab_actions_session_id = Some(session_id);
+        self.tab_actions_target = Some(TabActionTarget::Session(session_id));
+        self.tab_actions_start_snapshot = None;
+        self.tab_actions_restore_focus = None;
         self.tab_actions_anchor = anchor;
         self.tab_actions_submenu = None;
     }
 
+    pub(in crate::features) fn open_start_tab_actions(
+        &mut self,
+        target: TabActionTarget,
+        snapshot: StartTabActionSnapshot,
+        anchor: (f32, f32),
+        restore_focus: Option<FocusHandle>,
+    ) {
+        self.tab_actions_restore_focus = restore_focus;
+        self.tab_actions_target = Some(target);
+        self.tab_actions_start_snapshot = Some(snapshot);
+        self.tab_actions_anchor = Some(anchor);
+        self.tab_actions_submenu = None;
+    }
+
+    pub(in crate::features) fn take_tab_actions_restore_focus(&mut self) -> Option<FocusHandle> {
+        self.tab_actions_restore_focus.take()
+    }
+
     pub(in crate::features) fn close_tab_actions(&mut self) {
-        self.tab_actions_session_id = None;
+        self.tab_actions_target = None;
+        self.tab_actions_start_snapshot = None;
+        self.tab_actions_restore_focus = None;
         self.tab_actions_anchor = None;
         self.tab_actions_submenu = None;
     }
@@ -2690,22 +2766,48 @@ impl SessionDialogState {
         quit_after
     }
 
+    pub(in crate::features) fn rename_dialog_handle(&self) -> Option<&nyaterm_ui::NyaDialogHandle> {
+        self.rename_dialog_handle.as_ref()
+    }
+
+    pub(in crate::features) fn set_rename_dialog_handle(
+        &mut self,
+        handle: nyaterm_ui::NyaDialogHandle,
+    ) {
+        self.rename_dialog_handle = Some(handle);
+    }
+
+    pub(in crate::features) fn rename_target(&self) -> Option<&TabActionTarget> {
+        self.rename_target.as_ref()
+    }
+
     pub(in crate::features) fn rename_draft(&self) -> &str {
         &self.rename_draft
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn open_rename(&mut self, session_id: String, current_name: &str) {
-        self.rename_session_id = Some(session_id);
+        self.open_tab_rename(TabActionTarget::Session(session_id), current_name);
+    }
+
+    pub(in crate::features) fn open_tab_rename(
+        &mut self,
+        target: TabActionTarget,
+        current_name: &str,
+    ) {
+        self.rename_target = Some(target);
+        self.rename_dialog_handle = None;
         self.rename_draft = current_name.chars().take(64).collect();
     }
 
     pub(in crate::features) fn cancel_rename(&mut self) {
-        self.rename_session_id = None;
+        self.rename_target = None;
+        self.rename_dialog_handle = None;
         self.rename_draft.clear();
     }
 
     pub(in crate::features) fn take_rename_submission(&mut self) -> RenameSessionSubmission {
-        let Some(session_id) = self.rename_session_id.take() else {
+        let Some(target) = self.rename_target.take() else {
             return RenameSessionSubmission::Inactive;
         };
         let name = self
@@ -2716,10 +2818,11 @@ impl SessionDialogState {
             .collect::<String>();
         self.rename_draft.clear();
         if name.is_empty() {
-            self.rename_session_id = Some(session_id);
+            self.rename_target = Some(target);
             return RenameSessionSubmission::Empty;
         }
-        RenameSessionSubmission::Ready { session_id, name }
+        self.rename_dialog_handle = None;
+        RenameSessionSubmission::Ready { target, name }
     }
 
     pub(in crate::features) fn color_picker_is_open(&self) -> bool {
@@ -2966,14 +3069,23 @@ pub(in crate::features) struct PendingReconnectCompletion {
     pub startup_command: Option<StartupCommandRequest>,
 }
 
-/// A session start that remains visible after its worker failed.
-///
-/// Tauri keeps the failed pane in its original tab, so the GPUI shell must
-/// retain the pending metadata instead of reducing the failure to a global
-/// banner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::features) enum SessionStartEndReason {
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::features) struct StartTabActionSnapshot {
+    pub request_id: String,
+    pub reason: Option<SessionStartEndReason>,
+}
+
+/// A failed or cancelled start retains its metadata in the original tab for retry.
 pub(in crate::features) struct FailedSessionStart {
     pub pending: PendingSessionStart,
     pub error: String,
+    pub reason: SessionStartEndReason,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3338,6 +3450,7 @@ impl SessionStartFeatureState {
                 FailedSessionStart {
                     pending: *pending,
                     error,
+                    reason: SessionStartEndReason::Failed,
                 },
             );
             if was_active {
@@ -3452,12 +3565,50 @@ impl SessionStartFeatureState {
         true
     }
 
+    /// Cancel a worker but retain its metadata for retry under the same tab identity.
+    pub(in crate::features) fn cancel_pending(
+        &mut self,
+        request_id: &str,
+        message: String,
+    ) -> bool {
+        let was_active = self.active_pending.as_deref() == Some(request_id);
+        let Some(pending) = self.close_pending(request_id) else {
+            return false;
+        };
+        self.failed.insert(
+            request_id.to_string(),
+            FailedSessionStart {
+                pending,
+                error: message,
+                reason: SessionStartEndReason::Cancelled,
+            },
+        );
+        if was_active {
+            self.active_pending = None;
+            self.active_failed = Some(request_id.to_string());
+        }
+        true
+    }
+
     pub(in crate::features) fn close_pending(
         &mut self,
         request_id: &str,
     ) -> Option<PendingSessionStart> {
         let pending = self.pending.remove(request_id)?;
         pending.attempt.cancel();
+        if let (Some(connection_id), Some(placement)) = (
+            pending.source_connection_id.as_deref(),
+            pending.tab_placement,
+        ) && self
+            .preparing_saved_connections
+            .get(connection_id)
+            .is_some_and(|reserved| {
+                reserved.request_sequence == placement.request_sequence
+                    && reserved.requested_at == placement.requested_at
+            })
+        {
+            self.preparing_saved_connections.remove(connection_id);
+        }
         if !self.retry_preparations.remove(request_id) {
             self.cancelled.insert(request_id.to_string());
         }
@@ -3546,3 +3697,5 @@ pub(super) fn failed_session_start_display_name(failed: &FailedSessionStart) -> 
 
 #[cfg(test)]
 mod tests;
+
+mod tab_actions;

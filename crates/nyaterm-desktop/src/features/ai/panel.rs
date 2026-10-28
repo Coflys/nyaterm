@@ -4,7 +4,7 @@ use rust_i18n::t;
 
 use gpui::{
     Context, Entity, FontWeight, IntoElement, MouseButton, RenderImage, Rgba, ScrollHandle,
-    SharedString, WeakEntity, Window, div, img, prelude::*, px, rgb, rgba, svg,
+    SharedString, WeakEntity, Window, deferred, div, img, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAgentKind, AiCommandCard, AiMessage, AiMode, AiModelConfigItem,
@@ -19,7 +19,9 @@ use nyaterm_ui::{
 use crate::features::NyaTermApp;
 use crate::features::formatting::{group_ai_sessions_by_date, short_id};
 use crate::features::text_inputs::TextInputSetup;
-use crate::features::view_widgets::{full_window_input_layer, tab_menu_separator};
+use crate::features::view_widgets::{
+    APP_OVERLAY_PRIORITY, full_window_input_layer, tab_menu_separator,
+};
 use crate::models::{AiDetectedErrorState, AiMessageMenuState, NavItem, SettingsTab};
 use crate::theme::ThemePalette;
 use crate::widgets::{small_button, svg_icon_button};
@@ -989,12 +991,17 @@ impl AiPanel {
                     ),
             )
             .when(snapshot.discovery_menu_open, |this| {
-                this.child(self.ai_model_menu(
-                    snapshot,
-                    snapshot.selected_model_id.clone(),
-                    model_search_input,
-                    cx,
-                ))
+                // Resize handles paint in the default deferred layer; the menu
+                // must paint above them and own the pointer where they overlap.
+                this.child(
+                    deferred(self.ai_model_menu(
+                        snapshot,
+                        snapshot.selected_model_id.clone(),
+                        model_search_input,
+                        cx,
+                    ))
+                    .with_priority(APP_OVERLAY_PRIORITY),
+                )
             })
     }
 
@@ -1007,6 +1014,9 @@ impl AiPanel {
     ) -> impl IntoElement {
         let palette = snapshot.chrome.palette;
         let mut menu = div()
+            .id("ai-model-menu")
+            .debug_selector(|| "ai-model-menu".to_string())
+            .occlude()
             .absolute()
             // The selector shares its row with the mode switch and send
             // button. Expanding from its left edge made the fixed-width menu
