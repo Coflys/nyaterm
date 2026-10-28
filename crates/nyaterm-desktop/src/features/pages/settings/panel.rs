@@ -2212,19 +2212,36 @@ mod tests {
             })
         });
         draw(&app, vcx);
-        vcx.update(|window, _| window.resize(gpui::size(px(640.), px(480.))));
-        draw(&app, vcx);
-        vcx.update(|window, _| window.resize(gpui::size(px(1000.), px(720.))));
-        draw(&app, vcx);
+        assert_theme_manager_stays_side_by_side(&app, vcx);
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 assert!(!app.settings.theme_designer().editable());
                 app.theme_designer_action(ThemeIntent::Copy("dracula".into()), cx);
+                app.edit_theme_designer(
+                    "name",
+                    "A long custom theme name that must not displace the editor".into(),
+                    cx,
+                );
             })
         });
         draw(&app, vcx);
-        vcx.update(|window, _| window.resize(gpui::size(px(640.), px(480.))));
-        draw(&app, vcx);
+        let name_input = vcx.update(|_, cx| {
+            app.read(cx)
+                .existing_text_input("theme.designer.name")
+                .unwrap()
+                .entity_id()
+        });
+        assert_theme_manager_stays_side_by_side(&app, vcx);
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx)
+                    .existing_text_input("theme.designer.name")
+                    .unwrap()
+                    .entity_id(),
+                name_input,
+            );
+            assert!(app.read(cx).settings.theme_designer().dirty());
+        });
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 assert!(app.existing_text_input("theme.designer.name").is_some());
@@ -2242,6 +2259,25 @@ mod tests {
         });
         draw(&app, vcx);
         vcx.update(|_, cx| assert!(!app.read(cx).settings.theme_designer().open));
+    }
+
+    fn assert_theme_manager_stays_side_by_side(
+        app: &Entity<NyaTermApp>,
+        vcx: &mut VisualTestContext,
+    ) {
+        for width in [640., 849., 850., 1000., 640.] {
+            vcx.simulate_resize(gpui::size(px(width), px(480.)));
+            draw(app, vcx);
+            let list = vcx.debug_bounds("theme-designer-list").unwrap();
+            let editor = vcx.debug_bounds("theme-designer-editor").unwrap();
+            assert_eq!(list.size.width, px(if width < 850. { 192. } else { 248. }));
+            assert_eq!(list.top(), editor.top());
+            assert_eq!(list.size.height, editor.size.height);
+            assert!(list.right() <= editor.left());
+            assert!(editor.size.width > px(0.));
+            assert!(editor.right() <= px(width));
+            assert!(editor.bottom() <= px(480.));
+        }
     }
 
     #[test]
