@@ -70,9 +70,7 @@ impl NyaTermApp {
             .fields
             .iter()
             .filter(|(id, _)| {
-                id.starts_with("connection-editor-")
-                    && id.as_ref() != "connection-editor-section"
-                    && id.as_ref() != "connection-editor-kind"
+                id.starts_with("connection-editor-") && id.as_ref() != "connection-editor-kind"
             })
             .map(|(_, field)| field.clone())
             .collect::<Vec<_>>();
@@ -227,22 +225,6 @@ impl NyaTermApp {
             .find(|kind| kind.label() == value)
             {
                 self.set_connection_editor_kind(kind, cx);
-            }
-            return;
-        }
-
-        if id == "connection-editor-section" {
-            if let Some(section) = self
-                .connection_state
-                .active_editor_draft()
-                .and_then(|editor| {
-                    crate::models::ConnectionEditorSection::for_kind(editor.kind)
-                        .iter()
-                        .copied()
-                        .find(|section| section.id() == value)
-                })
-            {
-                self.set_connection_editor_section(section, cx);
             }
             return;
         }
