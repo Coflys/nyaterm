@@ -1,4 +1,5 @@
 mod history_and_streaming;
+mod pickers;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -491,10 +492,7 @@ impl Render for CompactAiHost {
     }
 }
 
-fn compact_host<'a>(
-    cx: &'a mut TestAppContext,
-    root: &Path,
-) -> (Entity<NyaTermApp>, &'a mut VisualTestContext) {
+fn compact_app(cx: &mut TestAppContext, root: &Path) -> Entity<NyaTermApp> {
     let app = app(cx, root);
     cx.update_entity(&app, |app, cx| {
         app.sync_component_theme(cx);
@@ -515,6 +513,14 @@ fn compact_host<'a>(
         app.ai.replace_settings_config(settings, false);
         app.flush_ai_panel_snapshot(cx);
     });
+    app
+}
+
+fn compact_host<'a>(
+    cx: &'a mut TestAppContext,
+    root: &Path,
+) -> (Entity<NyaTermApp>, &'a mut VisualTestContext) {
+    let app = compact_app(cx, root);
     let panel = app.read_with(cx, |app, _| app.ai_panel.clone());
     let (_, vcx) = cx.add_window_view(move |_, _| CompactAiHost {
         panel,
