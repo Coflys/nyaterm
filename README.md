@@ -23,6 +23,10 @@
   &nbsp;
   <a href="https://docs.qq.com/doc/DYW5TUkZnakxOWUFW" target="_blank"><img src="https://img.shields.io/badge/WeChatGroup-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChatGroup" /></a>
   <br/>
+  <a href="https://linux.do" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/LINUX%20DO-Forum-F0B003?style=for-the-badge&logo=discourse&logoColor=white" alt="LINUX DO" />
+  </a>
+  <br/>
   <a href="https://nyaterm.app"><img alt="Version" src="https://img.shields.io/github/v/release/nyakang/nyaterm?style=flat-square&logo=github&color=0EA5E9&labelColor=334155"></a>
   &nbsp;
   <a href="https://github.com/nyakang/nyaterm/releases"><img alt="GitHub downloads" src="https://img.shields.io/github/downloads/nyakang/nyaterm/total?style=flat-square&logo=github&color=0EA5E9&label=Downloads&labelColor=334155"></a>
