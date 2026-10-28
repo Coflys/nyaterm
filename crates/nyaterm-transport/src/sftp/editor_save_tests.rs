@@ -8,7 +8,7 @@ use russh_sftp::protocol::{
 
 use super::{
     OpenSftpConnection, OpenSftpSession, RemoteFilePath, RemoteTextMetadata, RemoteTextRevision,
-    RemoteTextWriteResult, SftpService,
+    RemoteTextWriteResult, SftpService, SftpWriteTextResult,
 };
 use crate::session_config::{SftpSettings, SshSessionConfig};
 
@@ -538,4 +538,63 @@ fn editor_save_leaves_original_untouched_when_attributes_cannot_be_preserved() {
             assert_eq!(files.files.len(), 1);
         }
     }
+}
+
+#[test]
+fn write_text_file_creates_missing_files_and_replaces_existing_ones() {
+    for supports_posix_rename in [false, true] {
+        let (service, files) = seeded_service(supports_posix_rename);
+        let created = service
+            .write_text_file_path(
+                &RemoteFilePath::new("/new.txt"),
+                "created",
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(matches!(
+            created,
+            SftpWriteTextResult::Saved { size: 7, .. }
+        ));
+        let replaced = service
+            .write_text_file_path(
+                &RemoteFilePath::new("/file.txt"),
+                "new content",
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(matches!(
+            replaced,
+            SftpWriteTextResult::Saved { size: 11, .. }
+        ));
+
+        let files = files.lock().unwrap();
+        assert_eq!(files.files["/new.txt"], b"created");
+        assert_eq!(files.files["/file.txt"], b"new content");
+        assert_eq!(files.attributes["/file.txt"].permissions, Some(0o100644));
+        assert_eq!(
+            files.files.len(),
+            2,
+            "temporary and backup files are cleaned up"
+        );
+    }
+}
+
+#[test]
+fn write_text_file_reports_a_conflict_when_an_expected_file_is_missing() {
+    let (service, files) = seeded_service(true);
+    let result = service
+        .write_text_file_path(
+            &RemoteFilePath::new("/new.txt"),
+            "created",
+            None,
+            Some(3),
+            false,
+        )
+        .unwrap();
+    assert!(matches!(result, SftpWriteTextResult::Conflict { .. }));
+    assert!(!files.lock().unwrap().files.contains_key("/new.txt"));
 }

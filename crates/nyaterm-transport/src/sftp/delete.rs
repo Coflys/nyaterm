@@ -24,7 +24,7 @@ struct RemoveInventory {
     dirs: Vec<Vec<u8>>,
 }
 
-fn is_not_found(error: &SftpError) -> bool {
+pub(super) fn is_not_found(error: &SftpError) -> bool {
     matches!(error, SftpError::Status(status) if status.status_code == StatusCode::NoSuchFile)
 }
 

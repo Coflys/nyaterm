@@ -1559,13 +1559,19 @@ impl SftpService {
             let remote_path_bytes = remote_file_path_bytes(&codec, &remote_path)?;
             let session = open_sftp_session(&config, multiplex.as_ref()).await?;
             let result = async {
-                let original_attrs = session
-                    .sftp
-                    .metadata_bytes(remote_path_bytes.clone())
-                    .await?;
+                let original_attrs =
+                    match session.sftp.metadata_bytes(remote_path_bytes.clone()).await {
+                        Ok(attrs) => Some(attrs),
+                        Err(error) if delete::is_not_found(&error) => None,
+                        Err(error) => return Err(error.into()),
+                    };
                 if !force {
-                    let current_modified_at = u64::from(original_attrs.mtime.unwrap_or(0));
-                    let current_size = original_attrs.size.unwrap_or(0);
+                    let current_modified_at = original_attrs
+                        .as_ref()
+                        .map_or(0, |attrs| u64::from(attrs.mtime.unwrap_or(0)));
+                    let current_size = original_attrs
+                        .as_ref()
+                        .map_or(0, |attrs| attrs.size.unwrap_or(0));
                     if expected_modified_at.is_some_and(|value| value != current_modified_at)
                         || expected_size.is_some_and(|value| value != current_size)
                     {
@@ -1589,12 +1595,19 @@ impl SftpService {
                     if temporary_attrs.size != Some(content.len() as u64) {
                         anyhow::bail!("Remote temporary file size verification failed");
                     }
-                    preserve_editor_metadata(&session.sftp, &temporary_path, &original_attrs)
-                        .await?;
-                    session
-                        .sftp
-                        .rename_bytes(temporary_path.clone(), remote_path_bytes.clone())
-                        .await?;
+                    if let Some(original_attrs) = original_attrs.as_ref() {
+                        preserve_editor_metadata(&session.sftp, &temporary_path, original_attrs)
+                            .await?;
+                    }
+                    if original_attrs.is_none() {
+                        session
+                            .sftp
+                            .rename_bytes(temporary_path.clone(), remote_path_bytes.clone())
+                            .await?;
+                    } else {
+                        replace_with_temporary(&session.sftp, &temporary_path, &remote_path_bytes)
+                            .await?;
+                    }
                     Ok::<(), anyhow::Error>(())
                 }
                 .await;
@@ -2762,6 +2775,44 @@ fn log_sftp_upload_failure(operation: &'static str, attempts: u32, error: &anyho
         category = sftp_error_category(error),
         "SFTP upload failed"
     );
+}
+
+/// Replaces an existing file with a fully written temporary file. Plain SFTP v3 rename refuses
+/// to overwrite (OpenSSH answers `Failure`), so this prefers `posix-rename@openssh.com` and
+/// otherwise moves the original aside, restoring it if the replacement fails.
+async fn replace_with_temporary(
+    session: &SftpSession,
+    temporary_path: &[u8],
+    target_path: &[u8],
+) -> anyhow::Result<()> {
+    match session
+        .posix_rename_bytes(temporary_path.to_vec(), target_path.to_vec())
+        .await
+    {
+        Ok(()) => return Ok(()),
+        Err(error) if posix_rename_unsupported(&error) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut backup_path = target_path.to_vec();
+    backup_path
+        .extend_from_slice(format!(".nyaterm-backup-{}", uuid::Uuid::new_v4().simple()).as_bytes());
+    session
+        .rename_bytes(target_path.to_vec(), backup_path.clone())
+        .await?;
+    if let Err(error) = session
+        .rename_bytes(temporary_path.to_vec(), target_path.to_vec())
+        .await
+    {
+        session
+            .rename_bytes(backup_path, target_path.to_vec())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("Remote write failed and the original file could not be restored")
+            })?;
+        return Err(error.into());
+    }
+    let _ = session.remove_file_bytes(backup_path).await;
+    Ok(())
 }
 
 async fn preserve_editor_metadata(
