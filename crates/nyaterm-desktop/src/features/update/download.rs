@@ -334,7 +334,9 @@ impl NyaTermApp {
         if let Some(controller) = self.desktop_controller.clone() {
             defer_update_quit(controller, cx);
         } else {
-            self.handle_window_close_request(window, cx);
+            // Installing an update is an explicit quit, even when closing a
+            // window normally hides it to the tray.
+            self.handle_window_close_request_with_count(0, window, cx);
         }
     }
 }
@@ -343,6 +345,74 @@ impl NyaTermApp {
 mod tests {
     use super::{PUBLIC_KEY, decode_update_signature, supports_native_install};
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    #[test]
+    fn restart_update_without_controller_bypasses_close_to_tray_and_session_confirmation() {
+        use gpui::{AppContext as _, EmptyView, TestAppContext};
+        use nyaterm_core::test_support::TestTempDir;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use super::DownloadState;
+        use crate::features::AppLifecycleEvent;
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::features::update::install::PreparedUpdate;
+
+        let root = TestTempDir::new("nyaterm-update-without-controller");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "update-session");
+        app.update(&mut cx, |app, cx| {
+            assert!(app.desktop_controller.is_none());
+            let mut settings = app.settings.summary().clone();
+            settings.minimize_to_tray = true;
+            settings.confirm_on_close = true;
+            settings.startup_restore = false;
+            app.settings.replace_summary(settings);
+            app.sync_component_theme(cx);
+            app.update.update(cx, |update, _| {
+                #[cfg(windows)]
+                let prepared = PreparedUpdate::WindowsInstalled {
+                    helper: root.join("unused-helper.exe"),
+                    installer: root.join("unused-installer.exe"),
+                    target: root.join("NyaTerm.exe"),
+                    work_dir: root.join("update-work"),
+                };
+                #[cfg(not(windows))]
+                let prepared = PreparedUpdate::Installed {
+                    artifact: root.join("unused-installer"),
+                    target: root.join("nyaterm"),
+                };
+                update.download = DownloadState::Ready(prepared);
+            });
+        });
+        let shutdown_requests = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&shutdown_requests);
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&app, move |_, event, _| {
+                if matches!(event, AppLifecycleEvent::ShutdownRequested) {
+                    observed.set(observed.get() + 1);
+                }
+            })
+        });
+
+        let (_, window_cx) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| EmptyView);
+            nyaterm_ui::nya_root(content, window, cx)
+        });
+        window_cx.update(|window, cx| {
+            app.update(cx, |app, cx| app.request_native_update_install(window, cx));
+        });
+        cx.run_until_parked();
+
+        assert_eq!(shutdown_requests.get(), 1);
+        cx.read(|cx| {
+            let app = app.read(cx);
+            assert!(app.update.read(cx).install_requested);
+            assert!(app.has_live_sessions());
+            assert!(!app.session.dialog_should_quit_after_close_all());
+        });
+    }
 
     #[cfg(windows)]
     #[test]
