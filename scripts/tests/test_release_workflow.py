@@ -113,5 +113,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         values["needs.r2.result"] = "failure"
         self.assertFalse(gate(blocks["publish"], values))
 
+    def test_recovery_lints_triggering_workflow_not_frozen_checkout(self) -> None:
+        preflight = jobs()["preflight"]
+        self.assertIn('for _ in {1..36}; do', preflight)
+        self.assertIn('git show "${GITHUB_SHA}:.github/workflows/release.yml"', preflight)
+        self.assertIn("docker run --rm", preflight)
+
 if __name__ == "__main__":
     unittest.main()
