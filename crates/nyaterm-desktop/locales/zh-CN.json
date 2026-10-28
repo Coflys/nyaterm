@@ -3145,6 +3145,10 @@
     "advanced": "高级设置"
   },
   "sshAuth": {
+    "keyPassphraseRejected": "上一次口令无法解锁此密钥，请重新输入。",
+    "saveFailed": "已连接，但凭据未保存。",
+    "credentialUnavailable": "无法读取或准备所选凭据。请刷新列表、解锁凭据库或选择其他凭据。",
+    "sharedAccountWarning": "更新此已保存账号也会修改其他关联连接使用的密码。",
     "dockerElevation": "Docker 需要 sudo 授权，请输入 sudo 密码。",
     "keyRejectedPasswordFallback": "服务器拒绝了密钥，请输入密码继续连接。",
     "agentWaitingTitle": "等待 SSH Agent 授权",
@@ -3166,8 +3170,8 @@
     "noKeys": "暂无可用的已保存 SSH 密钥。",
     "passphrase": "私钥口令",
     "passwordMethod": "密码",
-    "passwordRejected": "上一次密码被拒绝，请重新输入。",
-    "publickeyRejected": "服务器拒绝了当前密钥。请选择另一个已保存 SSH 密钥。",
+    "passwordRejected": "上一次密码被拒绝，请重试。",
+    "publickeyRejected": "服务器拒绝了当前密钥。",
     "publickeyRequired": "服务器只允许密钥认证。",
     "refreshKeys": "刷新密钥",
     "rememberCredential": "登录成功后记住凭据",

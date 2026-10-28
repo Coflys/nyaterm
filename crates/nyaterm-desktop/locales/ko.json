@@ -3152,6 +3152,10 @@
     "advanced": "고급 설정"
   },
   "sshAuth": {
+    "keyPassphraseRejected": "이전 암호문으로 키를 잠금 해제하지 못했습니다. 다시 입력하세요.",
+    "saveFailed": "연결되었지만 자격 증명을 저장하지 못했습니다.",
+    "credentialUnavailable": "선택한 자격 증명을 불러오거나 준비하지 못했습니다. 목록을 새로 고치거나 저장소 잠금을 해제하거나 다른 자격 증명을 선택하세요.",
+    "sharedAccountWarning": "이 저장된 계정을 업데이트하면 연결된 다른 연결에서 사용하는 비밀번호도 변경됩니다.",
     "dockerElevation": "Docker에 sudo 인증이 필요합니다. sudo 비밀번호를 입력하세요.",
     "keyRejectedPasswordFallback": "서버가 키를 거부했습니다. 계속하려면 비밀번호를 입력하세요.",
     "agentWaitingTitle": "SSH Agent 승인 대기 중",
@@ -3174,7 +3178,7 @@
     "passphrase": "암호",
     "passwordMethod": "비밀번호",
     "passwordRejected": "이전 비밀번호가 거부되었습니다. 다시 시도하세요.",
-    "publickeyRejected": "서버가 현재 키를 거부했습니다. 다른 저장된 SSH 키를 선택하세요.",
+    "publickeyRejected": "서버가 현재 키를 거부했습니다.",
     "publickeyRequired": "서버는 공개 키 인증만 허용합니다.",
     "refreshKeys": "키 새로고침",
     "rememberCredential": "로그인 성공 후 기억",

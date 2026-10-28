@@ -3152,6 +3152,10 @@
     "unappliedChanges": "未適用の変更があります"
   },
   "sshAuth": {
+    "keyPassphraseRejected": "前のパスフレーズではこの鍵を解除できませんでした。再入力してください。",
+    "saveFailed": "接続しましたが、認証情報を保存できませんでした。",
+    "credentialUnavailable": "選択した認証情報を読み込めません。リストを更新するか、保管庫のロックを解除するか、別の認証情報を選択してください。",
+    "sharedAccountWarning": "この保存済みアカウントを更新すると、関連する他の接続で使用するパスワードも変更されます。",
     "dockerElevation": "Docker には sudo 認証が必要です。sudo パスワードを入力してください。",
     "keyRejectedPasswordFallback": "サーバーが鍵を拒否しました。続行するにはパスワードを入力してください。",
     "agentWaitingTitle": "SSH エージェントの承認を待機中",
@@ -3174,7 +3178,7 @@
     "passphrase": "パスフレーズ",
     "passwordMethod": "パスワード",
     "passwordRejected": "前回のパスワードが拒否されました。もう一度お試しください。",
-    "publickeyRejected": "サーバーが現在の鍵を拒否しました。別の保存済み SSH 鍵を選択してください。",
+    "publickeyRejected": "サーバーが現在の鍵を拒否しました。",
     "publickeyRequired": "サーバーは公開鍵認証のみを許可しています。",
     "refreshKeys": "鍵を更新",
     "rememberCredential": "ログイン成功後に記憶する",
