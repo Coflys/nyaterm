@@ -771,7 +771,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Verify assets and publish draft
+      - name: Verify draft assets and prepare downstream version
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -786,4 +786,19 @@ jobs:
             echo 'Draft release is incomplete or not in the expected state' >&2
             exit 1
           }
+          printf '%s\n' "${TAG}" > published-release-tag.txt
+      - name: Save downstream release tag
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-release-tag
+          path: published-release-tag.txt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
           gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease="${PRERELEASE}"
