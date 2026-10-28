@@ -329,7 +329,6 @@ impl NyaTermApp {
             vec![
                 NyaMenuItem::action(t!("recording.startTranscriptLog"))
                     .icon("icons/file/description.svg")
-                    .shortcut(shortcut)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.start_recording_for_session(
                             &transcript_session_id,
@@ -644,11 +643,6 @@ mod tests {
                 "Settings...",
             ]
         );
-        let recording_shortcut = if cfg!(target_os = "macos") {
-            "Cmd+Alt+R"
-        } else {
-            "Ctrl+Alt+R"
-        };
         assert_eq!(
             recording
                 .iter()
@@ -656,10 +650,7 @@ mod tests {
                 .map(|(_, icon, shortcut, _, _, _)| (icon, shortcut))
                 .collect::<Vec<_>>(),
             vec![
-                (
-                    Some("icons/file/description.svg".to_string()),
-                    Some(recording_shortcut.to_string())
-                ),
+                (Some("icons/file/description.svg".to_string()), None),
                 (Some("icons/session/record.svg".to_string()), None),
                 (None, None),
                 (Some("icons/file/description.svg".to_string()), None),
