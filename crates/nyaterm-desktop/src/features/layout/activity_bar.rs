@@ -80,6 +80,13 @@ impl NyaTermApp {
                 .into_iter()
                 .filter(|id| ActivityBarEntry::from_persistence_id(id).is_some())
                 .collect(),
+            ActivityBarContextTarget::BottomBar => ActivityBarZone::all()
+                .into_iter()
+                .flat_map(|zone| self.shell.activity_bar_layout().zone(zone))
+                .filter(|id| self.shell.activity_bar_layout().is_hidden(id))
+                .filter(|id| ActivityBarEntry::from_persistence_id(id).is_some())
+                .cloned()
+                .collect(),
             ActivityBarContextTarget::Entry { .. } => Vec::new(),
         }
     }
@@ -544,6 +551,236 @@ impl NyaTermApp {
             .child(bottom)
     }
 
+    /// The horizontal rail under the workspace. Entries moved to the bottom
+    /// zones keep the left and right rails intact; bottom-left entries hug the
+    /// left edge and bottom-right entries hug the right edge.
+    pub(in crate::features) fn activity_bar_bottom(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let palette = self.theme_palette();
+        let show_labels = self.shell.activity_bar_layout().show_labels;
+        let mut left = div().flex().items_center().gap(px(2.)).flex_none();
+        for (index, entry) in self
+            .activity_entries_for_zone(ActivityBarZone::BottomLeft)
+            .into_iter()
+            .enumerate()
+        {
+            left = left.child(self.activity_entry_button_bottom(
+                entry,
+                ActivityBarZone::BottomLeft,
+                index,
+                show_labels,
+                cx,
+            ));
+        }
+        left = left.child(self.activity_bottom_end_drop_target(ActivityBarZone::BottomLeft, cx));
+
+        let mut right = div().flex().items_center().gap(px(2.)).flex_none();
+        for (index, entry) in self
+            .activity_entries_for_zone(ActivityBarZone::BottomRight)
+            .into_iter()
+            .enumerate()
+        {
+            right = right.child(self.activity_entry_button_bottom(
+                entry,
+                ActivityBarZone::BottomRight,
+                index,
+                show_labels,
+                cx,
+            ));
+        }
+        right = right.child(self.activity_bottom_end_drop_target(ActivityBarZone::BottomRight, cx));
+
+        div()
+            .id(SharedString::from("activity-bar-bottom"))
+            .h(px(34.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .px_1()
+            .bg(self.shell_surface_color(palette.surface))
+            .overflow_hidden()
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.open_activity_bar_bottom_context_menu(event, cx);
+                }),
+            )
+            .child(left)
+            .child(div().flex_1())
+            .child(right)
+    }
+
+    fn activity_bottom_end_drop_target(
+        &self,
+        zone: ActivityBarZone,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let palette = self.theme_palette();
+        let drop_line = rgb(palette.primary);
+        let drop_wash = rgba((palette.primary << 8) | 0x16);
+        div()
+            .id(SharedString::from(format!(
+                "activity-bottom-end-{}",
+                zone.persistence_key()
+            )))
+            .w(px(8.))
+            .h(px(28.))
+            .flex_none()
+            .border_l_2()
+            .border_color(rgba(0x00000000))
+            .drag_over::<ActivityBarDragPayload>(move |this, payload, _, _| {
+                if payload.entry_id.is_empty() {
+                    this
+                } else {
+                    this.border_color(drop_line).bg(drop_wash)
+                }
+            })
+            .on_drop(
+                cx.listener(move |this, payload: &ActivityBarDragPayload, _, cx| {
+                    if payload.entry_id.is_empty() {
+                        return;
+                    }
+                    this.move_activity_entry(payload.entry_id.clone(), zone, None, cx);
+                }),
+            )
+    }
+
+    pub(in crate::features) fn activity_entry_button_bottom(
+        &self,
+        entry: ActivityBarEntry,
+        zone: ActivityBarZone,
+        index: usize,
+        show_labels: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let selected = self.activity_entry_selected(entry);
+        let icon_path = entry.icon_path();
+        let tooltip = entry
+            .i18n_key()
+            .map(|key| t!(key))
+            .unwrap_or_else(|| Cow::Borrowed(entry.label()))
+            .to_string();
+        let palette = self.theme_palette();
+        let active_color = rgb(palette.primary);
+        let icon_color = if selected {
+            active_color
+        } else {
+            rgb(palette.text_muted)
+        };
+        let entry_id = entry.persistence_id().to_string();
+        let context_entry_id = entry_id.clone();
+        let indicator = if selected {
+            active_color
+        } else {
+            rgba(0x00000000)
+        };
+
+        div()
+            .id(SharedString::from(format!("activity-bottom-{entry_id}")))
+            .relative()
+            .h(px(28.))
+            .flex_none()
+            .when(show_labels, |this| {
+                this.max_w(px(140.)).px_2().flex().items_center().gap_1()
+            })
+            .when(!show_labels, |this| {
+                this.w(px(34.)).flex().items_center().justify_center()
+            })
+            .rounded_sm()
+            .cursor_pointer()
+            .text_sm()
+            .font_weight(FontWeight(700.))
+            .text_color(if selected {
+                active_color
+            } else {
+                rgb(palette.text_muted)
+            })
+            .bg(rgba(0x00000000))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(2.))
+                    .left(px(5.))
+                    .right(px(5.))
+                    .h(px(2.))
+                    .rounded_full()
+                    .bg(indicator),
+            )
+            .child(activity_icon(icon_path, icon_color.into(), 18.))
+            .when(show_labels, |this| {
+                this.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(10.))
+                        .font_weight(FontWeight(500.))
+                        .child(tooltip.clone()),
+                )
+            })
+            .border_l_2()
+            .border_color(rgba(0x00000000))
+            .cursor_move()
+            .on_drag(
+                ActivityBarDragPayload {
+                    entry_id: entry_id.clone(),
+                    label: tooltip.clone(),
+                    icon_path,
+                },
+                |payload, position, _, cx| {
+                    cx.new(|_| ActivityBarDragPreview::new(payload.clone(), position))
+                },
+            )
+            .drag_over::<ActivityBarDragPayload>({
+                let drop_entry_id = entry_id.clone();
+                move |this, payload, _, _| {
+                    if payload.entry_id.is_empty() || payload.entry_id == drop_entry_id {
+                        this
+                    } else {
+                        this.border_color(active_color)
+                            .bg(rgba((palette.primary << 8) | 0x16))
+                    }
+                }
+            })
+            .on_drop({
+                let drop_zone = zone;
+                let drop_index = index;
+                cx.listener(move |this, payload: &ActivityBarDragPayload, _, cx| {
+                    if payload.entry_id.is_empty() {
+                        return;
+                    }
+                    this.move_activity_entry(
+                        payload.entry_id.clone(),
+                        drop_zone,
+                        Some(drop_index),
+                        cx,
+                    );
+                })
+            })
+            .tooltip({
+                let title = tooltip.clone();
+                move |window, cx| NyaTooltip::new(title.clone()).build(window, cx)
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.activate_activity_entry(entry, window, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_activity_bar_context_menu(
+                        context_entry_id.clone(),
+                        zone,
+                        index,
+                        event,
+                        cx,
+                    );
+                }),
+            )
+    }
+
     pub(in crate::features) fn activity_zone_end_drop_target(
         &self,
         zone: ActivityBarZone,
@@ -747,11 +984,28 @@ mod tests {
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
-    use crate::models::{ActivityBarContextTarget, ActivityBarZone, PanelSide};
+    use crate::models::{ActivityBarContextTarget, ActivityBarEntry, ActivityBarZone, PanelSide};
     use crate::test_support::TestConfigDir;
 
     struct AppHost {
         app: Entity<NyaTermApp>,
+    }
+
+    struct BottomBarHost {
+        app: Entity<NyaTermApp>,
+    }
+
+    impl Render for BottomBarHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full().flex().items_end().child(
+                self.app
+                    .update(cx, |app, cx| app.activity_bar_bottom(cx).into_any_element()),
+            )
+        }
     }
 
     impl Render for AppHost {
@@ -809,6 +1063,75 @@ mod tests {
     }
 
     #[test]
+    fn bottom_rail_renders_entries_and_keeps_bar_menu_reachable() {
+        let test_dir = TestConfigDir::new("nyaterm-activity-bar-bottom-view");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = test_app(&mut cx, test_dir.path());
+        cx.update_entity(&app, |app, cx| {
+            app.move_activity_entry(
+                "quickCmdBar".to_string(),
+                ActivityBarZone::BottomLeft,
+                None,
+                cx,
+            );
+            app.move_activity_entry(
+                "serialSend".to_string(),
+                ActivityBarZone::BottomRight,
+                None,
+                cx,
+            );
+        });
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| BottomBarHost { app: host_app });
+        let cx: &mut VisualTestContext = cx;
+        draw(&app, cx);
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            let bottom = app
+                .bottom_activity_entries()
+                .into_iter()
+                .map(|(entry, zone, _)| (entry.persistence_id(), zone))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                bottom,
+                vec![
+                    ("quickCmdBar", ActivityBarZone::BottomLeft),
+                    ("serialSend", ActivityBarZone::BottomRight)
+                ]
+            );
+            // The side rails keep their entries after the moves.
+            assert!(
+                app.activity_entries_for_zone(ActivityBarZone::RightBottom)
+                    .contains(&ActivityBarEntry::Lock)
+            );
+        });
+
+        // Right-clicking empty bottom-rail space opens the merged-rail menu,
+        // whose hidden-item list is not scoped to one side.
+        cx.update_entity(&app, |app, cx| {
+            app.open_activity_bar_bottom_context_menu(
+                &gpui::MouseDownEvent {
+                    position: gpui::point(gpui::px(760.), gpui::px(12.)),
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        cx.update(|_, cx| {
+            let menu = app
+                .read(cx)
+                .shell
+                .activity_bar_context_menu()
+                .expect("bottom bar context menu should be open");
+            assert_eq!(
+                menu.target,
+                crate::models::ActivityBarContextTarget::BottomBar
+            );
+        });
+    }
+
+    #[test]
     fn entry_and_bar_menus_keep_distinct_tauri_grouping() {
         assert_eq!(
             super::activity_bar_menu_rows(true),
@@ -834,7 +1157,7 @@ mod tests {
         );
         assert_eq!(super::activity_bar_menu_height(true), 114.);
         assert_eq!(super::activity_bar_menu_height(false), 151.);
-        assert_eq!(super::activity_bar_submenu_height(4), 130.);
+        assert_eq!(super::activity_bar_submenu_height(6), 190.);
     }
 
     #[test]

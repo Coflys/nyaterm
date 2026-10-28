@@ -387,7 +387,10 @@ impl NyaTermApp {
     pub(in crate::features) fn main_surface(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // The main surface always hosts the terminal workspace. Side panels are
         // rendered by the shell around this surface to match the Tauri layout.
+        // The bottom activity rail belongs to this center column so it never
+        // takes space from the left or right rails.
         let palette = self.theme_palette();
+        let has_bottom_activity_items = self.activity_bar_bottom_has_items();
         div()
             .flex_1()
             .min_w_0()
@@ -395,6 +398,9 @@ impl NyaTermApp {
             .flex_col()
             .bg(self.shell_transparent_color(palette.bg))
             .child(self.workspace_view(cx))
+            .when(has_bottom_activity_items, |this| {
+                this.child(self.activity_bar_bottom(cx))
+            })
     }
 
     #[inline(never)]

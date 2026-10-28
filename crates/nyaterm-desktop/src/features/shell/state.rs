@@ -96,6 +96,9 @@ pub(super) struct ShellBottomPanelState {
     pub(super) quick_commands_height: f32,
     pub(super) command_send_height: f32,
     pub(super) resize: Option<BottomPanelResizeState>,
+    /// Set by an explicit open while a remote-desktop session is active, so the
+    /// persisted panel mode does not carry into a session it cannot drive.
+    pub(super) remote_desktop_revealed: bool,
 }
 
 /// Window geometry and viewport-derived caches.
@@ -263,6 +266,7 @@ impl ShellFeatureState {
                     init.command_send_height,
                 ),
                 resize: None,
+                remote_desktop_revealed: false,
             },
             viewport: ShellViewportState {
                 size: (1280., 800.),
@@ -384,6 +388,12 @@ impl ShellFeatureState {
 
     pub(in crate::features) fn bottom_panel_mode(&self) -> BottomPanelMode {
         self.bottom_panel.mode
+    }
+
+    /// Ordinary session switches hide a bottom panel it did not ask for, without
+    /// touching the persisted mode.
+    pub(in crate::features) fn reset_remote_desktop_bottom_panel_reveal(&mut self) {
+        self.bottom_panel.remote_desktop_revealed = false;
     }
 
     pub(in crate::features) fn quick_commands_height(&self) -> f32 {

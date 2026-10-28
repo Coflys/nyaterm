@@ -125,6 +125,8 @@ pub(in crate::features) struct UiLayoutSettingsUpdate {
     pub activity_bar_left_bottom: Vec<String>,
     pub activity_bar_right_top: Vec<String>,
     pub activity_bar_right_bottom: Vec<String>,
+    pub activity_bar_bottom_left: Vec<String>,
+    pub activity_bar_bottom_right: Vec<String>,
     pub activity_bar_show_labels: bool,
     pub activity_bar_hidden_items: Vec<String>,
     pub panel_multi_open: bool,
@@ -989,6 +991,8 @@ impl SettingsFeatureState {
         self.summary.ui_activity_bar_left_bottom = update.activity_bar_left_bottom;
         self.summary.ui_activity_bar_right_top = update.activity_bar_right_top;
         self.summary.ui_activity_bar_right_bottom = update.activity_bar_right_bottom;
+        self.summary.ui_activity_bar_bottom_left = update.activity_bar_bottom_left;
+        self.summary.ui_activity_bar_bottom_right = update.activity_bar_bottom_right;
         self.summary.ui_activity_bar_show_labels = update.activity_bar_show_labels;
         self.summary.ui_activity_bar_hidden_items = update.activity_bar_hidden_items;
         self.summary.ui_panel_multi_open = update.panel_multi_open;
@@ -2158,6 +2162,8 @@ mod tests {
             activity_bar_left_bottom: vec!["settings".to_string()],
             activity_bar_right_top: vec!["sftp".to_string()],
             activity_bar_right_bottom: vec!["ai".to_string()],
+            activity_bar_bottom_left: vec!["quickCmdBar".to_string()],
+            activity_bar_bottom_right: vec!["serialSend".to_string()],
             activity_bar_show_labels: true,
             activity_bar_hidden_items: vec!["aiAssistant".to_string()],
             panel_multi_open: true,
@@ -2182,6 +2188,8 @@ mod tests {
         assert_eq!(summary.ui_active_left_panel.as_deref(), Some("connections"));
         assert!(summary.ui_right_panel_collapsed);
         assert_eq!(summary.ui_activity_bar_right_bottom, ["ai"]);
+        assert_eq!(summary.ui_activity_bar_bottom_left, ["quickCmdBar"]);
+        assert_eq!(summary.ui_activity_bar_bottom_right, ["serialSend"]);
         assert_eq!(summary.ui_activity_bar_hidden_items, ["aiAssistant"]);
         assert_eq!(summary.ui_panel_open_mode, "floating");
         assert_eq!(summary.ui_start_workspace_mode, "assets");

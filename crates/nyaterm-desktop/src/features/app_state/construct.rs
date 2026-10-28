@@ -161,6 +161,8 @@ impl NyaTermApp {
             left_bottom: settings.ui_activity_bar_left_bottom.clone(),
             right_top: settings.ui_activity_bar_right_top.clone(),
             right_bottom: settings.ui_activity_bar_right_bottom.clone(),
+            bottom_left: settings.ui_activity_bar_bottom_left.clone(),
+            bottom_right: settings.ui_activity_bar_bottom_right.clone(),
             hidden_items: settings.ui_activity_bar_hidden_items.clone(),
             show_labels: settings.ui_activity_bar_show_labels,
         };

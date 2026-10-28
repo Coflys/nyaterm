@@ -3203,6 +3203,8 @@ fn activity_bar_hidden_items_and_panel_open_mode_roundtrip() {
     let mut summary = store.load_app_settings_summary().expect("load");
     summary.ui_activity_bar_hidden_items =
         vec!["gpuMonitor".to_string(), "dockerManager".to_string()];
+    summary.ui_activity_bar_bottom_left = vec!["quickCmdBar".to_string()];
+    summary.ui_activity_bar_bottom_right = vec!["serialSend".to_string()];
     summary.ui_panel_open_mode = "floating".to_string();
     summary.ui_panel_multi_open = true;
 
@@ -3211,6 +3213,8 @@ fn activity_bar_hidden_items_and_panel_open_mode_roundtrip() {
         saved.ui_activity_bar_hidden_items,
         vec!["gpuMonitor".to_string(), "dockerManager".to_string()]
     );
+    assert_eq!(saved.ui_activity_bar_bottom_left, ["quickCmdBar"]);
+    assert_eq!(saved.ui_activity_bar_bottom_right, ["serialSend"]);
     assert_eq!(saved.ui_panel_open_mode, "floating");
     assert!(saved.ui_panel_multi_open);
 
@@ -3218,6 +3222,14 @@ fn activity_bar_hidden_items_and_panel_open_mode_roundtrip() {
     assert_eq!(
         raw["ui"]["activity_bar_layout"]["hidden_items"],
         serde_json::json!(["gpuMonitor", "dockerManager"])
+    );
+    assert_eq!(
+        raw["ui"]["activity_bar_layout"]["bottom_left"],
+        serde_json::json!(["quickCmdBar"])
+    );
+    assert_eq!(
+        raw["ui"]["activity_bar_layout"]["bottom_right"],
+        serde_json::json!(["serialSend"])
     );
     assert_eq!(raw["ui"]["panel_open_mode"], "floating");
     assert_eq!(raw["ui"]["panel_multi_open"], true);
@@ -3238,6 +3250,8 @@ fn legacy_settings_default_hidden_items_and_docked_panel_mode() {
     );
     assert_eq!(summary.ui_panel_open_mode, "docked");
     assert!(!summary.ui_panel_multi_open);
+    assert!(summary.ui_activity_bar_bottom_left.is_empty());
+    assert!(summary.ui_activity_bar_bottom_right.is_empty());
     assert_eq!(
         summary.ui_activity_bar_left_bottom,
         ["syncBackupHistory", "plugins", "settings"]

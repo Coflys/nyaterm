@@ -542,6 +542,12 @@ pub struct AppSettingsSummary {
     pub ui_activity_bar_right_top: Vec<String>,
     #[serde(default = "default_activity_right_bottom")]
     pub ui_activity_bar_right_bottom: Vec<String>,
+    /// Extra activity-bar entries shown in the horizontal bar under the
+    /// workspace, split into a left-aligned and a right-aligned group.
+    #[serde(default)]
+    pub ui_activity_bar_bottom_left: Vec<String>,
+    #[serde(default)]
+    pub ui_activity_bar_bottom_right: Vec<String>,
     #[serde(default)]
     pub ui_activity_bar_show_labels: bool,
     /// Hidden activity-bar entries. Legacy switches are migrated by the store.
@@ -771,6 +777,8 @@ impl Default for AppSettingsSummary {
             ui_activity_bar_left_bottom: default_activity_left_bottom(),
             ui_activity_bar_right_top: default_activity_right_top(),
             ui_activity_bar_right_bottom: default_activity_right_bottom(),
+            ui_activity_bar_bottom_left: Vec::new(),
+            ui_activity_bar_bottom_right: Vec::new(),
             ui_activity_bar_show_labels: false,
             ui_activity_bar_hidden_items: panel_visibility::default_hidden_items(),
             ui_panel_multi_open: false,
@@ -1052,6 +1060,23 @@ mod tests {
     #[test]
     fn default_panel_open_mode_is_docked() {
         assert_eq!(default_panel_open_mode(), "docked");
+    }
+
+    #[test]
+    fn activity_bar_bottom_zones_default_to_empty() {
+        let summary = super::AppSettingsSummary::default();
+        assert!(summary.ui_activity_bar_bottom_left.is_empty());
+        assert!(summary.ui_activity_bar_bottom_right.is_empty());
+        assert!(
+            summary
+                .ui_activity_bar_left_top
+                .contains(&"fileExplorer".to_string())
+        );
+        assert!(
+            summary
+                .ui_activity_bar_right_bottom
+                .contains(&"quickCmdBar".to_string())
+        );
     }
 
     #[test]

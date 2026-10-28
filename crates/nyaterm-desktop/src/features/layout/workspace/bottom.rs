@@ -8,6 +8,9 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if self.remote_desktop_hides_bottom_panel() {
+            return div().into_any_element();
+        }
         match self.shell.bottom_panel_mode() {
             BottomPanelMode::QuickCommands => {
                 let palette = self.theme_palette();

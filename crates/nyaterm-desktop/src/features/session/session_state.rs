@@ -273,6 +273,11 @@ impl NyaTermApp {
         }
 
         self.session.select_active_session(session_id);
+        if switching_sessions {
+            // A bottom panel that belonged to the previous tab must be opened
+            // again while a remote desktop is active.
+            self.shell.reset_remote_desktop_bottom_panel_reveal();
+        }
         self.remote_desktop.release_inactive_textures(session_id);
         self.sync_ai_active_scope(cx);
         if switching_sessions {
