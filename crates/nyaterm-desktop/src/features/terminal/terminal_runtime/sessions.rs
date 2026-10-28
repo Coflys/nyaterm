@@ -289,8 +289,9 @@ impl NyaTermApp {
                 rust_i18n::t!("tray.unavailable").to_string(),
                 cx,
             );
-            // Keep the process alive when the tray is temporarily unavailable.
-            // A later close or explicit Quit can still complete normal shutdown.
+            // Keep the window recoverable from the taskbar when the tray cannot
+            // hide it. Explicit Quit still uses the normal shutdown path.
+            // GPUI's test window does not implement native minimization.
             #[cfg(not(test))]
             window.minimize_window();
             return;
@@ -506,13 +507,11 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use gpui::TestAppContext;
+    use gpui::{AppContext as _, EmptyView, TestAppContext};
     use nyaterm_core::test_support::TestTempDir;
 
     use crate::features::AppLifecycleEvent;
-    use crate::features::test_support::{
-        app_with_visible_local_session, session_focus_test_window,
-    };
+    use crate::features::test_support::app_with_visible_local_session;
 
     #[derive(Clone, Copy)]
     enum CloseRequest {
@@ -520,17 +519,22 @@ mod tests {
         ExplicitQuit,
     }
 
-    fn close_request_shutdown_count(minimize_to_tray: bool, request: CloseRequest) -> usize {
+    fn close_request_outcome(
+        minimize_to_tray: bool,
+        confirm_on_close: bool,
+        request: CloseRequest,
+    ) -> (usize, bool) {
         let root = TestTempDir::new("nyaterm-close-to-tray");
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, root.path(), "session");
-        app.update(&mut cx, |app, _| {
+        app.update(&mut cx, |app, cx| {
             let mut summary = app.settings.summary().clone();
             summary.minimize_to_tray = minimize_to_tray;
-            summary.confirm_on_close = false;
+            summary.confirm_on_close = confirm_on_close;
             summary.startup_restore = false;
             app.settings.replace_summary(summary);
+            app.sync_component_theme(cx);
         });
 
         let shutdown_requests = Rc::new(Cell::new(0));
@@ -543,7 +547,10 @@ mod tests {
             })
         });
 
-        let window_cx = session_focus_test_window(&mut cx, &app);
+        let (_, window_cx) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| EmptyView);
+            nyaterm_ui::nya_root(content, window, cx)
+        });
         window_cx.update(|window, cx| {
             app.update(cx, |app, cx| match request {
                 CloseRequest::Window => app.handle_window_close_request(window, cx),
@@ -553,24 +560,39 @@ mod tests {
             });
         });
         cx.run_until_parked();
-        shutdown_requests.get()
+        let confirming = cx.read(|cx| app.read(cx).session.dialog_should_quit_after_close_all());
+        (shutdown_requests.get(), confirming)
     }
 
     #[test]
     fn close_request_keeps_running_when_minimize_to_tray_is_enabled() {
-        assert_eq!(close_request_shutdown_count(true, CloseRequest::Window), 0);
+        assert_eq!(
+            close_request_outcome(true, true, CloseRequest::Window),
+            (0, false)
+        );
     }
 
     #[test]
     fn close_request_shuts_down_when_minimize_to_tray_is_disabled() {
-        assert_eq!(close_request_shutdown_count(false, CloseRequest::Window), 1);
+        assert_eq!(
+            close_request_outcome(false, false, CloseRequest::Window),
+            (1, false)
+        );
+    }
+
+    #[test]
+    fn close_request_preserves_session_confirmation_when_minimize_to_tray_is_disabled() {
+        assert_eq!(
+            close_request_outcome(false, true, CloseRequest::Window),
+            (0, true)
+        );
     }
 
     #[test]
     fn explicit_quit_bypasses_minimize_to_tray() {
         assert_eq!(
-            close_request_shutdown_count(true, CloseRequest::ExplicitQuit),
-            1
+            close_request_outcome(true, true, CloseRequest::ExplicitQuit),
+            (1, false)
         );
     }
 }

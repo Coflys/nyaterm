@@ -317,6 +317,8 @@ impl NyaTermApp {
         #[cfg(target_os = "macos")]
         {
             let _ = window;
+            // Preserve macOS application-hide semantics: all workspace windows
+            // hide together and are restored when the application is activated.
             cx.hide();
             true
         }
