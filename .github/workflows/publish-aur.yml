@@ -154,7 +154,7 @@ jobs:
           url="https://github.com/nyakang/nyaterm"
           license=('Apache-2.0')
           options=(!debug)
-          depends=('dbus' 'fontconfig' 'freetype2' 'libx11' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'openssl' 'systemd-libs' 'wayland' 'zstd')
+          depends=('dbus' 'fontconfig' 'freetype2' 'gdk-pixbuf2' 'glib2' 'gtk3' 'hicolor-icon-theme' 'libx11' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'openssl' 'systemd-libs' 'wayland' 'zstd')
           optdepends=('vulkan-icd-loader: Vulkan loader required by GPUI' 'vulkan-driver: hardware-specific Vulkan implementation')
           source=("LICENSE::$url/raw/v$pkgver/LICENSE")
           source_x86_64=("$pkgname-$pkgver-x86_64.deb::$url/releases/download/v$pkgver/NyaTerm_{shell_version}_linux_x64.deb")
@@ -192,13 +192,17 @@ jobs:
             chown -R builder:builder /pkg
             su builder -c "cd /pkg && bash -n PKGBUILD && makepkg --printsrcinfo > .SRCINFO && makepkg --nodeps --noconfirm --cleanbuild"
             namcap /pkg/PKGBUILD /pkg/*.pkg.tar.zst
+            # bsdtar is available in the Arch image, not the Ubuntu host.
+            contents="$(bsdtar -tf /pkg/*.pkg.tar.zst)"
+            for binary in nyaterm nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-mcp; do
+              grep -q "opt/nyaterm/${binary}$" <<< "${contents}" || {
+                echo "missing bundled binary: ${binary}" >&2
+                exit 1
+              }
+            done
           '
           sudo chown -R "${USER}:${USER}" aur
           grep -q "pkgver = ${{ steps.release.outputs.version }}" aur/.SRCINFO
-          grep -q 'opt/nyaterm/nyaterm$' < <(bsdtar -tf aur/*.pkg.tar.zst)
-          grep -q 'opt/nyaterm/nyaterm-rdp-helper$' < <(bsdtar -tf aur/*.pkg.tar.zst)
-          grep -q 'opt/nyaterm/nyaterm-vnc-helper$' < <(bsdtar -tf aur/*.pkg.tar.zst)
-          grep -q 'opt/nyaterm/nyaterm-mcp$' < <(bsdtar -tf aur/*.pkg.tar.zst)
 
       - name: Commit and push AUR update
         if: steps.release.outputs.publish == 'true'
