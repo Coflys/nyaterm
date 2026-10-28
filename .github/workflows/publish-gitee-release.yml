@@ -43,7 +43,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           INPUT_TAG: ${{ inputs.tag }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
@@ -59,13 +58,30 @@ jobs:
             r2_success="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
               --jq '[.jobs[] | select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")] | length')"
             if [[ "${r2_success}" == '1' ]]; then
-              tag="$(git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v*' | awk -v sha="${HEAD_SHA}" '$1 == sha {sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2}' | sort -V | tail -n 1)"
+              receipt_dir="$(mktemp -d)"
+              trap 'rm -rf "${receipt_dir}"' EXIT
+              gh run download "${RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
+                --name published-release-tag --dir "${receipt_dir}"
+              tag="$(cat "${receipt_dir}/published-release-tag.txt")"
               publish='true'
               [[ -n "${tag}" ]] || publish='false'
             else
               tag=''
               publish='false'
             fi
+          fi
+          if [[ "${publish}" == 'true' ]]; then
+            [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+              echo "invalid published release tag: ${tag}" >&2
+              exit 1
+            }
+            release_state="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" \
+              --json isDraft,tagName --jq '[.isDraft,.tagName] | @tsv')"
+            expected="$(printf 'false\t%s' "${tag}")"
+            [[ "${release_state}" == "${expected}" ]] || {
+              echo "Release ${tag} is not published" >&2
+              exit 1
+            }
           fi
           {
             echo "publish=${publish}"
