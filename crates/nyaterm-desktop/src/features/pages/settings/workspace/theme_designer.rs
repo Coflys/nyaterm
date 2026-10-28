@@ -90,6 +90,7 @@ const ANSI_PAIRS: &[(ThemeColorField, ThemeColorField)] = &[
 ];
 
 const NARROW_WIDTH: f32 = 850.;
+const COMPACT_LIST_WIDTH: f32 = 192.;
 const LIST_WIDTH: f32 = 248.;
 const FIELD_INPUT_WIDTH: f32 = 148.;
 
@@ -204,26 +205,31 @@ impl SettingsPanel {
     ) -> AnyElement {
         let state = self.settings.theme_designer.clone();
         let palette = self.theme_palette();
-        let narrow = self.viewport_width < NARROW_WIDTH;
+        let list_width = if self.viewport_width < NARROW_WIDTH {
+            COMPACT_LIST_WIDTH
+        } else {
+            LIST_WIDTH
+        };
+        let editor_width = (self.viewport_width - list_width - 32.).max(0.);
 
         let list = self.theme_list(&state, palette, cx);
-        let editor = self.theme_editor(&state, palette, narrow, cx);
+        let editor = self.theme_editor(&state, palette, editor_width, cx);
         let body = div()
             .flex()
             .flex_1()
             .min_h_0()
             .min_w_0()
-            .when(narrow, |body| body.flex_col())
+            .flex_row()
             .child(
                 div()
+                    .debug_selector(|| "theme-designer-list".to_string())
                     .flex_none()
                     .min_h_0()
                     .bg(rgb(palette.surface))
                     .border_color(rgb(palette.border))
-                    .when(narrow, |column| column.h(px(168.)).w_full().border_b_1())
-                    .when(!narrow, |column| {
-                        column.w(px(LIST_WIDTH)).h_full().border_r_1()
-                    })
+                    .w(px(list_width))
+                    .h_full()
+                    .border_r_1()
                     .child(list.size_full().overflow_y_scrollbar()),
             )
             .child(editor);
@@ -259,6 +265,7 @@ impl SettingsPanel {
         div()
             .flex_none()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .px_3()
@@ -403,7 +410,8 @@ impl SettingsPanel {
     ) -> AnyElement {
         let usage = self.theme_usage(&theme.id);
         let id = theme.id.clone();
-        let mut content = div()
+        let mut badges = div().flex().flex_wrap().gap_1().w_full().min_w_0();
+        let content = div()
             .flex()
             .items_center()
             .gap_2()
@@ -419,28 +427,47 @@ impl SettingsPanel {
                     .child(theme.name.clone()),
             );
         if row.dirty {
-            content = content.child(tag(
+            badges = badges.child(tag(
                 palette,
                 t!("themeDesigner.unsavedTag"),
                 palette.warning,
             ));
         }
         if usage.ui {
-            content = content.child(tag(
+            badges = badges.child(tag(
                 palette,
                 t!("themeDesigner.currentUi"),
                 palette.text_muted,
             ));
         }
         if usage.terminal {
-            content = content.child(tag(
+            badges = badges.child(tag(
                 palette,
                 t!("themeDesigner.currentTerminal"),
                 palette.text_muted,
             ));
         }
         NyaButton::new(format!("theme-browse-{id}"), "")
-            .content(content)
+            .content(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .w_full()
+                    .min_w_0()
+                    .child(content)
+                    .when(row.dirty || usage.ui || usage.terminal, |this| {
+                        this.child(badges)
+                    }),
+            )
+            .tooltip(theme.name.clone())
+            .height(px(if row.dirty && usage.ui && usage.terminal {
+                72.
+            } else if row.dirty || usage.ui || usage.terminal {
+                56.
+            } else {
+                32.
+            }))
             .variant(NyaButtonVariant::Ghost)
             .full_width()
             .selected(row.selected)
@@ -458,10 +485,17 @@ impl SettingsPanel {
         &self,
         state: &ThemeDesignerState,
         palette: ThemePalette,
-        narrow: bool,
+        editor_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut column = div().flex().flex_col().flex_1().min_h_0().min_w_0();
+        let narrow = editor_width < 600.;
+        let mut column = div()
+            .debug_selector(|| "theme-designer-editor".to_string())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0();
         let Some(theme) = state.draft.as_ref() else {
             return column.into_any_element();
         };
@@ -484,7 +518,7 @@ impl SettingsPanel {
             );
         }
         if state.editable() {
-            scroll = scroll.child(self.theme_fields(state, palette, narrow, cx));
+            scroll = scroll.child(self.theme_fields(state, palette, editor_width, cx));
         } else {
             scroll = scroll.child(self.builtin_notice(theme, state, palette, cx));
         }
@@ -620,6 +654,7 @@ impl SettingsPanel {
         div()
             .flex_none()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .px_4()
@@ -713,14 +748,9 @@ impl SettingsPanel {
         &self,
         state: &ThemeDesignerState,
         palette: ThemePalette,
-        narrow: bool,
+        editor_width: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let editor_width = if narrow {
-            self.viewport_width - 32.
-        } else {
-            self.viewport_width - LIST_WIDTH - 32.
-        };
         let columns = if editor_width >= 600. { 2 } else { 1 };
 
         let basics = div()
@@ -927,6 +957,7 @@ impl SettingsPanel {
         let mut footer = div()
             .flex_none()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .px_4()

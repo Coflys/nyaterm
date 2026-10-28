@@ -131,6 +131,16 @@ impl FileOperationContext {
     pub(in crate::features) fn can_pause(&self) -> bool {
         matches!(self.request, FileOperationRequest::Transfer(_))
     }
+
+    pub(in crate::features) fn is_delete(&self) -> bool {
+        matches!(
+            &self.request,
+            FileOperationRequest::Mutation(FileMutationIntent {
+                mutation: FileMutation::Delete(_),
+                ..
+            })
+        )
+    }
 }
 
 impl NyaTermApp {

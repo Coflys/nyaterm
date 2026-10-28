@@ -280,6 +280,14 @@ impl NyaTermApp {
     pub(in crate::features) fn handle_window_minimize(
         &mut self,
         window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        window.minimize_window();
+    }
+
+    pub(crate) fn handle_window_close_request(
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.settings.summary().minimize_to_tray {
@@ -292,15 +300,13 @@ impl NyaTermApp {
                 rust_i18n::t!("tray.unavailable").to_string(),
                 cx,
             );
+            // Keep the window recoverable from the taskbar when the tray cannot
+            // hide it. Explicit Quit still uses the normal shutdown path.
+            // GPUI's test window does not implement native minimization.
+            #[cfg(not(test))]
+            window.minimize_window();
+            return;
         }
-        window.minimize_window();
-    }
-
-    pub(crate) fn handle_window_close_request(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
         self.handle_window_close_request_with_count(
             self.session.ordered_sessions().len(),
             window,
@@ -505,5 +511,100 @@ impl NyaTermApp {
     pub(in crate::features) fn append_terminal_log(&mut self, text: impl AsRef<str>) {
         let session_id = self.session.active_id_owned();
         self.append_terminal_log_for_session(session_id.as_deref(), text.as_ref(), false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::{AppContext as _, EmptyView, TestAppContext};
+    use nyaterm_core::test_support::TestTempDir;
+
+    use crate::features::AppLifecycleEvent;
+    use crate::features::test_support::app_with_visible_local_session;
+
+    #[derive(Clone, Copy)]
+    enum CloseRequest {
+        Window,
+        ExplicitQuit,
+    }
+
+    fn close_request_outcome(
+        minimize_to_tray: bool,
+        confirm_on_close: bool,
+        request: CloseRequest,
+    ) -> (usize, bool) {
+        let root = TestTempDir::new("nyaterm-close-to-tray");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "session");
+        app.update(&mut cx, |app, cx| {
+            let mut summary = app.settings.summary().clone();
+            summary.minimize_to_tray = minimize_to_tray;
+            summary.confirm_on_close = confirm_on_close;
+            summary.startup_restore = false;
+            app.settings.replace_summary(summary);
+            app.sync_component_theme(cx);
+        });
+
+        let shutdown_requests = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&shutdown_requests);
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&app, move |_, event, _| {
+                if matches!(event, AppLifecycleEvent::ShutdownRequested) {
+                    observed.set(observed.get() + 1);
+                }
+            })
+        });
+
+        let (_, window_cx) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| EmptyView);
+            nyaterm_ui::nya_root(content, window, cx)
+        });
+        window_cx.update(|window, cx| {
+            app.update(cx, |app, cx| match request {
+                CloseRequest::Window => app.handle_window_close_request(window, cx),
+                CloseRequest::ExplicitQuit => {
+                    app.handle_window_close_request_with_count(0, window, cx)
+                }
+            });
+        });
+        cx.run_until_parked();
+        let confirming = cx.read(|cx| app.read(cx).session.dialog_should_quit_after_close_all());
+        (shutdown_requests.get(), confirming)
+    }
+
+    #[test]
+    fn close_request_keeps_running_when_minimize_to_tray_is_enabled() {
+        assert_eq!(
+            close_request_outcome(true, true, CloseRequest::Window),
+            (0, false)
+        );
+    }
+
+    #[test]
+    fn close_request_shuts_down_when_minimize_to_tray_is_disabled() {
+        assert_eq!(
+            close_request_outcome(false, false, CloseRequest::Window),
+            (1, false)
+        );
+    }
+
+    #[test]
+    fn close_request_preserves_session_confirmation_when_minimize_to_tray_is_disabled() {
+        assert_eq!(
+            close_request_outcome(false, true, CloseRequest::Window),
+            (0, true)
+        );
+    }
+
+    #[test]
+    fn explicit_quit_bypasses_minimize_to_tray() {
+        assert_eq!(
+            close_request_outcome(true, true, CloseRequest::ExplicitQuit),
+            (1, false)
+        );
     }
 }
