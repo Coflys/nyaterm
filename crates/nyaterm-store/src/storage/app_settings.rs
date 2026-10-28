@@ -384,16 +384,6 @@ impl ConnectionStore {
                 &["ui", "activity_bar_layout", "hidden_items"],
                 64,
             ),
-            ui_activity_bar_bottom_left: json_string_vec(
-                &value,
-                &["ui", "activity_bar_layout", "bottom_left"],
-                32,
-            ),
-            ui_activity_bar_bottom_right: json_string_vec(
-                &value,
-                &["ui", "activity_bar_layout", "bottom_right"],
-                32,
-            ),
             ui_panel_multi_open: json_bool(&value, &["appearance", "panel_multi_open"], false)
                 || json_bool(&value, &["ui", "panel_multi_open"], false),
             ui_panel_open_mode: normalize_panel_open_mode(
@@ -1040,16 +1030,6 @@ impl ConnectionStore {
             &mut value,
             &["ui", "activity_bar_layout", "hidden_items"],
             string_vec_json_value(&settings.ui_activity_bar_hidden_items, 64),
-        );
-        set_nested_json_value(
-            &mut value,
-            &["ui", "activity_bar_layout", "bottom_left"],
-            string_vec_json_value(&settings.ui_activity_bar_bottom_left, 32),
-        );
-        set_nested_json_value(
-            &mut value,
-            &["ui", "activity_bar_layout", "bottom_right"],
-            string_vec_json_value(&settings.ui_activity_bar_bottom_right, 32),
         );
         let panel_open_mode = normalize_panel_open_mode(&settings.ui_panel_open_mode);
         set_nested_json_string(&mut value, &["ui", "panel_open_mode"], panel_open_mode);

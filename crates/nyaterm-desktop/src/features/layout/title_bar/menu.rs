@@ -8,8 +8,8 @@ use nyaterm_ui::{NyaAppMenuBar, NyaDialogWindowExt as _, NyaMenuItem};
 use super::definition::{TitleMenuCommand, TitleMenuDefinition, TitleMenuKind};
 use crate::features::NyaTermApp;
 use crate::models::{
-    ActivityBarEntry, ActivityBarZone, HeaderStatusMode, NavItem, PanelOpenMode, SmartSplitMode,
-    TitleMenu,
+    ActivityBarEntry, ActivityBarZone, HeaderStatusMode, NavItem, PanelOpenMode, PanelSide,
+    SmartSplitMode, TitleMenu,
 };
 
 impl NyaTermApp {
@@ -517,24 +517,11 @@ impl NyaTermApp {
             TitleMenuDefinition::separator(),
             TitleMenuDefinition::submenu(
                 t!("activityBar.leftSide"),
-                self.title_zone_panel_menu_items(
-                    [ActivityBarZone::LeftTop, ActivityBarZone::LeftBottom],
-                    cx,
-                ),
+                self.title_side_panel_menu_items(PanelSide::Left, cx),
             ),
             TitleMenuDefinition::submenu(
                 t!("activityBar.rightSide"),
-                self.title_zone_panel_menu_items(
-                    [ActivityBarZone::RightTop, ActivityBarZone::RightBottom],
-                    cx,
-                ),
-            ),
-            TitleMenuDefinition::submenu(
-                t!("activityBar.bottom"),
-                self.title_zone_panel_menu_items(
-                    [ActivityBarZone::BottomLeft, ActivityBarZone::BottomRight],
-                    cx,
-                ),
+                self.title_side_panel_menu_items(PanelSide::Right, cx),
             ),
             TitleMenuDefinition::separator(),
             TitleMenuDefinition::action(t!("activityBar.resetLayout"))
@@ -543,11 +530,11 @@ impl NyaTermApp {
         ]
     }
 
-    fn title_zone_panel_menu_items(
-        &self,
-        zones: [ActivityBarZone; 2],
-        _cx: &App,
-    ) -> Vec<TitleMenuDefinition> {
+    fn title_side_panel_menu_items(&self, side: PanelSide, _cx: &App) -> Vec<TitleMenuDefinition> {
+        let zones = match side {
+            PanelSide::Left => [ActivityBarZone::LeftTop, ActivityBarZone::LeftBottom],
+            PanelSide::Right => [ActivityBarZone::RightTop, ActivityBarZone::RightBottom],
+        };
         let entries = zones
             .into_iter()
             .flat_map(|zone| self.shell.activity_bar_layout().zone(zone))

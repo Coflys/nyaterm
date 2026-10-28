@@ -86,69 +86,7 @@ impl NyaTermApp {
             .iter()
             .filter(|id| !self.shell.chrome.activity_bar_layout.is_hidden(id))
             .filter_map(|id| ActivityBarEntry::from_persistence_id(id))
-            .filter(|entry| self.activity_entry_is_relevant(*entry))
             .collect()
-    }
-
-    /// Entries of the merged bottom rail in display order: bottom left, then
-    /// bottom right.
-    pub(in crate::features) fn bottom_activity_entries(
-        &self,
-    ) -> Vec<(ActivityBarEntry, ActivityBarZone, usize)> {
-        [ActivityBarZone::BottomLeft, ActivityBarZone::BottomRight]
-            .into_iter()
-            .flat_map(|zone| {
-                self.activity_entries_for_zone(zone)
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(index, entry)| (entry, zone, index))
-            })
-            .collect()
-    }
-
-    pub(in crate::features) fn activity_bar_bottom_has_items(&self) -> bool {
-        !self.bottom_activity_entries().is_empty()
-    }
-
-    fn active_session_is_remote_desktop(&self) -> bool {
-        let Some(session_id) = self.session.active_id() else {
-            return false;
-        };
-        self.session.metadata(session_id).is_some_and(|metadata| {
-            matches!(
-                metadata.launch_config,
-                crate::models::SessionLaunchConfig::Rdp(_)
-                    | crate::models::SessionLaunchConfig::Vnc(_)
-            )
-        })
-    }
-
-    /// A bottom panel left open on another session type does not follow the
-    /// user into a remote-desktop session; only an explicit open does.
-    pub(in crate::features) fn remote_desktop_hides_bottom_panel(&self) -> bool {
-        self.active_session_is_remote_desktop()
-            && self.shell.bottom_panel.mode != BottomPanelMode::Hidden
-            && !self.shell.bottom_panel.remote_desktop_revealed
-    }
-
-    /// Command-oriented entries have nothing to drive a remote desktop. They
-    /// stay available while their own panel is open, which is what a manual
-    /// open looks like, and disappear again once it closes.
-    fn activity_entry_hidden_in_remote_desktop(&self, entry: ActivityBarEntry) -> bool {
-        if !self.active_session_is_remote_desktop() {
-            return false;
-        }
-        matches!(
-            entry,
-            ActivityBarEntry::QuickCommands
-                | ActivityBarEntry::CommandSend
-                | ActivityBarEntry::Recording
-                | ActivityBarEntry::Panel(NavItem::CommandHistory)
-        )
-    }
-
-    fn activity_entry_is_relevant(&self, entry: ActivityBarEntry) -> bool {
-        !self.activity_entry_hidden_in_remote_desktop(entry) || self.activity_entry_selected(entry)
     }
 
     pub(in crate::features) fn normalize_activity_bar_layout(&mut self) {
@@ -272,21 +210,6 @@ impl NyaTermApp {
     ) {
         self.shell.chrome.activity_bar_context_menu = Some(ActivityBarContextMenuState {
             target: ActivityBarContextTarget::Bar { side },
-            x: event.position.x,
-            y: event.position.y,
-            move_submenu_open: false,
-        });
-        cx.notify();
-    }
-
-    /// Open the context menu from empty space in the merged bottom rail.
-    pub(in crate::features) fn open_activity_bar_bottom_context_menu(
-        &mut self,
-        event: &MouseDownEvent,
-        cx: &mut Context<Self>,
-    ) {
-        self.shell.chrome.activity_bar_context_menu = Some(ActivityBarContextMenuState {
-            target: ActivityBarContextTarget::BottomBar,
             x: event.position.x,
             y: event.position.y,
             move_submenu_open: false,
@@ -470,13 +393,10 @@ impl NyaTermApp {
 
         // Moving an open panel across sides closes its docked source. A
         // transient floating selection follows the item and replaces any panel
-        // already floating on the destination side. Bottom-rail moves keep the
-        // panel's side, so they leave both sides untouched.
-        let source_side = source_zone.side();
-        let target_side = target_zone.side();
-        if let (Some(source_side), Some(target_side)) = (source_side, target_side)
-            && source_side != target_side
-        {
+        // already floating on the destination side.
+        let source_side = Self::activity_zone_side(source_zone);
+        let target_side = Self::activity_zone_side(target_zone);
+        if source_side != target_side {
             let moved_floating = self
                 .shell
                 .panels
@@ -498,6 +418,13 @@ impl NyaTermApp {
         ));
         self.persist_ui_layout();
         cx.notify();
+    }
+
+    fn activity_zone_side(zone: ActivityBarZone) -> PanelSide {
+        match zone {
+            ActivityBarZone::LeftTop | ActivityBarZone::LeftBottom => PanelSide::Left,
+            ActivityBarZone::RightTop | ActivityBarZone::RightBottom => PanelSide::Right,
+        }
     }
 
     fn clear_activity_entry_from_side(&mut self, entry_id: &str, side: PanelSide) {
@@ -618,12 +545,10 @@ impl NyaTermApp {
             }
             ActivityBarEntry::Panel(item) => self.panel_entry_selected(item),
             ActivityBarEntry::QuickCommands => {
-                !self.remote_desktop_hides_bottom_panel()
-                    && self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands
+                self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands
             }
             ActivityBarEntry::CommandSend => {
-                !self.remote_desktop_hides_bottom_panel()
-                    && self.shell.bottom_panel.mode == BottomPanelMode::CommandSend
+                self.shell.bottom_panel.mode == BottomPanelMode::CommandSend
             }
             ActivityBarEntry::Recording => {
                 self.panel_entry_selected(NavItem::Recording) || self.recording.active_count() > 0
@@ -662,14 +587,10 @@ mod tests {
 
     use gpui::{AppContext as _, TestAppContext};
     use nyaterm_core::{AppRuntime, RuntimeMode};
-    use nyaterm_remote_desktop::RdpSessionConfig;
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
-    use crate::models::{
-        ActivityBarEntry, ActivityBarZone, BottomPanelMode, NavItem, PanelOpenMode, PanelSide,
-        SessionLaunchConfig,
-    };
+    use crate::models::{ActivityBarZone, NavItem, PanelOpenMode, PanelSide};
     use crate::test_support::TestConfigDir;
 
     fn test_app(cx: &mut TestAppContext, root: &Path) -> gpui::Entity<NyaTermApp> {
@@ -994,230 +915,6 @@ mod tests {
             );
             assert_eq!(app.shell.active_left_panel(), None);
             assert_eq!(app.shell.active_right_panel(), None);
-        });
-    }
-
-    #[test]
-    fn entries_move_to_bottom_zones_without_disturbing_the_side_rails() {
-        let test_dir = TestConfigDir::new("nyaterm-activity-bar-bottom-order");
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = test_app(&mut cx, test_dir.path());
-        cx.update_entity(&app, |app, cx| {
-            assert!(!app.activity_bar_bottom_has_items());
-
-            app.move_activity_entry(
-                "quickCmdBar".to_string(),
-                ActivityBarZone::BottomLeft,
-                None,
-                cx,
-            );
-            app.move_activity_entry(
-                "serialSend".to_string(),
-                ActivityBarZone::BottomRight,
-                None,
-                cx,
-            );
-
-            let ordered = app
-                .bottom_activity_entries()
-                .into_iter()
-                .map(|(entry, zone, _)| (entry.persistence_id(), zone))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                ordered,
-                vec![
-                    ("quickCmdBar", ActivityBarZone::BottomLeft),
-                    ("serialSend", ActivityBarZone::BottomRight)
-                ]
-            );
-            assert!(app.activity_bar_bottom_has_items());
-            // Left and right rails keep their own entries.
-            assert!(
-                app.activity_entries_for_zone(ActivityBarZone::RightBottom)
-                    .contains(&ActivityBarEntry::Lock)
-            );
-            assert!(
-                app.activity_entries_for_zone(ActivityBarZone::RightBottom)
-                    .contains(&ActivityBarEntry::Recording)
-            );
-            assert!(
-                app.activity_entries_for_zone(ActivityBarZone::LeftTop)
-                    .contains(&ActivityBarEntry::Panel(NavItem::Transfers))
-            );
-            assert_eq!(
-                app.settings.summary().ui_activity_bar_bottom_left,
-                ["quickCmdBar"]
-            );
-            assert_eq!(
-                app.settings.summary().ui_activity_bar_bottom_right,
-                ["serialSend"]
-            );
-            assert!(
-                app.settings
-                    .summary()
-                    .ui_activity_bar_right_bottom
-                    .contains(&"recording".to_string())
-            );
-        });
-    }
-
-    #[test]
-    fn bottom_zone_moves_keep_the_panels_side() {
-        let test_dir = TestConfigDir::new("nyaterm-activity-bar-bottom-side");
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = test_app(&mut cx, test_dir.path());
-        cx.update_entity(&app, |app, cx| {
-            app.open_panel(NavItem::Notes, cx);
-            assert_eq!(app.current_left_panel(), Some(NavItem::Notes));
-
-            app.move_activity_entry("notes".to_string(), ActivityBarZone::BottomRight, None, cx);
-
-            // The bottom rail does not move the panel to the other side.
-            assert_eq!(
-                app.shell.activity_bar_layout().side_for_entry("notes"),
-                Some(PanelSide::Left)
-            );
-            assert_eq!(app.current_left_panel(), Some(NavItem::Notes));
-        });
-    }
-
-    #[test]
-    fn remote_desktop_hides_command_entries_until_they_are_opened_explicitly() {
-        let test_dir = TestConfigDir::new("nyaterm-activity-bar-rdp");
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = crate::features::test_support::app_with_visible_local_session(
-            &mut cx,
-            test_dir.path(),
-            "rdp",
-        );
-        cx.update_entity(&app, |app, cx| {
-            app.session.metadata_mut("rdp").unwrap().launch_config =
-                SessionLaunchConfig::Rdp(RdpSessionConfig {
-                    relay: None,
-                    name: "RDP".into(),
-                    host: "127.0.0.1".into(),
-                    port: 3389,
-                    username: String::new(),
-                    domain: String::new(),
-                    password: None,
-                    use_nla: true,
-                    certificate_policy: Default::default(),
-                    administrative_session: false,
-                    display: Default::default(),
-                    clipboard: Default::default(),
-                    reconnect: Default::default(),
-                });
-            // The fixture starts with the quick-commands bottom panel persisted
-            // from settings; an RDP tab must not inherit it.
-            app.set_bottom_panel_mode(BottomPanelMode::Hidden);
-            app.set_bottom_panel_mode(BottomPanelMode::QuickCommands);
-            app.shell.reset_remote_desktop_bottom_panel_reveal();
-
-            assert!(app.remote_desktop_hides_bottom_panel());
-            assert!(!app.activity_entry_selected(ActivityBarEntry::QuickCommands));
-            for entry in [
-                ActivityBarEntry::QuickCommands,
-                ActivityBarEntry::CommandSend,
-                ActivityBarEntry::Recording,
-                ActivityBarEntry::Panel(NavItem::CommandHistory),
-            ] {
-                assert!(
-                    !app.activity_entries_for_zone(
-                        app.shell
-                            .activity_bar_layout()
-                            .find_entry(entry.persistence_id())
-                            .expect("entry has a zone")
-                            .0
-                    )
-                    .contains(&entry),
-                    "{entry:?} must stay hidden on a remote desktop"
-                );
-            }
-            // Unrelated entries stay reachable.
-            assert!(
-                app.activity_entries_for_zone(ActivityBarZone::RightTop)
-                    .contains(&ActivityBarEntry::Panel(NavItem::AiAssistant))
-            );
-
-            // Opening the panel by hand is what un-hides its entry.
-            app.set_bottom_panel_mode(BottomPanelMode::QuickCommands);
-            assert!(!app.remote_desktop_hides_bottom_panel());
-            assert!(app.activity_entry_selected(ActivityBarEntry::QuickCommands));
-            assert!(
-                app.activity_entries_for_zone(ActivityBarZone::RightBottom)
-                    .contains(&ActivityBarEntry::QuickCommands)
-            );
-
-            // The next session switch starts hidden again.
-            app.shell.reset_remote_desktop_bottom_panel_reveal();
-            assert!(app.remote_desktop_hides_bottom_panel());
-            let _ = cx;
-        });
-    }
-
-    #[test]
-    fn bottom_zone_moves_persist_through_ui_layout_settings() {
-        let test_dir = TestConfigDir::new("nyaterm-activity-bar-bottom-persist");
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = test_app(&mut cx, test_dir.path());
-        cx.update_entity(&app, |app, cx| {
-            assert!(
-                app.settings
-                    .summary()
-                    .ui_activity_bar_bottom_left
-                    .is_empty()
-            );
-
-            app.move_activity_entry(
-                "quickCmdBar".to_string(),
-                ActivityBarZone::BottomLeft,
-                None,
-                cx,
-            );
-            app.move_activity_entry(
-                "serialSend".to_string(),
-                ActivityBarZone::BottomRight,
-                None,
-                cx,
-            );
-            assert_eq!(
-                app.settings.summary().ui_activity_bar_bottom_left,
-                ["quickCmdBar"]
-            );
-            assert_eq!(
-                app.settings.summary().ui_activity_bar_bottom_right,
-                ["serialSend"]
-            );
-            assert!(
-                !app.settings
-                    .summary()
-                    .ui_activity_bar_right_bottom
-                    .contains(&"quickCmdBar".to_string())
-            );
-
-            // Moving back to the rail clears the bottom placement.
-            app.move_activity_entry(
-                "quickCmdBar".to_string(),
-                ActivityBarZone::RightBottom,
-                None,
-                cx,
-            );
-            assert!(
-                app.settings
-                    .summary()
-                    .ui_activity_bar_bottom_left
-                    .is_empty()
-            );
-            assert!(
-                app.settings
-                    .summary()
-                    .ui_activity_bar_right_bottom
-                    .contains(&"quickCmdBar".to_string())
-            );
         });
     }
 }

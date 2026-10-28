@@ -46,9 +46,6 @@ pub(crate) enum ActivityBarContextTarget {
     Bar {
         side: PanelSide,
     },
-    /// The merged horizontal rail under the workspace. Its hidden-item list is
-    /// not scoped to one side.
-    BottomBar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -257,10 +254,6 @@ pub(crate) enum ActivityBarZone {
     LeftBottom,
     RightTop,
     RightBottom,
-    /// Left-aligned group of the horizontal rail under the workspace.
-    BottomLeft,
-    /// Right-aligned group of the horizontal rail under the workspace.
-    BottomRight,
 }
 
 impl ActivityBarZone {
@@ -270,8 +263,6 @@ impl ActivityBarZone {
             Self::LeftBottom => "activityBar.leftBottom",
             Self::RightTop => "activityBar.rightTop",
             Self::RightBottom => "activityBar.rightBottom",
-            Self::BottomLeft => "activityBar.bottomLeft",
-            Self::BottomRight => "activityBar.bottomRight",
         }
     }
 
@@ -281,8 +272,6 @@ impl ActivityBarZone {
             Self::LeftBottom => "left_bottom",
             Self::RightTop => "right_top",
             Self::RightBottom => "right_bottom",
-            Self::BottomLeft => "bottom_left",
-            Self::BottomRight => "bottom_right",
         }
     }
 
@@ -292,29 +281,15 @@ impl ActivityBarZone {
             Self::LeftBottom => "Left Bottom",
             Self::RightTop => "Right Top",
             Self::RightBottom => "Right Bottom",
-            Self::BottomLeft => "Bottom Left",
-            Self::BottomRight => "Bottom Right",
         }
     }
 
-    /// The docked side this zone sits on. The bottom rail does not change which
-    /// side an entry's panel opens on.
-    pub(crate) fn side(self) -> Option<PanelSide> {
-        match self {
-            Self::LeftTop | Self::LeftBottom => Some(PanelSide::Left),
-            Self::RightTop | Self::RightBottom => Some(PanelSide::Right),
-            Self::BottomLeft | Self::BottomRight => None,
-        }
-    }
-
-    pub(crate) fn all() -> [Self; 6] {
+    pub(crate) fn all() -> [Self; 4] {
         [
             Self::LeftTop,
             Self::LeftBottom,
             Self::RightTop,
             Self::RightBottom,
-            Self::BottomLeft,
-            Self::BottomRight,
         ]
     }
 }
@@ -386,8 +361,6 @@ pub(crate) struct ActivityBarLayoutState {
     pub(crate) left_bottom: Vec<String>,
     pub(crate) right_top: Vec<String>,
     pub(crate) right_bottom: Vec<String>,
-    pub(crate) bottom_left: Vec<String>,
-    pub(crate) bottom_right: Vec<String>,
     /// Entry ids the user has hidden from the rail. Hidden entries keep their
     /// zone position so unhiding restores their place, but they are skipped
     /// when the rail is rendered. Mirrors Tauri `ui.activity_bar_layout.hidden_items`.
@@ -426,8 +399,6 @@ impl Default for ActivityBarLayoutState {
                 "recording".to_string(),
                 "lock".to_string(),
             ],
-            bottom_left: Vec::new(),
-            bottom_right: Vec::new(),
             hidden_items: nyaterm_core::models::settings::panel_visibility::default_hidden_items(),
             show_labels: false,
         }
@@ -479,8 +450,6 @@ impl ActivityBarLayoutState {
             ActivityBarZone::LeftBottom => &mut self.left_bottom,
             ActivityBarZone::RightTop => &mut self.right_top,
             ActivityBarZone::RightBottom => &mut self.right_bottom,
-            ActivityBarZone::BottomLeft => &mut self.bottom_left,
-            ActivityBarZone::BottomRight => &mut self.bottom_right,
         }
     }
 
@@ -490,8 +459,6 @@ impl ActivityBarLayoutState {
             ActivityBarZone::LeftBottom => &self.left_bottom,
             ActivityBarZone::RightTop => &self.right_top,
             ActivityBarZone::RightBottom => &self.right_bottom,
-            ActivityBarZone::BottomLeft => &self.bottom_left,
-            ActivityBarZone::BottomRight => &self.bottom_right,
         }
     }
 
@@ -504,21 +471,10 @@ impl ActivityBarLayoutState {
         None
     }
 
-    /// Which side the entry's panel opens on. Bottom-rail entries keep the
-    /// panel side they had before the move.
     pub(crate) fn side_for_entry(&self, entry_id: &str) -> Option<PanelSide> {
-        let (zone, _) = self.find_entry(entry_id)?;
-        zone.side().or_else(|| {
-            ActivityBarEntry::from_persistence_id(entry_id).and_then(|entry| match entry {
-                ActivityBarEntry::Panel(item) => item
-                    .is_left_panel()
-                    .then_some(PanelSide::Left)
-                    .or_else(|| item.is_right_panel().then_some(PanelSide::Right)),
-                ActivityBarEntry::Recording => Some(PanelSide::Right),
-                ActivityBarEntry::QuickCommands
-                | ActivityBarEntry::CommandSend
-                | ActivityBarEntry::Lock => None,
-            })
+        self.find_entry(entry_id).map(|(zone, _)| match zone {
+            ActivityBarZone::LeftTop | ActivityBarZone::LeftBottom => PanelSide::Left,
+            ActivityBarZone::RightTop | ActivityBarZone::RightBottom => PanelSide::Right,
         })
     }
 
@@ -643,14 +599,14 @@ impl ActivityBarContextMenuState {
     pub(crate) fn entry_id(&self) -> Option<&str> {
         match &self.target {
             ActivityBarContextTarget::Entry { entry_id, .. } => Some(entry_id.as_str()),
-            ActivityBarContextTarget::Bar { .. } | ActivityBarContextTarget::BottomBar => None,
+            ActivityBarContextTarget::Bar { .. } => None,
         }
     }
 
     pub(crate) fn entry_zone(&self) -> Option<ActivityBarZone> {
         match &self.target {
             ActivityBarContextTarget::Entry { zone, .. } => Some(*zone),
-            ActivityBarContextTarget::Bar { .. } | ActivityBarContextTarget::BottomBar => None,
+            ActivityBarContextTarget::Bar { .. } => None,
         }
     }
 }

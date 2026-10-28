@@ -53,7 +53,6 @@ impl NyaTermApp {
 
     pub(in crate::features) fn set_bottom_panel_mode(&mut self, mode: BottomPanelMode) {
         self.shell.bottom_panel.mode = mode;
-        self.shell.bottom_panel.remote_desktop_revealed = mode != BottomPanelMode::Hidden;
         self.persist_ui_layout();
     }
 
@@ -170,8 +169,6 @@ impl NyaTermApp {
             activity_bar_left_bottom: self.shell.chrome.activity_bar_layout.left_bottom.clone(),
             activity_bar_right_top: self.shell.chrome.activity_bar_layout.right_top.clone(),
             activity_bar_right_bottom: self.shell.chrome.activity_bar_layout.right_bottom.clone(),
-            activity_bar_bottom_left: self.shell.chrome.activity_bar_layout.bottom_left.clone(),
-            activity_bar_bottom_right: self.shell.chrome.activity_bar_layout.bottom_right.clone(),
             activity_bar_show_labels: self.shell.chrome.activity_bar_layout.show_labels,
             activity_bar_hidden_items: self.shell.chrome.activity_bar_layout.hidden_items.clone(),
             panel_multi_open: self.shell.panels.multi_open,
@@ -325,8 +322,7 @@ impl NyaTermApp {
                 this.update_resize_handle_hover(hover_id.clone(), *hovered, cx);
             }))
             .when(
-                self.shell.bottom_panel.mode == BottomPanelMode::Hidden
-                    || self.remote_desktop_hides_bottom_panel(),
+                self.shell.bottom_panel.mode == BottomPanelMode::Hidden,
                 |this| this.h_0().mt_0().mb_0(),
             )
             .on_mouse_down(
