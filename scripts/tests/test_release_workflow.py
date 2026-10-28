@@ -68,9 +68,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertEqual(gate(blocks["release"], values), publish)
                 self.assertEqual(gate(blocks["r2"], values), publish)
 
-    def test_signing_job_has_no_publication_commands_or_write_token(self) -> None:
+    def test_signing_job_has_no_publication_commands(self) -> None:
         preparation = jobs()["prepare_release"]
-        for forbidden in ("contents: write", "gh release ", "aws s3", "git push", "gh workflow run"):
+        for forbidden in ("gh release create", "gh release upload", "gh release edit", "aws s3", "git push", "gh workflow run"):
             self.assertNotIn(forbidden, preparation)
         self.assertIn("needs: [preflight, prepare_release]", jobs()["release"])
 
@@ -90,6 +90,34 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn('select(.name == "Publish Cloudflare R2 mirror" and .conclusion == "success")', content)
             self.assertIn('if [[ "${r2_success}" == \'1\' ]]', content)
 
+
+    def test_draft_notes_are_preserved_until_publish_gate(self) -> None:
+        blocks = jobs()
+        # A GITHUB_TOKEN with contents:read cannot see unpublished draft releases.
+        for name in ("preflight", "prepare_release", "r2"):
+            self.assertIn("contents: write", blocks[name])
+        self.assertIn("Wait for populated draft release", blocks["preflight"])
+        self.assertIn("gh release view", blocks["prepare_release"])
+        self.assertIn("--json body --jq '.body'", blocks["prepare_release"])
+        self.assertNotIn("gh release create", blocks["release"])
+        self.assertNotIn("body=@release-notes.md", blocks["release"])
+        self.assertNotIn("--draft=false", blocks["release"])
+        self.assertIn("--draft=false", blocks["publish"])
+        values = {
+            "needs.preflight.result": "success",
+            "needs.preflight.outputs.publish": "true",
+            "needs.release.result": "success",
+            "needs.r2.result": "success",
+        }
+        self.assertTrue(gate(blocks["publish"], values))
+        values["needs.r2.result"] = "failure"
+        self.assertFalse(gate(blocks["publish"], values))
+
+    def test_recovery_lints_triggering_workflow_not_frozen_checkout(self) -> None:
+        preflight = jobs()["preflight"]
+        self.assertIn('for _ in {1..36}; do', preflight)
+        self.assertIn('git show "${GITHUB_SHA}:.github/workflows/release.yml"', preflight)
+        self.assertIn("docker run --rm", preflight)
 
 if __name__ == "__main__":
     unittest.main()

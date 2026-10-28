@@ -72,7 +72,7 @@ jobs:
       source_sha: ${{ steps.source.outputs.sha }}
     permissions:
       actions: read
-      contents: read
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -174,6 +174,27 @@ jobs:
           }
           echo "sha=${source_sha}" >> "${GITHUB_OUTPUT}"
 
+      - name: Wait for populated draft release
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          expected="$(printf 'true\t%s\ttrue' "${PRERELEASE}")"
+          for _ in {1..36}; do
+            actual="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --json isDraft,isPrerelease,body \
+              --jq '[.isDraft,.isPrerelease,(.body | length > 0)] | @tsv' 2>/dev/null || true)"
+            if [[ "${actual}" == "${expected}" ]]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Missing populated matching draft release for ${TAG}" >&2
+          exit 1
       - name: Verify build configuration
         if: inputs.source_run_id == ''
         shell: bash
@@ -210,11 +231,13 @@ jobs:
           scripts.tests.test_release_provenance
           scripts.tests.test_release_workflow
       - name: Check workflow syntax
-        run: >-
-          docker run --rm
-          -v "${PWD}:/repo"
-          -w /repo
-          rhysd/actionlint:1.7.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A recovery dispatch may build a frozen source_ref with an updated workflow.
+          # Lint the workflow revision that actually triggered this run, not the frozen source tree.
+          git show "${GITHUB_SHA}:.github/workflows/release.yml" > .github/workflows/release.yml
+          docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
 
   package:
     name: Package ${{ matrix.label }}
@@ -337,7 +360,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       actions: read
-      contents: read
+      contents: write
     outputs:
       version: ${{ needs.preflight.outputs.version }}
       tag: ${{ needs.preflight.outputs.tag }}
@@ -412,9 +435,15 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
+          PUBLISH: ${{ needs.preflight.outputs.publish }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ -f "scripts/release/notes/${VERSION}.md" ]]; then
+          if [[ "${PUBLISH}" == 'true' ]]; then
+            gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body' > release-notes.md
+            [[ -s release-notes.md ]] || { echo 'Draft release body is empty' >&2; exit 1; }
+          elif [[ -f "scripts/release/notes/${VERSION}.md" ]]; then
             cp "scripts/release/notes/${VERSION}.md" release-notes.md
           else
             printf 'NyaTerm %s\n\n' "${VERSION}" > release-notes.md
@@ -498,7 +527,7 @@ jobs:
           retention-days: 30
 
   release:
-    name: Publish GitHub release
+    name: Upload assets to GitHub draft
     needs: [preflight, prepare_release]
     if: >-
       always() &&
@@ -518,24 +547,21 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-candidate
-      - name: Create or update GitHub Release
+      - name: Verify draft and upload assets without publishing
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
           TAG: ${{ needs.preflight.outputs.tag }}
-          TARGET_SHA: ${{ needs.preflight.outputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            release_id="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json databaseId --jq '.databaseId')"
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-              -F prerelease="${PRERELEASE}" -F body=@release-notes.md >/dev/null
-          else
-            args=(release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --target "${TARGET_SHA}" --title "NyaTerm ${TAG}" --notes-file release-notes.md)
-            [[ "${PRERELEASE}" == 'true' ]] && args+=(--prerelease)
-            gh "${args[@]}"
-          fi
+          status="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease,body \
+            --jq '[.isDraft,.isPrerelease,(.body | length > 0)] | @tsv')"
+          expected="$(printf 'true\t%s\ttrue' "${PRERELEASE}")"
+          [[ "${status}" == "${expected}" ]] || {
+            echo 'Expected a populated draft release with matching prerelease status' >&2
+            exit 1
+          }
           gh release upload "${TAG}" dist-release/* \
             --repo "${GITHUB_REPOSITORY}" --clobber
 
@@ -550,7 +576,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -730,3 +756,34 @@ jobs:
           python3 scripts/release/verify_release_metadata.py \
             --directory "${public_dir}" --version "${VERSION}" --tag "${TAG}" \
             --base-url "${BASE_URL}" --check-assets
+
+  publish:
+    name: Publish verified GitHub release
+    needs: [preflight, release, r2]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.r2.result == 'success' &&
+      needs.preflight.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Verify assets and publish draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          status="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease,body,assets \
+            --jq '[.isDraft,.isPrerelease,(.body | length > 0),([.assets[] | select(.name == "latest.json")] | length == 1),([.assets[] | select(.name == "downloads.json")] | length == 1),([.assets[] | select(.name == "SHA256SUMS")] | length == 1)] | @tsv')"
+          expected="$(printf 'true\t%s\ttrue\ttrue\ttrue\ttrue' "${PRERELEASE}")"
+          [[ "${status}" == "${expected}" ]] || {
+            echo 'Draft release is incomplete or not in the expected state' >&2
+            exit 1
+          }
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease="${PRERELEASE}"
