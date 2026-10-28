@@ -248,3 +248,61 @@ fn escape_dismisses_delete_confirmation_before_closing_groups_window(cx: &mut Te
     draw(&mut visual);
     assert!(app.read_with(cx, |app, _| app.sync_input.groups().is_empty()));
 }
+
+#[gpui::test]
+fn name_and_search_focus_rings_remain_visible_at_panel_edges(cx: &mut TestAppContext) {
+    let _cleanup = crate::test_support::TestAppCleanup::new(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let dir = TestTempDir::new("nyaterm-sync-groups-input-rings");
+    let app = app_with_visible_local_session(cx, dir.path(), "session-0");
+    let parent = parent_window(cx, &app);
+    let mut visual = open_groups(cx, &app, parent);
+    let handle = app.read_with(cx, |app, _| app.sync_input.window.handle().unwrap());
+    let mut input_ids = vec!["sync.groups.search".to_string()];
+
+    for has_group in [false, true] {
+        if has_group {
+            app.update(cx, |app, cx| app.create_sync_group(cx));
+            let group_id = app.read_with(cx, |app, _| {
+                app.sync_input.selected_group().unwrap().id.clone()
+            });
+            input_ids.push(format!("sync.group-name.{group_id}"));
+        }
+        for dimensions in [size(px(960.), px(640.)), size(px(760.), px(480.))] {
+            visual.simulate_window_resize(handle.into(), dimensions);
+            for scale in [1., 1.25] {
+                visual.simulate_scale_factor_change(scale);
+                draw(&mut visual);
+                for id in &input_ids {
+                    visual.update(|window, cx| {
+                        let field = app.read(cx).existing_text_input(id).unwrap();
+                        let focus = field.read(cx).component_focus_handle(cx);
+                        window.focus(&focus, cx);
+                    });
+                    draw(&mut visual);
+                    visual.update(|window, cx| {
+                        let color: gpui::Hsla =
+                            gpui::rgb(app.read(cx).theme_palette().focus_ring).into();
+                        let quads = window.painted_quads();
+                        let ring: Vec<_> = quads
+                            .iter()
+                            .filter(|quad| quad.border_color == color.alpha(0.5))
+                            .collect();
+                        let bounds = ring.first().expect("focused input paints a ring").bounds;
+                        // Border strips share a ring's bounds, but their masks can
+                        // clip individual edges. Inspect the combined visible paint.
+                        let visible = ring
+                            .iter()
+                            .map(|quad| quad.content_mask.bounds.intersect(&quad.bounds))
+                            .reduce(|left, right| left.union(&right))
+                            .unwrap();
+                        assert_eq!(
+                            visible, bounds,
+                            "focus ring clipped for {id} at scale {scale}"
+                        );
+                    });
+                }
+            }
+        }
+    }
+}

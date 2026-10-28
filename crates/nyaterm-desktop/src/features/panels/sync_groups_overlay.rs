@@ -4,14 +4,13 @@ use std::collections::HashSet;
 
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, rgba};
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable, NyaSearchInput, mode_button};
+use nyaterm_ui::{
+    NyaButton, NyaButtonVariant, NyaInputShell, NyaScrollable, NyaSearchInput, mode_button,
+};
 
 use crate::features::formatting::session_kind_label;
 use crate::features::sync_input::SyncGroupSessionFilter;
-use crate::features::{
-    NyaTermApp, text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::TextInputSetup,
-    text_inputs::ordinary_input_focus_ring, text_inputs::ordinary_input_shell_border_color,
-};
+use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::widgets::{small_button, status_pill};
 
 impl NyaTermApp {
@@ -28,20 +27,14 @@ impl NyaTermApp {
             .as_ref()
             .map(|group| group.color)
             .unwrap_or(0x3b82f6);
-        let (group_name_input, group_name_focus, group_name_focused) =
-            if let Some(group) = selected_group.as_ref() {
-                let field = self.text_input(
-                    format!("sync.group-name.{}", group.id),
-                    &group.name,
-                    TextInputSetup::placeholder(t!("syncGroup.groupName")),
-                    cx,
-                );
-                let focus = field.read(cx).focus_handle();
-                let focused = field.read(cx).has_focus();
-                (Some(field), Some(focus), focused)
-            } else {
-                (None, None, false)
-            };
+        let group_name_input = selected_group.as_ref().map(|group| {
+            self.text_input(
+                format!("sync.group-name.{}", group.id),
+                &group.name,
+                TextInputSetup::placeholder(t!("syncGroup.groupName")),
+                cx,
+            )
+        });
         let search_draft = self.sync_input.search_draft().to_string();
         let search_input = self.text_input(
             "sync.groups.search",
@@ -434,32 +427,16 @@ impl NyaTermApp {
                 )
                 .child(
                     div()
-                        .id(SharedString::from("sync-group-name-input"))
                         .h(px(34.))
                         .flex_1()
                         .min_w_0()
-                        .px(px(ORDINARY_INPUT_SHELL_PADDING_X_PX))
                         .flex()
                         .items_center()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(ordinary_input_shell_border_color(
-                            palette,
-                            group_name_focused,
-                        ))
-                        .when(group_name_focused, |this| {
-                            this.shadow(ordinary_input_focus_ring(palette))
-                        })
-                        .bg(rgb(palette.input))
-                        .text_sm()
-                        .text_color(rgb(palette.text))
-                        .cursor_text()
-                        .when_some(group_name_focus, |this, focus| {
-                            this.on_click(move |_, window, cx| {
-                                window.focus(&focus, cx);
-                            })
-                        })
-                        .children(group_name_input),
+                        .children(
+                            group_name_input
+                                .as_ref()
+                                .map(|field| NyaInputShell::new("sync-group-name-input", field)),
+                        ),
                 )
                 .child(
                     NyaButton::new(
@@ -576,7 +553,8 @@ impl NyaTermApp {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
-                            .overflow_hidden()
+                            // Only the list clips its content; input focus rings paint
+                            // outside their borders into the surrounding panel padding.
                             .pl_4()
                             .flex()
                             .flex_col()
