@@ -1255,9 +1255,11 @@ mod tests {
             app.toggle_left_sidebar(cx);
             app.ensure_panel_in_stack(NavItem::GpuMonitor, cx);
             assert!(app.panel_is_rendered(NavItem::GpuMonitor));
-            app.shell.show_page(NavItem::Settings);
-            assert!(!app.panel_is_rendered(NavItem::GpuMonitor));
-            app.shell.show_workspace();
+            app.open_page(NavItem::Settings, cx);
+            assert!(
+                app.panel_is_rendered(NavItem::GpuMonitor),
+                "settings is a tab now and must not hide the side panels"
+            );
             if !cfg!(target_os = "macos") {
                 app.shell.set_viewport_size_for_test((600., 800.));
                 app.shell.close_mobile_panels();

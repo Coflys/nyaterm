@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::models::{MainMode, NavItem, PanelResizeSide, PanelSide};
+use crate::models::{NavItem, PanelResizeSide, PanelSide};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, IntoElement, KeyDownEvent, MouseButton,
     MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, Render, SharedString, Stateful,
@@ -458,17 +458,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let started_at = Instant::now();
-        let output = if self.shell.main_mode() == MainMode::Page
-            && self.shell.selected_nav() == NavItem::Settings
-        {
-            div()
-                .flex()
-                .flex_1()
-                .min_h_0()
-                .bg(self.shell_surface_color(palette.bg))
-                .child(self.settings_view(cx))
-                .into_any_element()
-        } else {
+        let output = {
             let compact_layout = !cfg!(target_os = "macos");
             let has_left_activity_items = self.activity_side_has_items(ActivitySide::Left);
             let has_right_activity_items = self.activity_side_has_items(ActivitySide::Right);
@@ -1160,18 +1150,18 @@ impl NyaTermApp {
 
     /// Whether the main window should be held back for a modal child window.
     ///
-    /// The three windows below hold one shared draft slot each, so the main
-    /// window must not be edited underneath them. Deliberately absent: the remote
-    /// file editor, which is an independent document window, and the
-    /// external-editor prompt, which is a topmost `PopUp` that must not block the
-    /// workspace it is reporting on.
+    /// The two windows below hold one shared draft slot each, so the main
+    /// window must not be edited underneath them. Deliberately absent: the
+    /// remote file editor, which is an independent document window, and the
+    /// external-editor prompt, which is a topmost `PopUp` that must not block
+    /// the workspace it is reporting on. Settings is also absent -- it is a
+    /// workspace tab, so opening it must never disable the main window.
     ///
     /// The pending state counts: a child window is opened from a deferred
     /// callback, and without it the main window would be live for the frames in
     /// between.
     fn modal_child_window_is_open_or_pending(&self) -> bool {
-        self.shell.settings_window_is_open_or_pending()
-            || self.connection_state.editor_window_is_open_or_pending()
+        self.connection_state.editor_window_is_open_or_pending()
             || self.commands.quick_editor_window_is_open_or_pending()
     }
 
@@ -1432,10 +1422,10 @@ mod tests {
         cx.new(|cx| super::NyaTermApp::new(runtime, stores, cx))
     }
 
-    /// The three windows that hold a draft shared with the main window each hold
-    /// it back, and each does so from the moment the open is requested -- a child
-    /// window is opened from a deferred callback, so the pending state is the only
-    /// thing covering the frames in between.
+    /// The remaining draft-owning child windows hold the main window back, each
+    /// from the moment the open is requested -- a child window is opened from a
+    /// deferred callback, so the pending state is the only thing covering the
+    /// frames in between.
     #[gpui::test]
     fn every_draft_owning_child_window_holds_the_main_window_back(cx: &mut TestAppContext) {
         let app = modal_predicate_app(cx);
@@ -1445,11 +1435,6 @@ mod tests {
                 !app.modal_child_window_is_open_or_pending(),
                 "nothing is open yet"
             );
-
-            assert!(app.shell.begin_settings_window_open());
-            assert!(app.modal_child_window_is_open_or_pending());
-            app.shell.cancel_settings_window_open();
-            assert!(!app.modal_child_window_is_open_or_pending());
 
             assert!(app.connection_state.begin_editor_window_open());
             assert!(app.modal_child_window_is_open_or_pending());

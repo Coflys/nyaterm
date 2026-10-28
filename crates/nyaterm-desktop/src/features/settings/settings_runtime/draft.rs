@@ -656,9 +656,7 @@ impl NyaTermApp {
         self.forget_text_inputs("ai.settings.action.");
         self.forget_text_inputs("ai.settings.manual-model.");
         self.forget_text_inputs("keyword.highlight.");
-        if self.shell.finish_settings_navigation() {
-            self.persist_ui_layout();
-        }
+        self.close_settings_workspace_tab(cx);
         self.transfer_browser_visibility_changed(browser_was_visible, cx);
         self.shell
             .set_status(t!("settings.settingsClosed").to_string());

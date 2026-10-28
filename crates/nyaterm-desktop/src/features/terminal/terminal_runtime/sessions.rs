@@ -42,12 +42,23 @@ impl NyaTermApp {
         .detach();
     }
 
-    pub(in crate::features) fn close_active_session(&mut self, cx: &mut Context<Self>) {
-        if let Some(key) = self.active_workspace_tab()
-            && !crate::models::WorkspaceTabId::from_layout_key(&key).is_session()
-        {
-            self.request_workspace_tabs_close(vec![key], None, cx);
-            return;
+    pub(in crate::features) fn close_active_session(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(key) = self.active_workspace_tab() {
+            match crate::models::WorkspaceTabId::from_layout_key(&key) {
+                crate::models::WorkspaceTabId::Settings => {
+                    self.request_settings_tab_close(window, cx);
+                    return;
+                }
+                id if !id.is_session() => {
+                    self.request_workspace_tabs_close(vec![key], None, cx);
+                    return;
+                }
+                _ => {}
+            }
         }
         let Some(session_id) = self.session.active_id_owned() else {
             self.shell.set_status("no active session".to_string());
@@ -308,7 +319,8 @@ impl NyaTermApp {
             return;
         }
         if self.settings.theme_designer().dirty() {
-            self.activate_settings_window(cx);
+            self.begin_settings_draft(cx);
+            self.open_settings_workspace_tab(cx);
             self.theme_designer_action(
                 crate::features::settings::theme_designer::ThemeIntent::Quit(open_sessions),
                 cx,

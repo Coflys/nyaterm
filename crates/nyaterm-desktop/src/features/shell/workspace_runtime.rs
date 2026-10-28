@@ -11,7 +11,7 @@ use crate::features::{
     view_widgets::vertical_resize_handle_visual,
 };
 use crate::models::{
-    MainMode, NavItem, WorkspacePaneNode, WorkspaceSplitDirection, WorkspaceSplitResizeState,
+    NavItem, WorkspacePaneNode, WorkspaceSplitDirection, WorkspaceSplitResizeState,
 };
 
 impl NyaTermApp {
@@ -178,7 +178,6 @@ impl NyaTermApp {
         self.activate_session_id_with_surface_sync(&session_id, cx);
         self.sync_workspace_split_from_active_tab();
         self.shell.navigation.selected_nav = NavItem::Workspace;
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell
             .set_status(format!("focused pane {}", short_id(&session_id)));
         cx.notify();
@@ -563,7 +562,6 @@ impl NyaTermApp {
             };
             if self.apply_restored_workspace_pane_layout(restored, active.as_deref(), cx) {
                 self.shell.navigation.selected_nav = NavItem::Workspace;
-                self.shell.navigation.main_mode = MainMode::Workspace;
                 self.shell
                     .set_status("restored workspace pane layout".to_string());
                 cx.notify();
@@ -601,7 +599,6 @@ impl NyaTermApp {
                     return;
                 }
                 this.shell.navigation.selected_nav = NavItem::Workspace;
-                this.shell.navigation.main_mode = MainMode::Workspace;
                 this.shell
                     .set_status("restored workspace pane layout".to_string());
                 cx.notify();

@@ -109,6 +109,8 @@ impl NyaTermApp {
                 }
                 return;
             }
+            // The settings surface owns its own focus targets.
+            crate::models::WorkspaceTabId::Settings => return,
             crate::models::WorkspaceTabId::Session(_) => {}
         }
         if self.remote_desktop.is_session(session) {

@@ -299,45 +299,26 @@ impl DesktopController {
         self.broadcast_shared_state_except(event, exclude_source.then_some(source), cx);
     }
 
+    /// Point the process-wide settings preview at the workspace that opened a
+    /// settings tab.
+    ///
+    /// Settings is now a per-window tab, so two windows can each hold a draft.
+    /// The window-decorations/material preview has to resolve to one of them;
+    /// the most recently opened settings tab owns it until it closes.
     pub fn activate_or_claim_settings(
         &mut self,
         requester: WorkspaceId,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> bool {
-        let Some(owner) = self.settings_owner_workspace_id else {
-            self.settings_owner_workspace_id = Some(requester);
-            return false;
-        };
-        if owner == requester {
-            return false;
-        }
-        let Some(entry) = self.windows.get(&owner) else {
-            self.settings_owner_workspace_id = Some(requester);
-            return false;
-        };
-        let app = entry
-            .shell
-            .update(cx, |shell, _| shell.app.clone())
-            .ok()
-            .flatten();
-        if let Some(app) = app {
-            app.update(cx, |app, cx| {
-                app.activate_settings_window(cx);
-            });
-            let _ = entry.handle.update(cx, |_, window, cx| {
-                show_window(window, cx);
-            });
-            self.mark_active(owner);
-            true
-        } else {
-            self.settings_owner_workspace_id = Some(requester);
-            false
-        }
+        self.settings_owners.retain(|id| *id != requester);
+        self.settings_owners.push(requester);
+        false
     }
 
     pub fn release_settings_owner(&mut self, workspace_id: WorkspaceId, cx: &mut Context<Self>) {
-        if self.settings_owner_workspace_id == Some(workspace_id) {
-            self.settings_owner_workspace_id = None;
+        let previous_len = self.settings_owners.len();
+        self.settings_owners.retain(|id| *id != workspace_id);
+        if self.settings_owners.len() != previous_len {
             crate::window_chrome::request_window_decoration_refresh(cx);
         }
     }
