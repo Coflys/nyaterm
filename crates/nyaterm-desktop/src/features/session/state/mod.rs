@@ -674,6 +674,12 @@ impl SessionFeatureState {
         self.prompts.active_credential()
     }
 
+    pub(in crate::features) fn prompt_restore_credential_focus(&mut self) {
+        if self.prompts.has_active_credential() {
+            self.prompts.credential_prompt_focus_pending = true;
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::features) fn prompt_request_credential_focus_for_test(&mut self) {
         self.prompts.credential_prompt_focus_pending = true;
@@ -2281,7 +2287,7 @@ impl SessionPromptState {
     /// Freeing the single active slot is what lets the next queued prompt in, and
     /// nothing is enqueued at that moment, so the activation pass has to be woken
     /// explicitly. Every `take_*` below does this.
-    fn signal_wake(&self) {
+    pub(in crate::features) fn signal_wake(&self) {
         self.wake.signal(ANY_INTEREST);
     }
 
@@ -2313,6 +2319,12 @@ impl SessionPromptState {
         }
         self.signal_wake();
         PromptResolution::Ready(prompt)
+    }
+
+    pub(in crate::features) fn active_credential_mut(
+        &mut self,
+    ) -> Option<&mut CredentialPromptState> {
+        self.active_credential_prompt.as_mut()
     }
 
     pub(in crate::features) fn take_credential(&mut self) -> Option<CredentialPromptState> {
@@ -2459,7 +2471,12 @@ impl SessionPromptState {
         let Some(state) = self.active_credential_prompt.as_mut() else {
             return false;
         };
-        if state.id != prompt_id {
+        if state.id != prompt_id
+            || state
+                .authentication
+                .as_ref()
+                .is_some_and(|form| form.is_busy())
+        {
             return false;
         }
         state.value = text;
@@ -2503,6 +2520,13 @@ impl SessionPromptState {
 
     pub(in crate::features) fn active_input_target(&self) -> Option<PromptInputTarget> {
         if let Some(state) = self.active_credential_prompt.as_ref() {
+            if state
+                .authentication
+                .as_ref()
+                .is_some_and(|form| !form.uses_secret_input())
+            {
+                return None;
+            }
             return Some(PromptInputTarget {
                 id: format!("ssh.credential.{}", state.id),
                 seed: state.value.clone(),

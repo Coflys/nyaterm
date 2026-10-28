@@ -345,6 +345,11 @@ impl NyaTermApp {
         if !self.session.start.retry_is_pending(&options) {
             return;
         }
+        let reload_saved = options
+            .reconnect_session_id
+            .as_ref()
+            .and(source_connection_id.clone());
+        let mut build_context = self.ssh_session_config_build_context();
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
             custom_name,
@@ -397,6 +402,7 @@ impl NyaTermApp {
         );
 
         config.bind_attempt(self.session.start.attempt(&request_id));
+        build_context.attempt = config.attempt.clone();
         let session_manager = self.session.manager_handle();
         let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
@@ -409,6 +415,22 @@ impl NyaTermApp {
             SessionKind::Ssh,
             session_start_tx,
             move || {
+                if let Some(id) = reload_saved {
+                    let saved = build_context
+                        .store
+                        .request_fn(nyaterm_store::StoreDomain::Connections, move |store| {
+                            store.get_connection(&id)
+                        })
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| "saved SSH connection was deleted".to_string())?;
+                    let mut fresh = build_context.build_config(&saved)?;
+                    fresh.cols = config.cols;
+                    fresh.rows = config.rows;
+                    fresh.pixel_width = config.pixel_width;
+                    fresh.pixel_height = config.pixel_height;
+                    fresh.bind_attempt(config.attempt.clone());
+                    config = fresh;
+                }
                 let multiplex =
                     open_ssh_multiplex_handle(config.clone()).map_err(|error| error.to_string())?;
                 let connection = ssh_connections.register(multiplex_key, multiplex);

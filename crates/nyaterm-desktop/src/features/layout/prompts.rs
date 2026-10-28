@@ -261,7 +261,10 @@ impl NyaTermApp {
         &mut self,
         prompt: CredentialPromptState,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
+        if prompt.authentication.is_some() {
+            return self.runtime_authentication_view(prompt, cx);
+        }
         let palette = self.theme_palette();
         let title = match prompt.prompt.kind {
             SshCredentialPromptKind::Password => t!("runtimePrompt.sshPassword"),
@@ -276,10 +279,13 @@ impl NyaTermApp {
             }
             SshCredentialPromptReason::DockerElevation => t!("sshAuth.dockerElevation"),
             SshCredentialPromptReason::MissingPassword => t!("sshAuth.missingPassword"),
+            SshCredentialPromptReason::PublickeyRequired => t!("sshAuth.publickeyRequired"),
+            SshCredentialPromptReason::PublickeyRejected => t!("sshAuth.publickeyRejected"),
             SshCredentialPromptReason::PasswordRejected => t!("sshAuth.passwordRejected"),
             SshCredentialPromptReason::KeyPassphraseRequired => {
                 t!("sshAuth.keyPassphraseRequired")
             }
+            SshCredentialPromptReason::KeyPassphraseRejected => t!("sshAuth.keyPassphraseRejected"),
             SshCredentialPromptReason::KeyboardInteractive => {
                 t!("runtimePrompt.keyboardInteractive")
             }
@@ -369,6 +375,7 @@ impl NyaTermApp {
                         }),
                     )),
             )
+            .into_any_element()
     }
 
     pub(in crate::features) fn keyboard_interactive_prompt_banner(

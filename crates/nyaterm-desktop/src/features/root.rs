@@ -1215,6 +1215,8 @@ impl NyaTermApp {
                 div()
                     .w(px(dialog_width))
                     .max_w_full()
+                    .max_h_full()
+                    .min_h_0()
                     .when_some(host_key_prompt, |this, prompt| {
                         this.child(self.host_key_prompt_banner(prompt, cx))
                     })

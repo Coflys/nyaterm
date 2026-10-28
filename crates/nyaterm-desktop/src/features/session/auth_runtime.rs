@@ -16,6 +16,12 @@ use nyaterm_transport::{
     SshKeyboardInteractiveRequest, SshOtpProvider,
 };
 
+use super::runtime_auth::{
+    CredentialResponseSender, RuntimeAuthenticationContext, RuntimeAuthenticationForm,
+};
+use nyaterm_store::runtime_auth::{PreparedCredentialSave, RuntimeConnectionSnapshot};
+use nyaterm_transport::ssh_authentication::{SshAuthenticationRequest, SshAuthenticationResponse};
+
 use super::{
     credential_prompt_id, keyboard_interactive_prompt_id, sftp_duplicate_prompt_id,
     uuid_like_prompt_id,
@@ -571,6 +577,17 @@ impl HostKeyPromptBroker {
 
 #[derive(Debug)]
 pub(in crate::features) enum CredentialPromptRequest {
+    Authentication {
+        id: String,
+        request: SshAuthenticationRequest,
+        context: Arc<RuntimeAuthenticationContext>,
+        response_tx: mpsc::Sender<Option<SshAuthenticationResponse>>,
+    },
+    Authenticated {
+        id: String,
+        saves: Vec<PreparedCredentialSave>,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
+    },
     Secret {
         id: String,
         prompt: SshCredentialPrompt,
@@ -586,7 +603,10 @@ pub(in crate::features) enum CredentialPromptRequest {
 impl CredentialPromptRequest {
     fn id(&self) -> &str {
         match self {
-            Self::Secret { id, .. } | Self::KeyboardInteractive { id, .. } => id,
+            Self::Secret { id, .. }
+            | Self::KeyboardInteractive { id, .. }
+            | Self::Authentication { id, .. }
+            | Self::Authenticated { id, .. } => id,
         }
     }
 }
@@ -595,7 +615,8 @@ impl CredentialPromptRequest {
 pub(in crate::features) struct CredentialPromptState {
     pub(in crate::features) id: String,
     pub(in crate::features) prompt: SshCredentialPrompt,
-    pub(in crate::features) response_tx: mpsc::Sender<Option<String>>,
+    pub(in crate::features) response_tx: CredentialResponseSender,
+    pub(in crate::features) authentication: Option<RuntimeAuthenticationForm>,
     pub(in crate::features) value: String,
 }
 
@@ -642,6 +663,7 @@ impl std::fmt::Debug for KeyboardInteractivePromptState {
 
 #[derive(Debug, Default)]
 pub(in crate::features) struct CredentialPromptBroker {
+    auth_context: Option<Arc<RuntimeAuthenticationContext>>,
     pending: Arc<Mutex<VecDeque<CredentialPromptRequest>>>,
     cancelled: Arc<Mutex<Vec<String>>>,
     attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
@@ -657,12 +679,38 @@ impl CredentialPromptBroker {
         attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     ) -> Self {
         Self {
+            auth_context: Some(Arc::new(
+                self.auth_context
+                    .as_deref()
+                    .map(|context| context.for_attempt(attempt.clone()))
+                    .unwrap_or_else(|| {
+                        RuntimeAuthenticationContext::default().for_attempt(attempt.clone())
+                    }),
+            )),
             pending: self.pending.clone(),
             cancelled: self.cancelled.clone(),
             wake: self.wake.clone(),
             attempt,
         }
     }
+    pub(in crate::features) fn for_connection(
+        &self,
+        snapshot: Option<RuntimeConnectionSnapshot>,
+        account_id: Option<String>,
+        key_id: Option<String>,
+        key_material: Option<nyaterm_transport::SshKeyAuthConfig>,
+    ) -> Self {
+        let mut broker = self.for_attempt(self.attempt.clone());
+        broker.auth_context = Some(Arc::new(RuntimeAuthenticationContext::new(
+            snapshot,
+            account_id,
+            key_id,
+            key_material,
+            self.attempt.clone(),
+        )));
+        broker
+    }
+
     pub(in crate::features) fn take_cancelled(&self) -> Vec<String> {
         self.cancelled
             .lock()
@@ -740,6 +788,14 @@ impl CredentialPromptBroker {
         self.receive(id, &response_rx)
     }
 
+    pub(in crate::features) fn pop_completed(&self) -> Option<CredentialPromptRequest> {
+        let mut pending = self.pending.lock().ok()?;
+        let index = pending
+            .iter()
+            .position(|request| matches!(request, CredentialPromptRequest::Authenticated { .. }))?;
+        pending.remove(index)
+    }
+
     pub(in crate::features) fn pop_pending(&self) -> Option<CredentialPromptRequest> {
         self.pending
             .lock()
@@ -765,6 +821,45 @@ impl SshCredentialProvider for CredentialPromptBroker {
 
     fn request_secret(&self, prompt: &SshCredentialPrompt) -> Result<Option<String>, String> {
         CredentialPromptBroker::request_secret(self, prompt.clone())
+    }
+
+    fn request_authentication(
+        &self,
+        request: &SshAuthenticationRequest,
+    ) -> Result<Option<SshAuthenticationResponse>, String> {
+        self.attempt.check()?;
+        let context = self.auth_context.clone().unwrap_or_default();
+        context.begin_request(request.key_response_id.as_deref());
+        let id = nyaterm_core::uuid();
+        let (response_tx, response_rx) = mpsc::channel();
+        self.pending
+            .lock()
+            .map_err(|_| "credential prompt queue is poisoned")?
+            .push_back(CredentialPromptRequest::Authentication {
+                id: id.clone(),
+                request: request.clone(),
+                context,
+                response_tx,
+            });
+        self.signal_wake();
+        self.receive(id, &response_rx)
+    }
+
+    fn authentication_finished(&self, responses: Option<&[String]>) {
+        let Some(context) = &self.auth_context else {
+            return;
+        };
+        let saves = context.finish(responses);
+        if !saves.is_empty() {
+            if let Ok(mut pending) = self.pending.lock() {
+                pending.push_back(CredentialPromptRequest::Authenticated {
+                    id: nyaterm_core::uuid(),
+                    saves,
+                    attempt: self.attempt.clone(),
+                });
+            }
+            self.signal_wake();
+        }
     }
 
     fn request_keyboard_interactive(
@@ -1234,7 +1329,8 @@ mod prompt_state_debug_tests {
                 prompt_text: None,
                 echo: false,
             },
-            response_tx,
+            response_tx: response_tx.into(),
+            authentication: None,
             value: "credential-secret".to_string(),
         };
 
@@ -1345,3 +1441,6 @@ mod attempt_cancellation_tests {
         assert_eq!(broker.take_cancelled().len(), 1);
     }
 }
+
+#[cfg(test)]
+mod runtime_authentication_tests;

@@ -6645,6 +6645,7 @@ dependencies = [
  "nyaterm-core",
  "nyaterm-terminal",
  "portable-pty",
+ "rand 0.10.3",
  "regex",
  "russh",
  "russh-sftp",

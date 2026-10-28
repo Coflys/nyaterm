@@ -9,6 +9,7 @@ pub(crate) enum SecurityAuthTab {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SecurityUnlockAction {
+    SubmitSshAuthentication(String),
     SavePasswordEditor(u64),
     ViewPrivateKey(String),
     CopyPublicKey(String),

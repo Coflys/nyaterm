@@ -9,6 +9,7 @@ use nyaterm_transport::RemoteFileService;
 mod auth_runtime;
 mod prompt_runtime;
 mod recording_runtime;
+pub(in crate::features) mod runtime_auth;
 mod session_dialog_runtime;
 mod session_lifecycle;
 mod session_order;

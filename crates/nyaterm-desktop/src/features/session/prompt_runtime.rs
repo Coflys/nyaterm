@@ -130,6 +130,15 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .session
+            .prompts
+            .active_credential()
+            .is_some_and(|s| s.authentication.is_some())
+        {
+            self.submit_runtime_authentication(window, cx);
+            return;
+        }
         let Some(state) = self.session.prompts.take_credential() else {
             return;
         };
@@ -306,8 +315,14 @@ impl NyaTermApp {
             return false;
         }
 
+        if self.select_menu_with_prefix_is_focused("ssh-auth-", window, cx) {
+            return false;
+        }
         match keystroke.key.as_str() {
             "enter" => {
+                if self.select_with_prefix_is_focused("ssh-auth-", window, cx) {
+                    return false;
+                }
                 self.submit_credential_prompt(window, cx);
             }
             "escape" => {
@@ -393,7 +408,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(target) = self.session.prompts.active_input_target() else {
-            return false;
+            let Some(form) = self
+                .session
+                .prompts
+                .active_credential()
+                .and_then(|state| state.authentication.as_ref())
+            else {
+                return false;
+            };
+            return self.focus_select(form.selection_focus_id(), window, cx);
         };
         let setup = prompt_input_setup(target.kind, target.echo);
         let field = self.text_input(target.id, &target.seed, setup, cx);
@@ -488,8 +511,46 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn drain_credential_prompts(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut completed = false;
+        while let Some(CredentialPromptRequest::Authenticated { id, saves, attempt }) =
+            self.session.prompts.credential_broker().pop_completed()
+        {
+            self.save_authenticated_credentials(id, saves, attempt, cx);
+            completed = true;
+        }
         if let Some(request) = self.session.prompts.take_next_credential_request() {
             match request {
+                CredentialPromptRequest::Authentication {
+                    id,
+                    request,
+                    context,
+                    response_tx,
+                } => {
+                    self.forget_text_inputs("ssh.credential.");
+                    self.forget_text_inputs("ssh.auth.");
+                    self.session
+                        .prompts
+                        .activate_credential(CredentialPromptState {
+                            id,
+                            prompt: request.prompt.clone(),
+                            response_tx:
+                                super::runtime_auth::CredentialResponseSender::Authentication(
+                                    response_tx,
+                                ),
+                            authentication: Some(
+                                super::runtime_auth::RuntimeAuthenticationForm::new(
+                                    request, context,
+                                ),
+                            ),
+                            value: String::new(),
+                        });
+                    self.refresh_security_catalog(cx);
+                }
+                CredentialPromptRequest::Authenticated { id, saves, attempt } => {
+                    self.save_authenticated_credentials(id, saves, attempt, cx);
+                    // Completion events do not occupy a prompt slot.
+                    self.session.prompts.signal_wake();
+                }
                 CredentialPromptRequest::Secret {
                     id,
                     prompt,
@@ -505,7 +566,8 @@ impl NyaTermApp {
                         .activate_credential(CredentialPromptState {
                             id,
                             prompt,
-                            response_tx,
+                            response_tx: response_tx.into(),
+                            authentication: None,
                             value: String::new(),
                         });
                 }
@@ -556,7 +618,7 @@ impl NyaTermApp {
             }
             return true;
         }
-        false
+        completed
     }
 
     /// Keep the shown TOTP code current while a keyboard-interactive prompt displays

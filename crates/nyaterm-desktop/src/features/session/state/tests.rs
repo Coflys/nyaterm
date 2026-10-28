@@ -903,7 +903,8 @@ fn credential_prompt_state(id: &str) -> CredentialPromptState {
             prompt_text: None,
             echo: false,
         },
-        response_tx,
+        response_tx: response_tx.into(),
+        authentication: None,
         value: String::new(),
     }
 }
