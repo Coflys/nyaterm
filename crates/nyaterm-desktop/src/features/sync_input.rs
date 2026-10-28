@@ -3,6 +3,9 @@ use std::collections::HashSet;
 use gpui::{Context, FocusHandle, Window};
 use nyaterm_core::uuid;
 use nyaterm_transport::SessionInfo;
+use nyaterm_ui::ChildWindowSlot;
+
+mod window;
 
 use super::NyaTermApp;
 use crate::models::SyncInputGroup;
@@ -11,11 +14,21 @@ const GROUP_COLORS: [u32; 8] = [
     0x3b82f6, 0xef4444, 0x22c55e, 0xf59e0b, 0x8b5cf6, 0xec4899, 0x06b6d4, 0xf97316,
 ];
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::features) enum SyncGroupSessionFilter {
+    #[default]
+    All,
+    Selected,
+    Available,
+}
+
 pub(in crate::features) struct SyncInputFeatureState {
     groups: Vec<SyncInputGroup>,
-    open: bool,
+    window: ChildWindowSlot,
+    restore_focus: Option<FocusHandle>,
     focus: FocusHandle,
     search_draft: String,
+    session_filter: SyncGroupSessionFilter,
     selected_id: Option<String>,
     delete_pending: Option<String>,
     broadcast_to_all: bool,
@@ -92,30 +105,36 @@ impl SyncInputFeatureState {
     pub(in crate::features) fn new(focus: FocusHandle) -> Self {
         Self {
             groups: Vec::new(),
-            open: false,
+            window: ChildWindowSlot::default(),
+            restore_focus: None,
             focus,
             search_draft: String::new(),
+            session_filter: SyncGroupSessionFilter::All,
             selected_id: None,
             delete_pending: None,
             broadcast_to_all: false,
         }
     }
 
-    pub(in crate::features) fn open(&mut self) {
-        self.open = true;
+    fn request_open(&mut self) -> bool {
+        if !self.window.begin_open() {
+            return false;
+        }
         self.search_draft.clear();
+        self.session_filter = SyncGroupSessionFilter::All;
         self.delete_pending = None;
         if self.selected_id.is_none() {
             self.selected_id = self.groups.first().map(|group| group.id.clone());
         }
+        true
     }
 
     pub(in crate::features) fn groups(&self) -> &[SyncInputGroup] {
         &self.groups
     }
 
-    pub(in crate::features) fn is_open(&self) -> bool {
-        self.open
+    pub(in crate::features) fn window_is_open_or_pending(&self) -> bool {
+        self.window.is_open_or_pending()
     }
 
     pub(in crate::features) fn focus(&self) -> &FocusHandle {
@@ -126,8 +145,12 @@ impl SyncInputFeatureState {
         &self.search_draft
     }
 
-    pub(in crate::features) fn has_delete_pending(&self) -> bool {
-        self.delete_pending.is_some()
+    pub(in crate::features) fn session_filter(&self) -> SyncGroupSessionFilter {
+        self.session_filter
+    }
+
+    pub(in crate::features) fn set_session_filter(&mut self, filter: SyncGroupSessionFilter) {
+        self.session_filter = filter;
     }
 
     pub(in crate::features) fn pending_delete_group(&self) -> Option<&SyncInputGroup> {
@@ -141,8 +164,9 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn close(&mut self) {
-        self.open = false;
+        self.window.clear();
         self.search_draft.clear();
+        self.session_filter = SyncGroupSessionFilter::All;
         self.delete_pending = None;
     }
 
@@ -158,6 +182,43 @@ impl SyncInputFeatureState {
         };
         self.selected_id = Some(group.id.clone());
         self.groups.push(group);
+    }
+
+    pub(in crate::features) fn ensure_selected_group(&mut self) {
+        if self.selected_group().is_some() {
+            return;
+        }
+        if let Some(first_id) = self.groups.first().map(|group| group.id.clone()) {
+            self.selected_id = Some(first_id);
+        } else {
+            self.create_group();
+        }
+    }
+
+    pub(in crate::features) fn cycle_selected_color(&mut self) -> Option<u32> {
+        let group = self.selected_group_mut()?;
+        let current_idx = GROUP_COLORS
+            .iter()
+            .position(|color| *color == group.color)
+            .unwrap_or(0);
+        let next_color = GROUP_COLORS[(current_idx + 1) % GROUP_COLORS.len()];
+        group.color = next_color;
+        Some(next_color)
+    }
+
+    pub(in crate::features) fn other_group_names_for_session(
+        &self,
+        session_id: &str,
+    ) -> Vec<String> {
+        let selected_id = self.selected_id.as_deref();
+        self.groups
+            .iter()
+            .filter(|group| {
+                Some(group.id.as_str()) != selected_id
+                    && group.session_ids.iter().any(|id| id == session_id)
+            })
+            .map(|group| group.name.clone())
+            .collect()
     }
 
     pub(in crate::features) fn delete_selected(&mut self) -> bool {
@@ -228,7 +289,9 @@ impl SyncInputFeatureState {
             return false;
         };
         group.session_ids = session_ids;
-        group.paused_session_ids.clear();
+        group
+            .paused_session_ids
+            .retain(|id| group.session_ids.iter().any(|member| member == id));
         true
     }
 
@@ -245,7 +308,6 @@ impl SyncInputFeatureState {
                 group.session_ids.push(session_id);
             }
         }
-        group.paused_session_ids.clear();
         true
     }
 
@@ -463,24 +525,27 @@ impl SyncInputFeatureState {
 }
 
 impl NyaTermApp {
-    pub(in crate::features) fn open_sync_groups(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.sync_input.open();
-        self.forget_text_inputs("sync.groups.search");
-        self.forget_text_inputs("sync.group-name.");
-        self.shell.set_status("sync groups opened".to_string());
-        window.focus(self.sync_input.focus(), cx);
-        cx.notify();
-    }
-
     pub(in crate::features) fn close_sync_groups(&mut self, cx: &mut Context<Self>) {
         self.sync_input.close();
         self.forget_text_inputs("sync.groups.search");
         self.forget_text_inputs("sync.group-name.");
         self.shell.set_status("sync groups closed".to_string());
+        let restore_focus = self.sync_input.restore_focus.take();
+        if let Some(parent) = self.shell.main_window() {
+            let app = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = parent.update(cx, |_, window, cx| {
+                    window.activate_window();
+                    if let Some(focus) = restore_focus {
+                        window.focus(&focus, cx);
+                    } else {
+                        let _ = app.update(cx, |app, cx| {
+                            app.focus_active_workspace_surface(window, cx);
+                        });
+                    }
+                });
+            });
+        }
         cx.notify();
     }
 
@@ -490,8 +555,24 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    pub(in crate::features) fn cycle_selected_sync_group_color(&mut self, cx: &mut Context<Self>) {
+        if self.sync_input.cycle_selected_color().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn set_sync_groups_session_filter(
+        &mut self,
+        filter: SyncGroupSessionFilter,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_input.set_session_filter(filter);
+        cx.notify();
+    }
+
     pub(in crate::features) fn request_delete_selected_sync_group(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.sync_input.request_delete_selected() {
@@ -499,6 +580,25 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        let Some(group) = self.sync_input.pending_delete_group() else {
+            return;
+        };
+        let message = rust_i18n::t!("syncGroup.deleteGroupConfirm", name = &group.name).to_string();
+        self.open_confirm_dialog_with_cancel(
+            (
+                rust_i18n::t!("syncGroup.deleteGroup").to_string(),
+                message,
+                rust_i18n::t!("syncGroup.deleteGroup").to_string(),
+                true,
+                |app, _, cx| {
+                    app.confirm_delete_sync_group(cx);
+                    true
+                },
+                |app, cx| app.cancel_delete_sync_group(cx),
+            ),
+            window,
+            cx,
+        );
         cx.notify();
     }
 
@@ -542,6 +642,10 @@ impl NyaTermApp {
             .into_iter()
             .map(|session| session.id)
             .collect::<Vec<_>>();
+        if session_ids.is_empty() {
+            return;
+        }
+        self.sync_input.ensure_selected_group();
         if self.sync_input.replace_selected_sessions(session_ids) {
             cx.notify();
         }
@@ -562,6 +666,10 @@ impl NyaTermApp {
             .filter(|session| self.sync_group_session_matches_search(session, &query))
             .map(|session| session.id)
             .collect::<Vec<_>>();
+        if session_ids.is_empty() {
+            return;
+        }
+        self.sync_input.ensure_selected_group();
         if self.sync_input.add_selected_sessions(session_ids) {
             cx.notify();
         }
@@ -671,6 +779,7 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.sync_input.ensure_selected_group();
         let Some(added) = self.sync_input.toggle_selected_session(session_id) else {
             self.shell
                 .set_status("create or select a sync group first".to_string());
@@ -785,7 +894,7 @@ mod tests {
 
     use gpui::TestAppContext;
 
-    use super::SyncInputFeatureState;
+    use super::{GROUP_COLORS, SyncGroupSessionFilter, SyncInputFeatureState};
     use crate::models::SyncInputGroup;
 
     fn state() -> SyncInputFeatureState {
@@ -939,5 +1048,84 @@ mod tests {
         assert!(state.toggle_broadcast_to_all());
         assert!(state.may_fan_out_from("primary"));
         assert!(state.may_fan_out_from("outside"));
+    }
+
+    #[test]
+    fn adding_or_replacing_sessions_preserves_existing_paused_members() {
+        let mut state = state();
+        let mut sync_group = group("one", "One");
+        sync_group.session_ids = vec!["a".to_string(), "b".to_string()];
+        sync_group.paused_session_ids = vec!["a".to_string()];
+        state.groups.push(sync_group);
+        state.selected_id = Some("one".to_string());
+
+        assert!(state.add_selected_sessions(vec!["b".to_string(), "c".to_string()]));
+        assert_eq!(state.groups()[0].session_ids, ["a", "b", "c"]);
+        assert_eq!(state.groups()[0].paused_session_ids, ["a"]);
+
+        assert!(state.replace_selected_sessions(vec!["a".to_string(), "d".to_string()]));
+        assert_eq!(state.groups()[0].session_ids, ["a", "d"]);
+        assert_eq!(state.groups()[0].paused_session_ids, ["a"]);
+
+        assert!(state.replace_selected_sessions(vec!["d".to_string()]));
+        assert!(state.groups()[0].paused_session_ids.is_empty());
+    }
+
+    #[test]
+    fn ensure_selected_group_and_color_cycling_work_as_expected() {
+        let mut state = state();
+        assert!(state.selected_group().is_none());
+
+        state.ensure_selected_group();
+        assert_eq!(state.groups().len(), 1);
+        assert_eq!(state.selected_group().unwrap().color, GROUP_COLORS[0]);
+
+        let next_color = state.cycle_selected_color();
+        assert_eq!(next_color, Some(GROUP_COLORS[1]));
+        assert_eq!(state.selected_group().unwrap().color, GROUP_COLORS[1]);
+
+        state.set_session_filter(SyncGroupSessionFilter::Selected);
+        assert_eq!(state.session_filter(), SyncGroupSessionFilter::Selected);
+        assert!(state.request_open());
+        assert_eq!(state.session_filter(), SyncGroupSessionFilter::All);
+    }
+
+    #[test]
+    fn window_open_requests_are_deduplicated_and_failures_allow_retry() {
+        let mut state = state();
+        assert!(state.request_open());
+        state.set_search("keep pending search".into());
+        assert!(!state.request_open());
+        assert_eq!(state.search_draft(), "keep pending search");
+        state.window.fail_open();
+        assert!(!state.window_is_open_or_pending());
+        assert!(state.request_open());
+        assert!(state.search_draft().is_empty());
+    }
+
+    #[test]
+    fn closing_window_clears_transient_state_and_preserves_group_edits() {
+        let mut state = state();
+        assert!(state.request_open());
+        state.create_group();
+        let id = state.selected_group().unwrap().id.clone();
+        state.rename_group(&id, "Edited group".into());
+        state.add_selected_sessions(vec!["session-a".into()]);
+        state.toggle_selected_session_paused("session-a".into());
+        state.set_search("query".into());
+        state.set_session_filter(SyncGroupSessionFilter::Selected);
+        assert!(state.request_delete_selected());
+
+        state.close();
+        assert!(!state.window_is_open_or_pending());
+        assert!(state.search_draft().is_empty());
+        assert_eq!(state.session_filter(), SyncGroupSessionFilter::All);
+        assert!(state.pending_delete_group().is_none());
+        let edited = state.selected_group().unwrap();
+        assert_eq!(edited.name, "Edited group");
+        assert_eq!(edited.session_ids, ["session-a"]);
+        assert_eq!(edited.paused_session_ids, ["session-a"]);
+        assert!(state.request_open());
+        assert_eq!(state.selected_group().unwrap().id, id);
     }
 }
