@@ -326,6 +326,10 @@ impl NyaTermApp {
             return;
         };
 
+        if matches!(job.kind, TransferJobKind::Delete { .. }) {
+            return;
+        }
+
         if !matches!(
             job.status,
             TransferJobStatus::Queued | TransferJobStatus::Running

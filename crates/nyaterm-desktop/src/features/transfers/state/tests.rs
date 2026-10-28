@@ -24,6 +24,8 @@ use super::{
     TransferQueueState,
 };
 
+mod delete_jobs;
+
 fn transfer_focus(cx: &TestAppContext) -> TransferFeatureFocus {
     cx.update(|cx| TransferFeatureFocus {
         tree: cx.focus_handle(),
@@ -2202,6 +2204,7 @@ fn metadata_file_operations_are_excluded_from_shared_pause() {
             }),
         },
     );
+    assert!(!state.supports_bulk_admission("metadata"));
     assert_eq!(state.pause_visible_transfer_jobs(Some("source")), 0);
     assert_eq!(
         state.transfer_job("metadata").unwrap().status,

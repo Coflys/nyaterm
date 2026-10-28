@@ -126,6 +126,44 @@ fn cancellation_before_move_keeps_source_and_creates_nothing() {
 }
 
 #[test]
+fn cancelled_delete_keeps_file_and_a_fresh_retry_deletes_it() {
+    let root = fixture("nyaterm-file-manager-delete-retry");
+    let path = root.join("source/item");
+    fs::write(&path, b"keep until retry").unwrap();
+    let request = FileOperationRequest::Mutation(FileMutationIntent {
+        endpoint: FileOperationEndpoint::Local,
+        directory: RemoteFilePath::new(root.join("source").to_string_lossy()),
+        mutation: FileMutation::Delete(RemoteFilePath::new(path.to_string_lossy())),
+    });
+    let cancelled = SftpTransferControl::new();
+    cancelled.cancel();
+    let service = FileBrowserService::local();
+    assert_eq!(
+        execute_file_operation(
+            request.clone(),
+            service.clone(),
+            service.clone(),
+            cancelled,
+            Default::default(),
+            |_| {},
+        )
+        .unwrap_err(),
+        nyaterm_transport::SFTP_TRANSFER_CANCELLED,
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"keep until retry");
+    execute_file_operation(
+        request,
+        service.clone(),
+        service,
+        SftpTransferControl::new(),
+        Default::default(),
+        |_| {},
+    )
+    .unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
 fn frozen_mutation_does_not_follow_selection_and_create_never_truncates() {
     let root = fixture("nyaterm-file-manager-mutation");
     let service = FileBrowserService::local();

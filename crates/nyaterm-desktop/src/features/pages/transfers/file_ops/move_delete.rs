@@ -441,11 +441,11 @@ impl NyaTermApp {
                 entries: Vec::new(),
                 summary: None,
                 progress: None,
-                control: None,
+                control: Some(nyaterm_transport::SftpTransferControl::new()),
                 speed: Default::default(),
             });
             let transfer_tx = self.transfer.transfer_event_sender();
-            self.submit_transfer_blocking_job(
+            self.submit_bulk_transfer_job(
                 "sftp-delete",
                 id.clone(),
                 transfer_tx.clone(),

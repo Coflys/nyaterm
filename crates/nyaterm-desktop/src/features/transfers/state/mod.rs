@@ -468,7 +468,7 @@ impl TransferFeatureState {
     pub(in crate::features) fn supports_bulk_admission(&self, id: &str) -> bool {
         self.file_operations
             .get(id)
-            .is_none_or(|context| context.can_pause())
+            .is_none_or(|context| context.can_pause() || context.is_delete())
             && self
                 .queue
                 .job(id)
@@ -483,7 +483,15 @@ impl TransferFeatureState {
         work: Box<dyn FnOnce() + Send>,
     ) {
         if let Some(job) = self.queue.jobs.iter_mut().find(|job| job.id == id) {
-            self.admission.enqueue(job, name, tx, work);
+            if self
+                .file_operations
+                .get(id)
+                .is_some_and(|context| context.is_delete())
+            {
+                self.admission.enqueue_delete(job, name, tx, work);
+            } else {
+                self.admission.enqueue(job, name, tx, work);
+            }
         }
     }
 
