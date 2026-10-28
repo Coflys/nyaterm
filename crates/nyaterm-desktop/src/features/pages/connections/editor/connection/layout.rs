@@ -23,8 +23,8 @@ pub(super) struct ConnectionEditorFrame<'a> {
     pub native_window: bool,
     pub height: f32,
     pub wide: bool,
+    pub navigation_width: f32,
     pub protocol_select: Entity<NyaSelectState>,
-    pub section_select: Entity<NyaSelectState>,
     pub validation_error: Option<String>,
     pub save_enabled: bool,
 }
@@ -44,8 +44,8 @@ pub(super) fn connection_editor_frame(
         native_window,
         height,
         wide,
+        navigation_width,
         protocol_select,
-        section_select,
         validation_error,
         save_enabled,
     } = frame;
@@ -56,13 +56,12 @@ pub(super) fn connection_editor_frame(
     let save_label = t!("common.save");
     let navigation = div()
         .id("connection-editor-navigation")
-        .debug_selector(|| "connection-editor-navigation".to_string())
         .track_focus(&navigation_focus)
         .flex()
         .flex_col()
         .gap_1()
         .p_3()
-        .w(px(180.))
+        .w(px(navigation_width))
         .flex_none()
         .overflow_y_scrollbar()
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -108,6 +107,13 @@ pub(super) fn connection_editor_frame(
                 window.focus(&this.connection_state.editor_navigation_focus(), cx);
             }))
         }));
+    let navigation = div()
+        .debug_selector(|| "connection-editor-navigation".to_string())
+        .w(px(navigation_width))
+        .h_full()
+        .min_h_0()
+        .flex_none()
+        .child(navigation.size_full());
 
     let card = div()
         .id(SharedString::from("connection-editor-panel"))
@@ -193,14 +199,6 @@ pub(super) fn connection_editor_frame(
                                     .h(px(EDITOR_CONTROL_HEIGHT_PX))
                                     .child(NyaSelect::new(&protocol_select)),
                             )
-                        })
-                        .when(!wide, |this| {
-                            this.child(
-                                div()
-                                    .w_full()
-                                    .h(px(EDITOR_CONTROL_HEIGHT_PX))
-                                    .child(NyaSelect::new(&section_select)),
-                            )
                         }),
                 ),
         )
@@ -210,7 +208,7 @@ pub(super) fn connection_editor_frame(
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .when(wide, |this| this.child(navigation))
+                .child(navigation)
                 .child(content)
                 .vertical_scrollbar(&scroll),
         )

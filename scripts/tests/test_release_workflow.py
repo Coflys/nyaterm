@@ -84,6 +84,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("ref: ${{ needs.preflight.outputs.source_sha }}", jobs()[name])
             self.assertNotIn("inputs.source_ref", jobs()[name])
 
+    def test_downstream_channels_use_published_release_receipt(self) -> None:
+        publication = jobs()["publish"]
+        self.assertIn("name: published-release-tag", publication)
+        self.assertIn("path: published-release-tag.txt", publication)
+        self.assertIn('printf \'%s\\n\' "${TAG}" > published-release-tag.txt', publication)
+        self.assertLess(
+            publication.index("name: Save downstream release tag"),
+            publication.index("name: Publish verified draft"),
+        )
+        for name in ("homebrew", "aur", "gitee-release"):
+            with self.subTest(channel=name):
+                workflow = WORKFLOW.with_name(f"publish-{name}.yml").read_text(encoding="utf-8")
+                self.assertIn('gh run download "${RUN_ID}"', workflow)
+                self.assertIn("--name published-release-tag", workflow)
+                self.assertIn('cat "${receipt_dir}/published-release-tag.txt"', workflow)
+                self.assertIn('gh release view', workflow)
+                self.assertIn('--json isDraft', workflow)
+                self.assertNotIn("git ls-remote --tags", workflow)
+                self.assertNotIn("HEAD_SHA:", workflow)
+                self.assertIn("if [[ \"${GITHUB_EVENT_NAME}\" == 'workflow_dispatch' ]]; then", workflow)
+
     def test_downstream_channels_require_successful_r2_publication(self) -> None:
         for name in ("homebrew", "aur", "gitee-release"):
             content = WORKFLOW.with_name(f"publish-{name}.yml").read_text(encoding="utf-8")
@@ -112,6 +133,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertTrue(gate(blocks["publish"], values))
         values["needs.r2.result"] = "failure"
         self.assertFalse(gate(blocks["publish"], values))
+
+    def test_recovery_lints_triggering_workflow_not_frozen_checkout(self) -> None:
+        preflight = jobs()["preflight"]
+        self.assertIn('for _ in {1..36}; do', preflight)
+        self.assertIn('git show "${GITHUB_SHA}:.github/workflows/release.yml"', preflight)
+        self.assertIn("docker run --rm", preflight)
 
 if __name__ == "__main__":
     unittest.main()

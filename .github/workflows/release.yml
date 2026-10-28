@@ -184,7 +184,7 @@ jobs:
         run: |
           set -euo pipefail
           expected="$(printf 'true\t%s\ttrue' "${PRERELEASE}")"
-          for attempt in {1..36}; do
+          for _ in {1..36}; do
             actual="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" \
               --json isDraft,isPrerelease,body \
               --jq '[.isDraft,.isPrerelease,(.body | length > 0)] | @tsv' 2>/dev/null || true)"
@@ -231,11 +231,13 @@ jobs:
           scripts.tests.test_release_provenance
           scripts.tests.test_release_workflow
       - name: Check workflow syntax
-        run: >-
-          docker run --rm
-          -v "${PWD}:/repo"
-          -w /repo
-          rhysd/actionlint:1.7.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A recovery dispatch may build a frozen source_ref with an updated workflow.
+          # Lint the workflow revision that actually triggered this run, not the frozen source tree.
+          git show "${GITHUB_SHA}:.github/workflows/release.yml" > .github/workflows/release.yml
+          docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
 
   package:
     name: Package ${{ matrix.label }}
@@ -769,7 +771,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Verify assets and publish draft
+      - name: Verify draft assets and prepare downstream version
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -784,4 +786,19 @@ jobs:
             echo 'Draft release is incomplete or not in the expected state' >&2
             exit 1
           }
+          printf '%s\n' "${TAG}" > published-release-tag.txt
+      - name: Save downstream release tag
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-release-tag
+          path: published-release-tag.txt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
           gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease="${PRERELEASE}"

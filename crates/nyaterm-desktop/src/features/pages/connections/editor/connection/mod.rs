@@ -1300,18 +1300,8 @@ impl NyaTermApp {
             (viewport.1 - 26.).min(680.)
         };
         let wide = width >= 760.;
-        let narrow = width - if wide { 180. } else { 0. } < 500.;
-        let sections = ConnectionEditorSection::for_kind(editor.kind);
-        let section_select = self.select_entity(
-            "connection-editor-section",
-            sections
-                .iter()
-                .map(|section| NyaSelectOption::new(section.id(), section.label()))
-                .collect(),
-            Some(editor.section.id().to_string()),
-            false,
-            cx,
-        );
+        let navigation_width = if wide { 180. } else { 128. };
+        let narrow = width - navigation_width < 500.;
         let protocol_select = self.select_entity(
             "connection-editor-kind",
             [
@@ -1723,8 +1713,8 @@ impl NyaTermApp {
                 native_window,
                 height,
                 wide,
+                navigation_width,
                 protocol_select,
-                section_select,
                 validation_error,
                 save_enabled,
             },
@@ -1985,8 +1975,7 @@ impl NyaTermApp {
         window: &gpui::Window,
         cx: &gpui::App,
     ) -> bool {
-        (self.select_is_focused("connection-editor-section", window, cx)
-            || self.select_is_focused("connection-editor-kind", window, cx))
+        self.select_is_focused("connection-editor-kind", window, cx)
             || connection_editor_select_keys().into_iter().any(|select| {
                 self.select_is_focused(connection_editor_select_id(select), window, cx)
             })
@@ -2002,8 +1991,7 @@ impl NyaTermApp {
         window: &gpui::Window,
         cx: &gpui::App,
     ) -> bool {
-        (self.select_menu_is_focused("connection-editor-section", window, cx)
-            || self.select_menu_is_focused("connection-editor-kind", window, cx))
+        self.select_menu_is_focused("connection-editor-kind", window, cx)
             || connection_editor_select_keys().into_iter().any(|select| {
                 self.select_menu_is_focused(connection_editor_select_id(select), window, cx)
             })
@@ -4058,10 +4046,19 @@ mod tests {
                                 );
                             }
                         }
-                        assert_eq!(
-                            vcx.debug_bounds("connection-editor-navigation").is_some(),
-                            width - if native_window { 0. } else { 26. } >= 760.
-                        );
+                        let navigation = vcx.debug_bounds("connection-editor-navigation").unwrap();
+                        assert!(navigation.right() <= scroll.left());
+                        assert_eq!(navigation.top(), scroll.top());
+                        assert_eq!(navigation.size.height, scroll.size.height);
+                        for selector in ["connection-editor-save", "connection-editor-close"] {
+                            let button = vcx.debug_bounds(selector).unwrap();
+                            assert!(
+                                button.left() >= panel.left() && button.right() <= panel.right()
+                            );
+                            assert!(
+                                button.top() >= panel.top() && button.bottom() <= panel.bottom()
+                            );
+                        }
                     }
                 }
             }
@@ -4076,6 +4073,22 @@ mod tests {
             app.read(cx).connection_state.editor_fields()[&ConnectionEditorField::Name].clone()
         });
         let component = original.read_with(vcx, |input, _| input.component_state().unwrap());
+        for width in [420., 759., 760., 900., 420.] {
+            vcx.update(|window, cx| {
+                window
+                    .root::<EditorHost>()
+                    .unwrap()
+                    .unwrap()
+                    .update(cx, |host, cx| {
+                        host.width = width;
+                        host.height = 480.;
+                        cx.notify();
+                    });
+            });
+            vcx.simulate_resize(gpui::size(px(width), px(480.)));
+            draw_editor(&app, vcx);
+            assert!(vcx.debug_bounds("connection-editor-navigation").is_some());
+        }
         vcx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 app.connection_state
