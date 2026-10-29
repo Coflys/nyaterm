@@ -2468,7 +2468,7 @@
     "defaultEncoding": "Encodage",
     "defaultEncodingDesc": "Encodage des caractères pour les entrées et sorties du terminal.",
     "defaultFilePermissions": "Autorisations de fichier",
-    "defaultFilePermissionsDesc": "Mode d'autorisation octal pour les fichiers téléversés (ex. 644).",
+    "defaultFilePermissionsDesc": "Mode d'autorisation octal pour les nouveaux fichiers téléversés (ex. 644). Les fichiers existants conservent leurs autorisations lors de l’écrasement.",
     "defaultShell": "Shell local par défaut",
     "defaultShellDesc": "Shell utilisé pour les nouveaux terminaux locaux.",
     "deleteKey": "Supprimer la clé",

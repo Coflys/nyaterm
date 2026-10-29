@@ -2468,7 +2468,7 @@
     "defaultEncoding": "預設終端編碼",
     "defaultEncodingDesc": "終端輸入與輸出使用的字元編碼。",
     "defaultFilePermissions": "預設檔案權限",
-    "defaultFilePermissionsDesc": "上傳檔案的八進位權限模式（例如 644）。",
+    "defaultFilePermissionsDesc": "新上傳檔案的八進位權限模式（例如 644）。覆寫現有檔案時保留原權限。",
     "defaultShell": "預設本機 Shell",
     "defaultShellDesc": "建立新的本機終端工作階段時使用的命令列 shell。",
     "deleteKey": "刪除金鑰",

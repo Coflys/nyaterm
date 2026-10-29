@@ -18,12 +18,17 @@ mod copy_tests;
 mod editor_save_tests;
 mod revision;
 mod shell;
+#[cfg(test)]
+mod upload_tests;
 
 use copy_progress::CopyProgress;
 pub(crate) use revision::metadata_is_stable;
 pub use revision::{
     RemoteTextDocument, RemoteTextGeneration, RemoteTextMetadata, RemoteTextRevision,
     RemoteTextWriteResult,
+};
+use shell::metadata::{
+    shell_file_properties, shell_file_replace_command, shell_file_upload_command,
 };
 use shell::{ShellRemote, shell_quote, shell_quote_path};
 
@@ -978,31 +983,17 @@ impl RemoteFileService {
         match self.backend()? {
             RemoteFileBackendKind::Sftp => self.sftp()?.upload_file(local_path, &remote_path),
             kind => {
-                let bytes = fs::read(&local_path)?;
-                let temporary = format!(
-                    "{}.nyaterm-upload-{}",
-                    remote_path,
-                    uuid::Uuid::new_v4().simple()
-                );
-                let command = format!(
-                    "umask 077; cat > {} && test $(wc -c < {}) -eq {} && mv -f -- {} {}",
-                    shell_quote(&temporary),
-                    shell_quote(&temporary),
-                    bytes.len(),
-                    shell_quote(&temporary),
-                    shell_quote(&remote_path)
-                );
-                let result = self.shell(kind).exec_ok(command, Some(bytes.clone()));
-                if result.is_err() {
-                    let _ = self
-                        .shell(kind)
-                        .exec(format!("rm -f -- {}", shell_quote(&temporary)), None);
-                }
-                result?;
+                let bytes = self.shell(kind).upload_stream(
+                    &local_path,
+                    &remote_path,
+                    SftpTransferControl::new(),
+                    &SftpTransferOptions::default(),
+                    |_| {},
+                )?;
                 Ok(SftpTransferSummary {
                     remote_path,
                     local_path,
-                    bytes: bytes.len() as u64,
+                    bytes,
                     skipped: false,
                 })
             }
@@ -1135,7 +1126,7 @@ impl RemoteFileService {
                 control.wait_if_paused_blocking()?;
                 let shell = self.shell(kind);
                 let bytes = fs::read(&local_path)?;
-                let properties = shell_editor_properties(&shell, remote_path)?;
+                let properties = shell_file_properties(&shell, remote_path)?;
                 anyhow::ensure!(
                     properties.file_type == SftpFileType::File,
                     "External edit sync requires an existing regular file"
@@ -1145,7 +1136,7 @@ impl RemoteFileService {
                     remote_path.display_path,
                     uuid::Uuid::new_v4().simple()
                 );
-                let command = shell_editor_upload_command(
+                let command = shell_file_upload_command(
                     &properties,
                     &temporary,
                     &remote_path.display_path,
@@ -2171,7 +2162,7 @@ fn shell_properties(
     }
     let output = shell.exec_ok(
         format!(
-            "LC_ALL=C stat -c '%F\\0%s\\0%Y\\0%X\\0%a\\0%U\\0%G\\0%u\\0%g' -- {}",
+            "LC_ALL=C stat --printf '%F\\0%s\\0%Y\\0%X\\0%a\\0%U\\0%G\\0%u\\0%g' -- {}",
             shell_quote(&path.display_path)
         ),
         None,
@@ -2363,68 +2354,6 @@ fn read_shell_text_document(
     })
 }
 
-fn shell_editor_properties(
-    shell: &ShellRemote,
-    path: &RemoteFilePath,
-) -> anyhow::Result<SftpFileProperties> {
-    let mut properties = shell_properties(shell, path)?;
-    if shell.kind() == RemoteFileBackendKind::ScpNormal {
-        // The normal backend has no stat dependency. Use numeric ls output
-        // for saving while retaining owner/group names in property views.
-        let output = shell.exec_ok(
-            format!("LC_ALL=C ls -ldn {}", shell_quote_path(&path.display_path)),
-            None,
-        )?;
-        let line = String::from_utf8_lossy(&output);
-        let columns = line.split_whitespace().collect::<Vec<_>>();
-        properties.uid = columns.get(2).and_then(|value| value.parse().ok());
-        properties.gid = columns.get(3).and_then(|value| value.parse().ok());
-    }
-    Ok(properties)
-}
-
-fn shell_editor_replace_command(
-    properties: &SftpFileProperties,
-    temporary: &str,
-    target: &str,
-) -> anyhow::Result<String> {
-    let (Some(uid), Some(gid), Some(mode)) =
-        (properties.uid, properties.gid, properties.permissions)
-    else {
-        anyhow::bail!("Remote save refused: original ownership or permissions are unavailable");
-    };
-    let temporary = shell_quote_path(temporary);
-    let target = shell_quote_path(target);
-    let mode = mode & 0o7777;
-    let symbolic = format_permissions(SftpFileType::File, mode);
-    // Skip a no-op chown, restore mode after chown clears special bits, and
-    // verify both before mv. A rejected or ignored attribute change must not
-    // replace the original. Numeric ls works in both shell backends.
-    Ok(format!(
-        "(attrs=$(LC_ALL=C ls -ldn {temporary}) && \
-         set -f && set -- $attrs && \
-         (test \"$3:$4\" = '{uid}:{gid}' || chown {uid}:{gid} {temporary})) && \
-         chmod {mode:o} {temporary} && \
-         (attrs=$(LC_ALL=C ls -ldn {temporary}) && set -f && set -- $attrs && \
-         case \"$1\" in '{symbolic}'*) test \"$3:$4\" = '{uid}:{gid}' ;; *) false ;; esac) && \
-         mv -f {temporary} {target}"
-    ))
-}
-
-fn shell_editor_upload_command(
-    properties: &SftpFileProperties,
-    temporary: &str,
-    target: &str,
-    byte_count: usize,
-) -> anyhow::Result<String> {
-    let replace = shell_editor_replace_command(properties, temporary, target)?;
-    Ok(format!(
-        "umask 077; cat > {} && test $(wc -c < {}) -eq {byte_count} && {replace}",
-        shell_quote(temporary),
-        shell_quote(temporary),
-    ))
-}
-
 fn write_shell_text_document(
     shell: &ShellRemote,
     path: &RemoteFilePath,
@@ -2481,7 +2410,7 @@ fn write_shell_text_document(
         }
     }
 
-    let replacement_properties = match shell_editor_properties(shell, path) {
+    let replacement_properties = match shell_file_properties(shell, path) {
         Ok(properties) => properties,
         Err(error) => {
             cleanup_temporary();
@@ -2497,8 +2426,7 @@ fn write_shell_text_document(
     // POSIX shell fallback has no universal compare-and-swap primitive. Keep the
     // verified revision check adjacent to the final atomic rename.
     let replace =
-        match shell_editor_replace_command(&replacement_properties, &temporary, &path.display_path)
-        {
+        match shell_file_replace_command(&replacement_properties, &temporary, &path.display_path) {
             Ok(command) => command,
             Err(error) => {
                 cleanup_temporary();
@@ -2526,7 +2454,7 @@ fn write_shell_text(
     expected_size: Option<u64>,
     force: bool,
 ) -> anyhow::Result<SftpWriteTextResult> {
-    let properties = shell_editor_properties(shell, path)?;
+    let properties = shell_file_properties(shell, path)?;
     let modified_at = u64::from(properties.modified_at.unwrap_or(0));
     let size = properties.size.unwrap_or(0);
     if !force
@@ -2541,7 +2469,7 @@ fn write_shell_text(
         uuid::Uuid::new_v4().simple()
     );
     let command =
-        shell_editor_upload_command(&properties, &temporary, &path.display_path, content.len())?;
+        shell_file_upload_command(&properties, &temporary, &path.display_path, content.len())?;
     if let Err(error) = shell.exec_ok(command, Some(content.as_bytes().to_vec())) {
         let _ = shell.exec(format!("rm -f -- {}", shell_quote(&temporary)), None);
         return Err(error);

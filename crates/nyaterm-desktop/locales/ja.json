@@ -2468,7 +2468,7 @@
     "defaultEncoding": "エンコーディング",
     "defaultEncodingDesc": "ターミナルの入出力に使う文字エンコーディング。",
     "defaultFilePermissions": "ファイル権限",
-    "defaultFilePermissionsDesc": "アップロードするファイルの 8 進数権限モード（例: 644）。",
+    "defaultFilePermissionsDesc": "新規アップロードファイルの 8 進数権限モード（例: 644）。既存ファイルの上書き時は元の権限を保持します。",
     "defaultShell": "既定のローカルシェル",
     "defaultShellDesc": "新しいローカルターミナルで使用するシェル。",
     "deleteKey": "鍵を削除",

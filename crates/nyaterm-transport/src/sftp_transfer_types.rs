@@ -33,6 +33,7 @@ pub struct SftpTransferOptions {
     pub buffer_size: usize,
     pub max_retries: u32,
     pub preserve_timestamps: bool,
+    /// Permissions for newly created uploads; overwrites retain the original mode.
     pub default_file_mode: Option<u32>,
     pub resume_broken_transfer: bool,
     pub directory_upload_threads: usize,
