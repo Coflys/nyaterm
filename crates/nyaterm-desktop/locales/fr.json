@@ -1407,6 +1407,7 @@
     "downloadFolderCompleted": "Dossier terminé",
     "downloadPath": "Rép. de téléchargement",
     "duplicateDescription": "Un(e) %{kind} nommé(e) « %{name} » existe déjà à la destination. Choisissez comment procéder.",
+    "duplicateDirectoryDescription": "Un dossier nommé « %{name} » existe déjà à la destination. Écraser fusionne les dossiers et remplace les fichiers de même nom, tout en conservant ceux présents uniquement à la destination.",
     "duplicateKindFile": "fichier",
     "duplicateKindFolder": "dossier",
     "duplicateOverwrite": "Écraser",

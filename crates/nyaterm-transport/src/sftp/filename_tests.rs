@@ -471,7 +471,7 @@ fn directory_download_enumerates_each_directory_once_and_preserves_totals() -> a
 }
 
 #[test]
-fn directory_download_totals_include_skipped_files_and_subtrees() -> anyhow::Result<()> {
+fn directory_download_merge_keeps_totals_for_all_files() -> anyhow::Result<()> {
     use crate::{
         SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
         SftpPathTransferOptions, SftpTransferControl, SftpTransferOptions,
@@ -483,11 +483,8 @@ fn directory_download_totals_include_skipped_files_and_subtrees() -> anyhow::Res
             &self,
             request: &SftpDuplicateRequest,
         ) -> Result<SftpDuplicateDecision, String> {
-            Ok(if request.source_path.ends_with("/skip") {
-                SftpDuplicateDecision::Skip
-            } else {
-                SftpDuplicateDecision::Overwrite
-            })
+            assert_eq!(request.source_path, "/folder");
+            Ok(SftpDuplicateDecision::Overwrite)
         }
     }
 
@@ -500,7 +497,7 @@ fn directory_download_totals_include_skipped_files_and_subtrees() -> anyhow::Res
         files.contents.extend([
             (b"/folder/keep".to_vec(), b"abc".to_vec()),
             (b"/folder/file/skip".to_vec(), b"unused".to_vec()),
-            (b"/folder/skip/deep/bad\\name".to_vec(), b"defg".to_vec()),
+            (b"/folder/skip/deep/valid-name".to_vec(), b"defg".to_vec()),
         ]);
         files.directories.insert(b"/folder/file".to_vec());
     }
@@ -523,10 +520,10 @@ fn directory_download_totals_include_skipped_files_and_subtrees() -> anyhow::Res
         move |current| recorded.lock().unwrap().push(current),
     )?;
 
-    assert_eq!(summary.bytes, 3);
+    assert_eq!(summary.bytes, 13);
     assert_eq!(std::fs::read(target.join("keep"))?, b"abc");
-    assert_eq!(std::fs::read(target.join("file/skip"))?, b"local");
-    assert_eq!(std::fs::read_dir(target.join("skip"))?.count(), 0);
+    assert_eq!(std::fs::read(target.join("file/skip"))?, b"unused");
+    assert_eq!(std::fs::read(target.join("skip/deep/valid-name"))?, b"defg");
     let mut opened = files.lock().unwrap().directory_opens.clone();
     opened.sort();
     assert_eq!(
@@ -546,8 +543,7 @@ fn directory_download_totals_include_skipped_files_and_subtrees() -> anyhow::Res
             current.total_bytes == Some(13) && current.item_count_total == Some(3)
         })
     );
-    // The existing completed-item contract counts direct file skips, not skipped subtrees.
-    assert_eq!(progress.last().unwrap().item_count_completed, Some(2));
+    assert_eq!(progress.last().unwrap().item_count_completed, Some(3));
     Ok(())
 }
 

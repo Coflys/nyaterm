@@ -1314,6 +1314,103 @@ mod tests {
         });
     }
 
+    #[test]
+    fn duplicate_batch_menu_overwrites_queued_siblings_and_leaves_other_batches_asking() {
+        use crate::features::session::UploadBatchDuplicateResolver;
+        use nyaterm_transport::{
+            SftpDuplicateDecision, SftpDuplicateRequest, SftpTransferDirection,
+        };
+        use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
+
+        let test_dir = TestConfigDir::new("nyaterm-transfer-duplicate-batch");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+        let host_app = app.clone();
+        let (_, vcx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| AppHost { app: host_app });
+            nya_root(host, window, cx)
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| app.start_prompt_activation_drain(window, cx))
+        });
+        vcx.run_until_parked();
+        let broker = vcx.update(|_, cx| app.read(cx).session.prompt_duplicate_broker());
+        let batch = UploadBatchDuplicateResolver::new(broker.clone());
+        let request = |name: &str| SftpDuplicateRequest {
+            direction: SftpTransferDirection::Upload,
+            source_path: format!("/local/{name}"),
+            target_path: format!("/remote/{name}"),
+            is_directory: true,
+        };
+        let first = batch.enqueue_for_test(request("first"));
+        let sibling = batch.enqueue_for_test(request("second"));
+        let unrelated = broker
+            .enqueue_decision_request_for_test(request("unrelated"))
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        let trigger = vcx
+            .debug_bounds("duplicate-overwrite-menu")
+            .expect("batch menu visible");
+        vcx.simulate_click(trigger.center(), Modifiers::default());
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("down enter");
+        vcx.run_until_parked();
+        assert_eq!(
+            first.recv_timeout(Duration::from_secs(5)).unwrap(),
+            SftpDuplicateDecision::Overwrite
+        );
+        assert_eq!(
+            sibling.recv_timeout(Duration::from_secs(5)).unwrap(),
+            SftpDuplicateDecision::Overwrite
+        );
+        assert_eq!(
+            batch
+                .enqueue_for_test(request("future"))
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            SftpDuplicateDecision::Overwrite
+        );
+        vcx.update(|window, cx| {
+            assert!(window.has_active_nya_dialog(cx));
+            assert_eq!(
+                app.read(cx)
+                    .session
+                    .prompt_active_duplicate()
+                    .unwrap()
+                    .request
+                    .target_path,
+                "/remote/unrelated"
+            );
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("duplicate-overwrite-menu").is_none(),
+            "ordinary conflicts have no batch menu"
+        );
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(
+            unrelated.recv_timeout(Duration::from_secs(5)).unwrap(),
+            SftpDuplicateDecision::Skip
+        );
+        vcx.update(|window, cx| {
+            assert!(!window.has_active_nya_dialog(cx));
+            assert!(app.read(cx).session.prompt_active_duplicate().is_none());
+        });
+    }
+
     /// The point of the batch: the panel no longer rides the app's redraws.
     #[test]
     fn an_unrelated_app_notify_does_not_repaint_the_panel() {

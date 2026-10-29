@@ -7,12 +7,12 @@ use std::sync::{
 
 use gpui::{Context, IntoElement, Render, Subscription, Window, div, prelude::*, px, rgb};
 use nyaterm_transport::SftpDuplicateDecision;
-use nyaterm_ui::NyaDialogWindowExt as _;
+use nyaterm_ui::{NyaDialogWindowExt as _, NyaDropdownMenu, NyaMenuItem};
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 use crate::features::formatting::download_file_name_from_remote_path;
-use crate::features::session::SftpDuplicatePromptState;
+use crate::features::session::{DuplicatePromptAction, SftpDuplicatePromptState};
 use crate::features::view_widgets::bounded_dialog_width;
 use crate::theme::ThemePalette;
 
@@ -73,11 +73,18 @@ impl Render for DuplicatePromptDialogContent {
             t!("fileTransfer.duplicateKindFile")
         };
         let target_name = download_file_name_from_remote_path(&self.prompt.request.target_path);
-        let description = t!(
-            "fileTransfer.duplicateDescription",
-            kind = kind,
-            name = target_name
-        );
+        let description = if self.prompt.request.is_directory {
+            t!(
+                "fileTransfer.duplicateDirectoryDescription",
+                name = target_name
+            )
+        } else {
+            t!(
+                "fileTransfer.duplicateDescription",
+                kind = kind,
+                name = target_name
+            )
+        };
         let mut actions = div().flex().flex_wrap().justify_end().gap_2();
         for (id, label, decision) in [
             (
@@ -118,6 +125,47 @@ impl Render for DuplicatePromptDialogContent {
                     },
                 ),
             ));
+            if decision == SftpDuplicateDecision::Overwrite && self.prompt.upload_batch.is_some() {
+                let app = self.app.clone();
+                let answered = self.answered.clone();
+                let request_id = self.prompt.id.clone();
+                actions = actions.child(
+                    div()
+                        .debug_selector(|| "duplicate-overwrite-menu".to_string())
+                        .child(
+                            NyaDropdownMenu::new("duplicate-overwrite-menu")
+                                .label("▾")
+                                .tooltip(
+                                    t!("fileTransfer.duplicateOverwriteAllForTask").to_string(),
+                                )
+                                .min_width(px(260.))
+                                .items([
+                                    NyaMenuItem::action(
+                                        t!("fileTransfer.duplicateOverwriteAllForTask").to_string(),
+                                    )
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            if answered.swap(true, Ordering::AcqRel) {
+                                                return;
+                                            }
+                                            let _ = app.update(cx, |app, cx| {
+                                                app.resolve_duplicate_prompt_action(
+                                                    request_id.clone(),
+                                                    DuplicatePromptAction::OverwriteUploadBatch,
+                                                    cx,
+                                                );
+                                            });
+                                            window.close_nya_dialog(cx);
+                                        },
+                                    ),
+                                    NyaMenuItem::label(
+                                        t!("fileTransfer.duplicateOverwriteAllForTaskDesc")
+                                            .to_string(),
+                                    ),
+                                ]),
+                        ),
+                );
+            }
         }
         div()
             .id("duplicate-prompt-dialog")

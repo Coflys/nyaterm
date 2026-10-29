@@ -348,6 +348,17 @@ impl SftpPathTransferOptions {
         }
     }
 
+    /// The root target has already been accepted. Merge its contents without
+    /// prompting again, while retaining reservations and retry ownership. Finder
+    /// promises still may not replace destinations owned by another operation.
+    pub(crate) fn for_directory_contents(&self) -> Self {
+        let mut contents = self.with_transfer_options(self.transfer.clone());
+        if !self.is_promised_download() {
+            contents.duplicate_policy = SftpDuplicatePolicy::Overwrite;
+        }
+        contents
+    }
+
     /// Atomically reserve a final path for this task and source. Retries retain their
     /// identity; batch clones are different tasks. No filesystem I/O or prompt runs
     /// under this lock. Reservations live as long as the batch options, including retries.
@@ -532,6 +543,64 @@ mod tests {
             Ok(Some(SftpDuplicateDecision::Rename))
         );
         assert_eq!(new_transfer.cached_duplicate_decision(&key), Ok(None));
+    }
+
+    #[test]
+    fn directory_contents_keep_task_ownership_and_retry_state_without_changing_root_policy() {
+        for policy in [
+            SftpDuplicatePolicy::Ask,
+            SftpDuplicatePolicy::Skip,
+            SftpDuplicatePolicy::Rename,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let local = root.path().join("file");
+            let key = SftpDuplicateCacheKey::Download {
+                remote_path: b"/folder/file".to_vec(),
+                local_path: local.clone(),
+                is_directory: false,
+            };
+            let options =
+                SftpPathTransferOptions::new(policy, None, SftpTransferOptions::default());
+            options
+                .remember_duplicate_decision(key.clone(), SftpDuplicateDecision::Overwrite)
+                .unwrap();
+            assert!(options.reserve_download_target(&local, &key).unwrap());
+            let contents = options.for_directory_contents();
+            assert_eq!(options.duplicate_policy(), policy);
+            assert_eq!(contents.duplicate_policy(), SftpDuplicatePolicy::Overwrite);
+            assert_eq!(
+                contents.cached_duplicate_decision(&key),
+                Ok(Some(SftpDuplicateDecision::Overwrite))
+            );
+            assert!(contents.reserve_download_target(&local, &key).unwrap());
+            assert!(Arc::ptr_eq(
+                &options.download_runtime,
+                &contents.download_runtime
+            ));
+            assert_eq!(contents.download_owner, options.download_owner);
+            assert!(
+                !options
+                    .clone_for_download_batch()
+                    .reserve_download_target(&local, &key)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn directory_contents_cannot_expand_a_promised_downloads_overwrite_permissions() {
+        let options = SftpPathTransferOptions::for_promised_download(
+            SftpTransferOptions::default(),
+            crate::SftpFileType::Directory,
+        );
+        let contents = options.for_directory_contents();
+        assert!(contents.is_promised_download());
+        assert_eq!(contents.duplicate_policy(), SftpDuplicatePolicy::Skip);
+        assert!(Arc::ptr_eq(
+            &options.download_runtime,
+            &contents.download_runtime
+        ));
+        assert_eq!(contents.download_owner, options.download_owner);
     }
 
     #[test]

@@ -1400,6 +1400,7 @@
     "downloadFolderCompleted": "文件夹下载完成",
     "downloadPath": "下载目录",
     "duplicateDescription": "远程路径已有同名%{kind}「%{name}」，请选择处理方式。",
+    "duplicateDirectoryDescription": "目标位置已有同名文件夹「%{name}」。覆盖将合并文件夹并覆盖内部同名文件，保留目标独有文件。",
     "duplicateKindFile": "文件",
     "duplicateKindFolder": "文件夹",
     "duplicateOverwrite": "覆盖",

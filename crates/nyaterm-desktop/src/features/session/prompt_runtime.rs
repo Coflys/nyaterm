@@ -10,7 +10,7 @@ use nyaterm_transport::{
 
 use super::state::PromptResolution;
 use super::{
-    CredentialPromptRequest, CredentialPromptState, HostKeyPromptChoice,
+    CredentialPromptRequest, CredentialPromptState, DuplicatePromptAction, HostKeyPromptChoice,
     KeyboardInteractivePromptState, unix_seconds_now,
 };
 use crate::features::{
@@ -99,6 +99,19 @@ impl NyaTermApp {
         decision: SftpDuplicateDecision,
         cx: &mut Context<Self>,
     ) {
+        self.resolve_duplicate_prompt_action(
+            request_id,
+            DuplicatePromptAction::Current(decision),
+            cx,
+        );
+    }
+
+    pub(in crate::features) fn resolve_duplicate_prompt_action(
+        &mut self,
+        request_id: String,
+        action: DuplicatePromptAction,
+        cx: &mut Context<Self>,
+    ) {
         let prompt = match self.session.prompts.take_duplicate_resolution(&request_id) {
             PromptResolution::Inactive => {
                 self.shell
@@ -117,7 +130,18 @@ impl NyaTermApp {
         };
 
         let target = prompt.request.target_path.clone();
-        let _ = prompt.response_tx.send(decision);
+        let decision = match self
+            .session
+            .prompt_duplicate_broker()
+            .resolve(prompt, action)
+        {
+            Ok(decision) => decision,
+            Err(error) => {
+                self.shell.set_status(error);
+                cx.notify();
+                return;
+            }
+        };
         self.shell.set_status(format!(
             "remote transfer duplicate decision for {target}: {}",
             duplicate_decision_label(decision)
