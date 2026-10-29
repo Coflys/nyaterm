@@ -6,7 +6,10 @@ use gpui::{
     Bounds, Context, IntoElement, ObjectFit, ParentElement as _, Pixels, RenderImage, Styled as _,
     StyledImage as _, canvas, div, img, rgb,
 };
-use nyaterm_remote_desktop::{RdpBackend, RdpError, RdpErrorKind, RemoteDesktopViewState};
+use nyaterm_remote_desktop::{
+    RdpBackend, RdpDisplayMetrics, RdpDisplayMode, RdpError, RdpErrorKind, RdpSessionConfig,
+    RemoteDesktopViewState,
+};
 use nyaterm_ui::NyaDialogWindowExt as _;
 use raw_window_handle::RawWindowHandle;
 
@@ -15,6 +18,16 @@ use crate::platform::{
     NativeRdpConnectionEvent, NativeRdpControl, NativeRdpDisconnectInfo, NativeRdpRect,
     NativeRdpSessionDetails, NativeRdpSnapshot,
 };
+
+use super::runtime::fit_window_display_metrics;
+
+/// The native popup's physical rect plus the desktop the session should
+/// negotiate; both are measured from the same laid-out panel.
+#[derive(Clone, Copy, Debug)]
+struct NativeRdpPanel {
+    rect: NativeRdpRect,
+    metrics: RdpDisplayMetrics,
+}
 
 impl NyaTermApp {
     pub(super) fn native_rdp_view(
@@ -55,14 +68,17 @@ impl NyaTermApp {
                     };
                     let parent = handle.hwnd.get();
                     let scale = window.scale_factor();
-                    let rect = native_phys_rect(bounds, scale);
+                    let panel = NativeRdpPanel {
+                        rect: native_phys_rect(bounds, scale),
+                        metrics: fit_window_display_metrics(bounds, scale),
+                    };
                     let dialog_open = window.has_active_nya_dialog(cx);
                     let app = app.clone();
                     let session_id = view_session_id.clone();
                     window.defer(cx, move |window, cx| {
                         app.update(cx, |this, cx| {
                             let overlay = this.native_rdp_overlay_state(dialog_open, cx);
-                            this.ensure_native_rdp(&session_id, rect, parent, overlay, window, cx);
+                            this.ensure_native_rdp(&session_id, panel, parent, overlay, window, cx);
                         });
                     });
                     bounds
@@ -77,7 +93,7 @@ impl NyaTermApp {
     fn ensure_native_rdp(
         &mut self,
         session_id: &str,
-        rect: NativeRdpRect,
+        panel: NativeRdpPanel,
         parent: isize,
         overlay: NativeRdpOverlayState,
         window: &mut gpui::Window,
@@ -88,7 +104,7 @@ impl NyaTermApp {
         };
         if let Some(native) = session.native_rdp.as_mut() {
             let was_shown = native.is_shown();
-            native.set_bounds(rect);
+            native.set_bounds(panel.rect);
             let plan = native_host_plan(
                 true,
                 overlay.obscured,
@@ -135,14 +151,10 @@ impl NyaTermApp {
         let Some(mut config) = session.native_rdp_config.take() else {
             return;
         };
-        if config.display.mode == nyaterm_remote_desktop::RdpDisplayMode::FitWindow {
-            let (width, height) = fit_native_desktop_dimensions(rect);
-            config.display.width = width;
-            config.display.height = height;
-        }
+        fit_native_display(&mut config, panel.metrics);
         tracing::debug!(session_id, "creating Windows RDP control");
         let mut fallback = None;
-        match NativeRdpControl::create(parent, rect, &config) {
+        match NativeRdpControl::create(parent, panel.rect, &config) {
             Ok(mut native) => {
                 let overlay_image = if overlay.obscured && overlay.snapshot {
                     native
@@ -160,7 +172,13 @@ impl NyaTermApp {
                 session.native_rdp = Some(native);
                 session.state = RemoteDesktopViewState::Connecting;
                 session.error = None;
-                tracing::info!(session_id, "Windows RDP control created");
+                tracing::info!(
+                    session_id,
+                    width = config.display.width,
+                    height = config.display.height,
+                    scale = config.display.desktop_scale_factor,
+                    "Windows RDP control created"
+                );
                 self.ensure_remote_desktop_periodic_clock(cx);
                 let session_id = session_id.to_string();
                 cx.spawn(async move |this, cx| {
@@ -549,9 +567,17 @@ fn native_phys_rect(bounds: Bounds<Pixels>, scale: f32) -> NativeRdpRect {
     }
 }
 
-fn fit_native_desktop_dimensions(rect: NativeRdpRect) -> (u32, u32) {
-    let clamp = |value: i32| (value.clamp(200, 8192) as u32) & !1;
-    (clamp(rect.width), clamp(rect.height))
+/// Give a fit-window session the desktop the built-in runtime negotiates: the
+/// panel in physical pixels plus the DPI scale it was measured at.
+///
+/// The hosted control draws into a physical-pixel popup, so the size is already
+/// right without the scale; what the scale adds is the remote desktop's own DPI.
+/// Leaving it unset made the remote session render at 100% on a scaled monitor,
+/// which looked smaller than the same session in the built-in runtime.
+fn fit_native_display(config: &mut RdpSessionConfig, metrics: RdpDisplayMetrics) {
+    if config.display.mode == RdpDisplayMode::FitWindow {
+        config.display.fit_to_panel(metrics);
+    }
 }
 
 #[cfg(test)]
@@ -565,16 +591,19 @@ mod tests {
     };
 
     use super::{
-        NativeSnapshotAction, fit_native_desktop_dimensions, native_creation_fallback,
+        NativeSnapshotAction, fit_native_display, native_creation_fallback,
         native_disconnect_message, native_host_plan, native_rdp_state_is_displayable,
         native_snapshot_bgra_opaque, native_snapshot_image,
     };
     use crate::features::test_support::{
         app_with_visible_local_session, session_focus_test_window,
     };
-    use crate::platform::{NativeRdpDisconnectInfo, NativeRdpRect, NativeRdpSnapshot};
+    use crate::platform::{NativeRdpDisconnectInfo, NativeRdpSnapshot};
     use crate::test_support::{TestAppCleanup, TestConfigDir};
-    use nyaterm_remote_desktop::{RdpBackend, RemoteDesktopViewState};
+    use nyaterm_remote_desktop::{
+        RdpBackend, RdpClipboardConfig, RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode,
+        RdpReconnectConfig, RdpSessionConfig, RemoteDesktopViewState,
+    };
 
     #[test]
     fn pane_focus_mode_drops_the_stale_session_when_settings_takes_the_tab() {
@@ -834,25 +863,51 @@ mod tests {
         assert!(!native_host_plan(true, true, false, true, false).show_host);
     }
 
+    fn native_session_config(mode: RdpDisplayMode) -> RdpSessionConfig {
+        RdpSessionConfig {
+            relay: None,
+            backend: RdpBackend::Windows,
+            name: "desktop".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 3389,
+            username: String::new(),
+            domain: String::new(),
+            password: None,
+            use_nla: true,
+            certificate_policy: Default::default(),
+            administrative_session: false,
+            display: RdpDisplayConfig {
+                mode,
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            },
+            clipboard: RdpClipboardConfig::default(),
+            reconnect: RdpReconnectConfig::default(),
+        }
+    }
+
     #[test]
-    fn fit_window_dimensions_are_even_and_bounded() {
-        assert_eq!(
-            fit_native_desktop_dimensions(NativeRdpRect {
-                x: 0,
-                y: 0,
-                width: 3429,
-                height: 9001,
-            }),
-            (3428, 8192)
-        );
-        assert_eq!(
-            fit_native_desktop_dimensions(NativeRdpRect {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 199,
-            }),
-            (200, 200)
-        );
+    fn fit_window_native_sessions_negotiate_the_panel_scale() {
+        let metrics = RdpDisplayMetrics {
+            width: 3001,
+            height: 1801,
+            desktop_scale_factor: 150,
+            physical_size_mm: None,
+        };
+        let mut config = native_session_config(RdpDisplayMode::FitWindow);
+        fit_native_display(&mut config, metrics);
+        // Even dimensions and the panel-derived DPI, exactly like the built-in
+        // runtime; a missing scale is what rendered the native session at 100%.
+        assert_eq!(config.display.width, 3000);
+        assert_eq!(config.display.height, 1800);
+        assert_eq!(config.display.desktop_scale_factor, 150);
+
+        // A fixed-size session keeps its saved desktop untouched.
+        let mut fixed = native_session_config(RdpDisplayMode::Fixed);
+        fit_native_display(&mut fixed, metrics);
+        assert_eq!(fixed.display.width, 1920);
+        assert_eq!(fixed.display.height, 1080);
+        assert_eq!(fixed.display.desktop_scale_factor, 0);
     }
 }

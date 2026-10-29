@@ -24,10 +24,35 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE, WS_CHILD, WS_CLIPCHILDREN,
     WS_CLIPSIBLINGS, WS_EX_DLGMODALFRAME, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
-use windows::core::{BOOL, BSTR, GUID, HSTRING, IUnknown, Interface, PCWSTR, s, w};
+use windows::core::{BOOL, BSTR, GUID, HRESULT, HSTRING, IUnknown, Interface, PCWSTR, s, w};
 
 const MSTSC_PROG_ID: &str = "MsTscAx.MsTscAx";
 const DISPLAY_RESIZE_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// The control's named-property interface, which is not exposed through
+/// `IDispatch`. Setting the desktop scale here, before `Connect`, is what makes
+/// the remote session use the local DPI instead of rendering at 100%.
+#[repr(transparent)]
+struct IMsRdpExtendedSettings(IUnknown);
+
+#[repr(C)]
+struct IMsRdpExtendedSettingsVtbl {
+    base: windows::core::IUnknown_Vtbl,
+    /// `put_Property(BSTR, VARIANT*)`. `get_Property` follows in the real
+    /// vtable and is never called, so it is not declared here.
+    put_property: unsafe extern "system" fn(*mut c_void, *const u16, *mut VARIANT) -> HRESULT,
+}
+
+unsafe impl Interface for IMsRdpExtendedSettings {
+    type Vtable = IMsRdpExtendedSettingsVtbl;
+    const IID: GUID = GUID::from_u128(0x302D8188_0052_4807_806A_362B628F9AC5);
+}
+
+impl Clone for IMsRdpExtendedSettings {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 static ATL_READY: OnceLock<bool> = OnceLock::new();
 static OLE_READY: OnceLock<Result<(), String>> = OnceLock::new();
@@ -93,6 +118,7 @@ pub(crate) struct NativeRdpControl {
     desired_visible: bool,
     shown: bool,
     fit_window: bool,
+    desktop_scale_factor: u32,
     last_display_size: (u32, u32),
     pending_display_size: Option<((u32, u32), Instant)>,
     modal_sibling: Option<HWND>,
@@ -186,6 +212,7 @@ impl NativeRdpControl {
             desired_visible: true,
             shown: true,
             fit_window: config.display.mode == nyaterm_remote_desktop::RdpDisplayMode::FitWindow,
+            desktop_scale_factor: negotiated_desktop_scale(config.display.desktop_scale_factor),
             last_display_size: (config.display.width, config.display.height),
             pending_display_size: None,
             modal_sibling: None,
@@ -233,6 +260,20 @@ impl NativeRdpControl {
         put_i32(&advanced, "RDPPort", i32::from(config.port))?;
         put_bool(&advanced, "EnableCredSspSupport", config.use_nla)?;
         put_bool(&advanced, "SmartSizing", true)?;
+        if self.desktop_scale_factor != 0 {
+            // Both properties must be set before `Connect`; the control does not
+            // derive them from the hosting window's DPI on its own.
+            if let Err(error) = put_extended_property(
+                &self.control,
+                "DesktopScaleFactor",
+                self.desktop_scale_factor,
+            ) {
+                tracing::warn!(%error, "native RDP: desktop scale factor was not accepted");
+            }
+            if let Err(error) = put_extended_property(&self.control, "DeviceScaleFactor", 100) {
+                tracing::warn!(%error, "native RDP: device scale factor was not accepted");
+            }
+        }
         put_i32(
             &advanced,
             "AuthenticationLevel",
@@ -667,9 +708,19 @@ impl NativeRdpControl {
         // Record both outcomes so a rejected resize does not retry on every
         // subsequent render pass; the control keeps SmartSizing as a fallback.
         self.last_display_size = (width, height);
-        match update_session_display_settings(&self.control, width, height) {
+        match update_session_display_settings(
+            &self.control,
+            width,
+            height,
+            self.desktop_scale_factor,
+        ) {
             Ok(()) => {
-                tracing::info!(width, height, "Windows RDP display resized");
+                tracing::info!(
+                    width,
+                    height,
+                    scale = self.desktop_scale_factor,
+                    "Windows RDP display resized"
+                );
             }
             Err(error) => {
                 tracing::warn!(%error, "Windows RDP display resize failed");
@@ -867,23 +918,43 @@ fn display_size(rect: NativeRdpRect) -> (u32, u32) {
     (dim(rect.width), dim(rect.height))
 }
 
-fn update_session_display_settings(
-    control: &IDispatch,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    let dispid = get_disp_id(control, "UpdateSessionDisplaySettings")?;
+/// The protocol's accepted range, with 0 meaning "leave it to the server".
+fn negotiated_desktop_scale(scale: u32) -> u32 {
+    if (100..=500).contains(&scale) {
+        scale
+    } else {
+        0
+    }
+}
+
+fn display_resize_arguments(width: u32, height: u32, desktop_scale_factor: u32) -> [VARIANT; 7] {
+    let desktop_scale_factor = if desktop_scale_factor == 0 {
+        100
+    } else {
+        desktop_scale_factor
+    };
     // IDispatch arguments are reversed: width, height, physical width/height,
-    // orientation, desktop scale, device scale.
-    let mut arguments = [
+    // orientation, desktop scale, device scale. A resize that drops the desktop
+    // scale back to 100 undoes the DPI the session connected with.
+    [
         VARIANT::from(100u32),
-        VARIANT::from(100u32),
+        VARIANT::from(desktop_scale_factor),
         VARIANT::from(0u32),
         VARIANT::from(0u32),
         VARIANT::from(0u32),
         VARIANT::from(height),
         VARIANT::from(width),
-    ];
+    ]
+}
+
+fn update_session_display_settings(
+    control: &IDispatch,
+    width: u32,
+    height: u32,
+    desktop_scale_factor: u32,
+) -> Result<(), String> {
+    let dispid = get_disp_id(control, "UpdateSessionDisplaySettings")?;
+    let mut arguments = display_resize_arguments(width, height, desktop_scale_factor);
     let params = DISPPARAMS {
         rgvarg: arguments.as_mut_ptr(),
         rgdispidNamedArgs: std::ptr::null_mut(),
@@ -981,6 +1052,19 @@ fn put_property(control: &IDispatch, name: &str, value: VARIANT) -> Result<(), S
     put_variant(control, dispid, value)
 }
 
+fn put_extended_property(control: &IDispatch, property: &str, value: u32) -> Result<(), String> {
+    let settings = control
+        .cast::<IMsRdpExtendedSettings>()
+        .map_err(|error| format!("the Windows RDP control has no extended settings: {error}"))?;
+    let name = BSTR::from(property);
+    let mut value = VARIANT::from(value);
+    let result =
+        unsafe { (settings.vtable().put_property)(settings.as_raw(), name.as_ptr(), &mut value) };
+    result
+        .ok()
+        .map_err(|error| format!("cannot set RDP property {property}: {error}"))
+}
+
 fn put_variant(control: &IDispatch, dispid: i32, value: VARIANT) -> Result<(), String> {
     let mut arguments = [value];
     let mut names = [DISPID_PROPERTYPUT];
@@ -1010,7 +1094,10 @@ fn put_variant(control: &IDispatch, dispid: i32, value: VARIANT) -> Result<(), S
 mod tests {
     use nyaterm_remote_desktop::{RdpCertificatePolicy, RdpDisplayConfig, RdpDisplayMode};
 
-    use super::{NativeRdpRect, authentication_level, display_size, performance_flags};
+    use super::{
+        NativeRdpRect, authentication_level, display_resize_arguments, display_size,
+        negotiated_desktop_scale, performance_flags,
+    };
 
     #[test]
     fn display_settings_become_the_rdp_performance_flag_mask() {
@@ -1041,6 +1128,33 @@ mod tests {
             }),
             (1278, 8192)
         );
+    }
+
+    #[test]
+    fn desktop_scale_only_survives_the_protocol_range() {
+        assert_eq!(negotiated_desktop_scale(0), 0);
+        assert_eq!(negotiated_desktop_scale(99), 0);
+        assert_eq!(negotiated_desktop_scale(100), 100);
+        assert_eq!(negotiated_desktop_scale(150), 150);
+        assert_eq!(negotiated_desktop_scale(500), 500);
+        assert_eq!(negotiated_desktop_scale(501), 0);
+    }
+
+    #[test]
+    fn display_resizes_keep_the_negotiated_desktop_scale() {
+        let arguments = display_resize_arguments(1600, 900, 150);
+        // IDispatch arguments are reversed: device scale, desktop scale,
+        // orientation, physical height, physical width, height, width.
+        assert_eq!(u32::try_from(&arguments[0]).unwrap(), 100);
+        assert_eq!(u32::try_from(&arguments[1]).unwrap(), 150);
+        assert_eq!(u32::try_from(&arguments[2]).unwrap(), 0);
+        assert_eq!(u32::try_from(&arguments[3]).unwrap(), 0);
+        assert_eq!(u32::try_from(&arguments[4]).unwrap(), 0);
+        assert_eq!(u32::try_from(&arguments[5]).unwrap(), 900);
+        assert_eq!(u32::try_from(&arguments[6]).unwrap(), 1600);
+
+        let unset = display_resize_arguments(1600, 900, 0);
+        assert_eq!(u32::try_from(&unset[1]).unwrap(), 100);
     }
 
     #[test]
