@@ -45,8 +45,14 @@ const CLIPBOARD_TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_millis(750);
 const STDOUT_BUFFER_BYTES: usize = 256 * 1024;
 
 enum Outbound {
-    Control(RdpControlMessage),
+    Control(Box<RdpControlMessage>),
     Packet(Packet),
+}
+
+impl Outbound {
+    fn control(message: RdpControlMessage) -> Self {
+        Self::Control(Box::new(message))
+    }
 }
 
 #[derive(Default)]
@@ -207,6 +213,16 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                 hello_received = true;
             }
             RdpControlMessage::Connect { session_id, config } => {
+                if config.backend != nyaterm_remote_desktop::RdpBackend::Builtin {
+                    send_error(
+                        &output_tx,
+                        &session_id,
+                        RdpErrorKind::Unsupported,
+                        "The IronRDP helper only supports the built-in backend",
+                        true,
+                    )?;
+                    continue;
+                }
                 if let Some(error) = provider_error.as_deref() {
                     send_error(&output_tx, &session_id, RdpErrorKind::Protocol, error, true)?;
                     return Ok(());
@@ -574,7 +590,7 @@ fn build_config(
             };
             let _ = validation_error;
             if certificate_output_tx
-                .send(Outbound::Control(RdpControlMessage::CertificateRequest(
+                .send(Outbound::control(RdpControlMessage::CertificateRequest(
                     request,
                 )))
                 .is_err()
@@ -898,7 +914,7 @@ fn forward_desktop_update(
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(reason) => {
-            let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+            let _ = output_tx.send(Outbound::control(RdpControlMessage::Error {
                 session_id: session_id.to_string(),
                 error: RdpError::new(RdpErrorKind::Protocol, reason),
                 fatal: true,
@@ -910,7 +926,7 @@ fn forward_desktop_update(
 
     if let Some((epoch, width, height)) = prepared.reset {
         output_tx
-            .send(Outbound::Control(RdpControlMessage::DesktopReset {
+            .send(Outbound::control(RdpControlMessage::DesktopReset {
                 session_id: session_id.to_string(),
                 epoch,
                 width,
@@ -920,7 +936,7 @@ fn forward_desktop_update(
         if !*connected {
             *connected = true;
             output_tx
-                .send(Outbound::Control(RdpControlMessage::State {
+                .send(Outbound::control(RdpControlMessage::State {
                     session_id: session_id.to_string(),
                     state: RdpSessionState::Connected,
                     message: None,
@@ -990,7 +1006,7 @@ async fn forward_output(
                             .reset(tokio::time::Instant::now() + connection_timeout);
                         continue;
                     }
-                    let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+                    let _ = output_tx.send(Outbound::control(RdpControlMessage::Error {
                         session_id: session_id.clone(),
                         error: RdpError::new(
                             RdpErrorKind::Timeout,
@@ -1049,7 +1065,7 @@ async fn forward_output(
             // resize; the reconnect surfaces through the ordinary state events. The
             // reason is not carried over the IPC protocol, which has no field for it.
             RdpOutputEvent::DisplayResizeFallback(_reason) => output_tx
-                .send(Outbound::Control(RdpControlMessage::Capability {
+                .send(Outbound::control(RdpControlMessage::Capability {
                     session_id: session_id.clone(),
                     capability: RdpCapability::DynamicResizeUnavailable,
                 }))
@@ -1138,7 +1154,7 @@ async fn forward_output(
                 Ok(())
             })(),
             RdpOutputEvent::ConnectionFailure(error) => output_tx
-                .send(Outbound::Control(RdpControlMessage::Error {
+                .send(Outbound::control(RdpControlMessage::Error {
                     session_id: session_id.clone(),
                     // A refusal during the connection sequence is the server's decision, so
                     // it is reported as a negotiation failure and left to manual retry.
@@ -1147,7 +1163,7 @@ async fn forward_output(
                 }))
                 .map_err(|_| ()),
             RdpOutputEvent::Terminated(Ok(reason)) if connected => output_tx
-                .send(Outbound::Control(RdpControlMessage::Error {
+                .send(Outbound::control(RdpControlMessage::Error {
                     session_id: session_id.clone(),
                     // The reason alone: the application prefixes every RDP error with its
                     // category, which already says the session was terminated.
@@ -1156,14 +1172,14 @@ async fn forward_output(
                 }))
                 .map_err(|_| ()),
             RdpOutputEvent::Terminated(Ok(reason)) => output_tx
-                .send(Outbound::Control(RdpControlMessage::State {
+                .send(Outbound::control(RdpControlMessage::State {
                     session_id: session_id.clone(),
                     state: RdpSessionState::Disconnected,
                     message: Some(reason.description()),
                 }))
                 .map_err(|_| ()),
             RdpOutputEvent::Terminated(Err(error)) => output_tx
-                .send(Outbound::Control(RdpControlMessage::Error {
+                .send(Outbound::control(RdpControlMessage::Error {
                     session_id: session_id.clone(),
                     error: classify_failure(&error, RdpErrorKind::Session),
                     fatal: true,
@@ -1519,7 +1535,7 @@ fn send_control(
     message: RdpControlMessage,
 ) -> anyhow::Result<()> {
     output_tx
-        .send(Outbound::Control(message))
+        .send(Outbound::control(message))
         .map_err(|_| anyhow::anyhow!("RDP stdout writer stopped"))
 }
 
@@ -1554,7 +1570,7 @@ fn report_ironrdp_panic(
     };
     let detail = detail.replace(['\r', '\n'], " ");
     let detail = detail.chars().take(512).collect::<String>();
-    let _ = output_tx.send(Outbound::Control(RdpControlMessage::Error {
+    let _ = output_tx.send(Outbound::control(RdpControlMessage::Error {
         session_id: session_id.to_string(),
         error: RdpError::new(
             RdpErrorKind::HelperCrashed,
@@ -1614,6 +1630,7 @@ mod tests {
         RdpSessionConfig {
             relay: None,
             backend: Default::default(),
+            windows_authentication: None,
             name: "test".to_string(),
             host: "server.example".to_string(),
             port: 3389,
@@ -1695,7 +1712,9 @@ mod tests {
         // failing so that the test never leaves a certificate-waiting thread behind.
         let completed = result_rx.recv_timeout(Duration::from_secs(5));
         let unexpected = output_rx.try_recv();
-        if let Ok(Outbound::Control(RdpControlMessage::CertificateRequest(request))) = &unexpected {
+        if let Ok(Outbound::Control(message)) = &unexpected
+            && let RdpControlMessage::CertificateRequest(request) = message.as_ref()
+        {
             *gate.response.lock().unwrap() = Some((
                 request.request_id.clone(),
                 nyaterm_remote_desktop::RdpCertificateResponse::Reject,
@@ -1713,9 +1732,11 @@ mod tests {
         let worker = std::thread::spawn(move || {
             callback(b"test-certificate", "server.example:3389", "untrusted")
         });
-        let Outbound::Control(RdpControlMessage::CertificateRequest(request)) =
-            output_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        let Outbound::Control(message) = output_rx.recv_timeout(Duration::from_secs(5)).unwrap()
         else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::CertificateRequest(request) = *message else {
             panic!("expected a certificate prompt for the configured host");
         };
         assert_eq!(request.host, "server.example");
@@ -1953,9 +1974,10 @@ mod tests {
         )
         .await;
 
-        let Outbound::Control(RdpControlMessage::Error { error, fatal, .. }) =
-            output_rx.recv().unwrap()
-        else {
+        let Outbound::Control(message) = output_rx.recv().unwrap() else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::Error { error, fatal, .. } = *message else {
             panic!("expected a timeout error");
         };
         assert_eq!(error.kind, RdpErrorKind::Timeout);
@@ -1977,9 +1999,10 @@ mod tests {
             Box::new("connector assertion\nfailed".to_string()),
         );
 
-        let Outbound::Control(RdpControlMessage::Error { error, fatal, .. }) =
-            output_rx.recv().unwrap()
-        else {
+        let Outbound::Control(message) = output_rx.recv().unwrap() else {
+            panic!("expected a control message");
+        };
+        let RdpControlMessage::Error { error, fatal, .. } = *message else {
             panic!("expected a helper crash error");
         };
         assert_eq!(error.kind, RdpErrorKind::HelperCrashed);

@@ -2,6 +2,7 @@
 
 use crate::features::NyaTermApp;
 use gpui::Context;
+#[cfg(windows)]
 use nyaterm_remote_desktop::RdpBackend;
 use nyaterm_remote_desktop::RdpDisplayConfig;
 use nyaterm_remote_desktop::RdpDisplayMetrics;
@@ -51,24 +52,6 @@ pub(in crate::features::remote_desktop) fn plan_rdp_start(
     RdpStartPlan::Connect(display)
 }
 
-#[cfg(windows)]
-pub(super) fn native_rdp_selected_for(
-    backend: RdpBackend,
-    has_relay: bool,
-    native_available: bool,
-) -> bool {
-    if has_relay {
-        return false;
-    }
-    match backend {
-        // An explicit Windows choice is an attempt even when the prerequisite
-        // check fails; its error is more useful than a silent built-in session.
-        RdpBackend::Windows => true,
-        RdpBackend::Auto => native_available,
-        RdpBackend::Builtin => false,
-    }
-}
-
 impl NyaTermApp {
     /// Open an RDP session and return the id its tab is registered under.
     pub(in crate::features) fn schedule_rdp_runtime(
@@ -89,12 +72,14 @@ impl NyaTermApp {
         mut config: RdpSessionConfig,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(windows)]
-        if self.native_rdp_selected(&config) {
-            self.launch_rdp_runtime(session_id, config);
+        if let Err(error) = config.backend.validate_config(&config) {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                error.kind,
+                error.message,
+            );
             return;
         }
-
         let metrics = self
             .remote_desktop
             .sessions
@@ -117,6 +102,7 @@ impl NyaTermApp {
                 let panel_desktop = metrics.filter(|_| display.mode == RdpDisplayMode::FitWindow);
                 config.display = display;
                 self.launch_rdp_runtime(session_id, config);
+                self.ensure_remote_desktop_periodic_clock(cx);
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id)
                     && let Some(metrics) = panel_desktop
                 {
@@ -130,22 +116,21 @@ impl NyaTermApp {
         }
     }
 
-    #[cfg(windows)]
-    fn native_rdp_selected(&self, config: &RdpSessionConfig) -> bool {
-        native_rdp_selected_for(
-            config.backend,
-            config.relay.is_some(),
-            crate::platform::native_rdp_available(),
-        )
-    }
-
     pub(in crate::features) fn launch_rdp_runtime(
         &mut self,
         session_id: &str,
         config: RdpSessionConfig,
     ) {
+        if let Err(error) = config.backend.validate_config(&config) {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                error.kind,
+                error.message,
+            );
+            return;
+        }
         #[cfg(windows)]
-        if self.native_rdp_selected(&config) {
+        if config.backend == RdpBackend::Windows {
             if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                 session.native_rdp_config = Some(config);
                 session.state = nyaterm_remote_desktop::RemoteDesktopViewState::Connecting;

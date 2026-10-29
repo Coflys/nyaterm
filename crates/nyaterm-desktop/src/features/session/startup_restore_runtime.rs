@@ -580,7 +580,14 @@ impl NyaTermApp {
                 let session_id = nyaterm_core::uuid();
                 let config = RdpSessionConfig {
                     relay: None,
-                    backend: parse_rdp_backend(backend),
+                    backend: match parse_rdp_backend(backend) {
+                        Ok(backend) => backend,
+                        Err(error) => {
+                            self.shell.set_status(error.to_string());
+                            return false;
+                        }
+                    },
+                    windows_authentication: security.windows_authentication.clone(),
                     name: connection.name.clone(),
                     host: host.clone(),
                     port: *port,

@@ -6363,6 +6363,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-activex-helper"
+version = "2.0.0"
+dependencies = [
+ "nyaterm-remote-desktop",
+ "serde_json",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
 name = "nyaterm-app"
 version = "2.0.0"
 dependencies = [
@@ -6477,7 +6487,6 @@ dependencies = [
  "tray-icon",
  "url",
  "uuid",
- "windows 0.62.2",
  "windows-sys 0.61.2",
  "x11rb",
  "zed-reqwest",

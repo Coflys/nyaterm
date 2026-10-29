@@ -9,8 +9,8 @@ use super::{
     default_ssh_port, default_ssh_user, default_stop_bits, default_telnet_auto_login_timeout_ms,
     default_telnet_enter_mode, default_telnet_port, default_true, default_vnc_port,
     default_vnc_reconnect_attempts, default_vnc_scale_mode, default_vnc_security_mode,
-    is_default_rdp_backend, is_default_sftp_shell_detection_timeout_ms,
-    is_default_telnet_auto_login_config,
+    deserialize_rdp_backend, is_default_sftp_shell_detection_timeout_ms,
+    is_default_telnet_auto_login_config, serialize_rdp_backend,
 };
 
 /// Default outbound idle interval for Telnet NOP keepalive, in seconds.
@@ -601,10 +601,11 @@ pub enum ConnectionType {
         username: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         domain: String,
-        /// `auto`, `builtin`, or `windows`.
+        /// Explicit implementation: `builtin` or `windows`; unknown names are retained.
         #[serde(
             default = "default_rdp_backend",
-            skip_serializing_if = "is_default_rdp_backend"
+            deserialize_with = "deserialize_rdp_backend",
+            serialize_with = "serialize_rdp_backend"
         )]
         backend: String,
         #[serde(default)]
@@ -643,6 +644,10 @@ pub struct RdpSecuritySettings {
     pub use_nla: bool,
     #[serde(default = "default_rdp_certificate_policy")]
     pub certificate_policy: String,
+    /// Explicit opt-in to Windows system authentication for the ActiveX backend.
+    /// Absent in older data; never inferred from a NyaTerm fingerprint policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_authentication: Option<String>,
     /// Request an administrative session. The server determines the actual
     /// session assignment; this does not guarantee access to a console session.
     #[serde(default)]
@@ -654,6 +659,7 @@ impl Default for RdpSecuritySettings {
         Self {
             use_nla: true,
             certificate_policy: default_rdp_certificate_policy(),
+            windows_authentication: None,
             administrative_session: false,
         }
     }

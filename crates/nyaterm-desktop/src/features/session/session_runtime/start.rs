@@ -200,6 +200,26 @@ impl NyaTermApp {
             return;
         }
         let options = self.prepare_session_start_options(options);
+        if let ConnectionType::Rdp { backend, .. } = &connection.config {
+            let has_relay = connection.network.as_ref().is_some_and(|network| {
+                network.proxy_id.is_some() || network.proxy_jump_id.is_some()
+            });
+            if let Err(error) =
+                parse_rdp_backend(backend).and_then(|backend| backend.validate_route(has_relay))
+            {
+                let message = error.to_string();
+                self.fail_retry_preparation(&options, message.clone(), cx);
+                self.complete_mcp_session_open_failure(&connection.id, &message);
+                self.shell.set_status(message.clone());
+                self.notify_operation(
+                    "rdp-backend",
+                    nyaterm_ui::notification::NyaNotificationKind::Error,
+                    message,
+                    cx,
+                );
+                return;
+            }
+        }
         let Some(placement) = options.tab_placement else {
             self.complete_mcp_session_open_failure(
                 &connection.id,
@@ -583,13 +603,29 @@ impl NyaTermApp {
                 clipboard,
                 reconnect,
             } => {
+                let backend = match parse_rdp_backend(&backend) {
+                    Ok(backend) => backend,
+                    Err(error) => {
+                        self.fail_retry_preparation(&options, error.to_string(), cx);
+                        self.complete_mcp_session_open_failure(&connection.id, &error.to_string());
+                        self.session.start_release_saved_connection(&connection.id);
+                        self.notify_operation(
+                            "rdp-backend",
+                            nyaterm_ui::notification::NyaNotificationKind::Error,
+                            error.to_string(),
+                            cx,
+                        );
+                        return;
+                    }
+                };
                 let config = RdpSessionConfig {
                     relay: self
                         .remote_desktop
                         .prepared_routes
                         .get(&connection.id)
                         .map(|route| route.endpoint.clone()),
-                    backend: parse_rdp_backend(&backend),
+                    backend,
+                    windows_authentication: security.windows_authentication.clone(),
                     name: connection.name.clone(),
                     host,
                     port,

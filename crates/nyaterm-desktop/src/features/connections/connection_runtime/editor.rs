@@ -106,6 +106,15 @@ impl NyaTermApp {
             ConnectionEditorValidationError::BaudRateInvalid => {
                 t!("dialog.baudRateInvalid", min = "1", max = "4000000").into()
             }
+            ConnectionEditorValidationError::RdpWindowsAuthenticationRequired => {
+                t!("dialog.rdpWindowsAuthenticationRequired").into()
+            }
+            ConnectionEditorValidationError::RdpRelayUnsupported => {
+                t!("dialog.rdpActiveXRelayUnsupported").into()
+            }
+            ConnectionEditorValidationError::RdpClipboardUnsupported => {
+                t!("dialog.rdpActiveXClipboardUnsupported").into()
+            }
             ConnectionEditorValidationError::RdpDisplayWidthInvalid => {
                 t!("dialog.rdpDisplayWidthInvalid").into()
             }
@@ -219,7 +228,7 @@ impl NyaTermApp {
                 username: "root".to_string(),
                 domain: String::new(),
                 auth_mode: "password".to_string(),
-                rdp_backend: "auto".to_string(),
+                rdp_backend: "builtin".to_string(),
                 rdp_security: RdpSecuritySettings::default(),
                 rdp_display: RdpDisplaySettings::default(),
                 rdp_clipboard: RdpClipboardSettings::default(),

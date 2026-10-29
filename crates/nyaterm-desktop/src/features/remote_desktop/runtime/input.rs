@@ -58,6 +58,16 @@ impl NyaTermApp {
             if let Some(session_id) = this.session.active_id_owned()
                 && this.remote_desktop.is_session(&session_id)
             {
+                #[cfg(windows)]
+                if let Some(native) = this
+                    .remote_desktop
+                    .sessions
+                    .get(&session_id)
+                    .and_then(|session| session.native_rdp.as_ref())
+                {
+                    native.focus();
+                    return;
+                }
                 let _ = this.send_remote_modifier_state(
                     &session_id,
                     window.modifiers(),

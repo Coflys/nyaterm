@@ -45,6 +45,11 @@ impl NyaTermApp {
             self.begin_rdp_runtime(session_id, config, cx);
             return;
         }
+        #[cfg(windows)]
+        if session.native_rdp.is_some() || session.native_rdp_config.is_some() {
+            session.pending_resize = None;
+            return;
+        }
         if !fit_window || session.dynamic_resize_disabled {
             session.pending_resize = None;
             return;

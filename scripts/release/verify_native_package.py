@@ -25,7 +25,7 @@ MIN_ARTIFACT_SIZE = 1024
 
 def helper_filenames(target: str) -> list[str]:
     suffix = ".exe" if "windows" in target else ""
-    return [f"{name}{suffix}" for name in package_native.HELPER_BINS]
+    return [f"{name}{suffix}" for name in package_native.helper_bins(target)]
 
 
 def require_safe_archive_path(name: str) -> None:

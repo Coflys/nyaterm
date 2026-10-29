@@ -156,11 +156,17 @@ impl NyaTermApp {
         self.remote_desktop.routes.clear();
         self.remote_desktop.prepared_routes.clear();
         self.shutdown_remote_desktop_workers();
+        #[cfg(windows)]
+        let native_hosts = self.remote_desktop.take_native_hosts_for_shutdown();
         let session_shutdown = self.session.take_shutdown();
         let frame_worker = self.terminal.take_frame_shutdown();
         let recording_shutdown = self.recording.take_shutdown();
         let stop_editor_watchers = self.transfer.begin_external_editor_shutdown();
         cx.background_spawn(async move {
+            #[cfg(windows)]
+            for host in native_hosts {
+                host.shutdown();
+            }
             stop_editor_watchers.await;
             session_shutdown();
             if let Some(shutdown) = frame_worker {

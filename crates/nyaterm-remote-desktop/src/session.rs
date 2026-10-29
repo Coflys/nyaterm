@@ -387,6 +387,14 @@ impl RdpSessionManager {
         session_id: String,
         config: RdpSessionConfig,
     ) -> Result<String, RdpError> {
+        config.backend.validate_config(&config)?;
+        if config.backend != crate::RdpBackend::Builtin {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "Use the ActiveX host manager for the Windows backend",
+            ));
+        }
+
         validate_config(&config)?;
         {
             let mut sessions = self.sessions.lock().map_err(|_| {

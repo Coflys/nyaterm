@@ -1,3 +1,4 @@
+pub mod activex;
 mod certificate;
 mod clipboard;
 mod frame;

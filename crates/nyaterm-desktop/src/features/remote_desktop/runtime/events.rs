@@ -290,15 +290,11 @@ impl NyaTermApp {
         self.flush_pending_remote_cursor_repaint(cx);
         #[cfg(windows)]
         let mut dirty = {
-            let dialog_open = window.has_active_nya_dialog(cx);
+            let dialog_open = window.has_active_nya_dialog(cx)
+                || nyaterm_ui::nya_popup_menu_is_active(window, cx);
             let overlay = self.native_rdp_overlay_state(dialog_open, cx);
             let visible_tab_roots = self.native_rdp_visible_tab_roots();
-            self.drive_native_rdp_sessions(
-                window,
-                &visible_tab_roots,
-                overlay.obscured,
-                overlay.snapshot,
-            )
+            self.drive_native_rdp_sessions(window, &visible_tab_roots, overlay.obscured, cx)
         };
         #[cfg(not(windows))]
         let mut dirty = false;

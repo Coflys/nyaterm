@@ -206,7 +206,11 @@ fn rdp_security(
                 cx,
             },
             "connection-editor-rdp-certificate-policy",
-            t!("dialog.rdpCertificatePolicy"),
+            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+                t!("dialog.rdpWindowsAuthentication")
+            } else {
+                t!("dialog.rdpCertificatePolicy")
+            },
             ConnectionEditorSelect::RdpCertificatePolicy,
         ))
 }

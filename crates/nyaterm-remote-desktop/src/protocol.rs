@@ -4,7 +4,7 @@ use std::sync::Arc;
 use nyaterm_core::SecretString;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// Maximum UTF-8 payload accepted for a single committed-text event.
 ///
@@ -68,8 +68,9 @@ pub struct VncServerCapabilities {
 #[serde(rename_all = "snake_case")]
 pub enum RdpBackend {
     #[default]
-    Auto,
+    #[serde(alias = "auto", alias = "internal")]
     Builtin,
+    #[serde(alias = "active-x")]
     Windows,
 }
 
@@ -79,6 +80,8 @@ pub struct RdpSessionConfig {
     pub relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
     #[serde(default)]
     pub backend: RdpBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_authentication: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -1077,11 +1080,62 @@ pub fn parse_rdp_display_mode(value: &str) -> RdpDisplayMode {
     }
 }
 
-pub fn parse_rdp_backend(value: &str) -> RdpBackend {
+pub fn parse_rdp_backend(value: &str) -> Result<RdpBackend, RdpError> {
     match value {
-        "builtin" | "internal" => RdpBackend::Builtin,
-        "windows" | "active-x" => RdpBackend::Windows,
-        _ => RdpBackend::Auto,
+        "builtin" | "internal" | "auto" => Ok(RdpBackend::Builtin),
+        "windows" | "active-x" => Ok(RdpBackend::Windows),
+        _ => Err(RdpError::new(
+            RdpErrorKind::Unsupported,
+            "Unsupported RDP backend",
+        )),
+    }
+}
+
+impl RdpBackend {
+    /// Check before resolving a saved proxy or jump host into a live Relay.
+    pub fn validate_route(self, has_relay: bool) -> Result<(), RdpError> {
+        if self == Self::Builtin {
+            return Ok(());
+        }
+        if !cfg!(windows) {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX RDP is only available on Windows",
+            ));
+        }
+        if has_relay {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX RDP does not support Relay",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_config(self, config: &RdpSessionConfig) -> Result<(), RdpError> {
+        self.validate_route(config.relay.is_some())?;
+        if self == Self::Builtin {
+            return Ok(());
+        }
+        if config.windows_authentication.as_deref() != Some("system") {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "Select Windows system authentication explicitly for ActiveX RDP",
+            ));
+        }
+        if config.clipboard.mode == RdpClipboardMode::TextOnly {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX RDP does not support text-only clipboard; select disabled or full clipboard redirection",
+            ));
+        }
+        if config.reconnect.max_attempts > 200 {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "ActiveX reconnect attempts must be between 0 and 200",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1163,7 +1217,7 @@ mod tests {
         });
         let session: RdpSessionConfig = serde_json::from_value(document).unwrap();
         assert!(!session.administrative_session);
-        assert_eq!(session.backend, RdpBackend::Auto);
+        assert_eq!(session.backend, RdpBackend::Builtin);
         assert_eq!(session.display, display);
         let encoded = serde_json::to_value(&session).unwrap();
         assert_eq!(
@@ -1199,12 +1253,14 @@ mod tests {
 
     #[test]
     fn rdp_backend_accepts_public_and_legacy_names() {
-        assert_eq!(parse_rdp_backend("builtin"), RdpBackend::Builtin);
-        assert_eq!(parse_rdp_backend("internal"), RdpBackend::Builtin);
-        assert_eq!(parse_rdp_backend("windows"), RdpBackend::Windows);
-        assert_eq!(parse_rdp_backend("active-x"), RdpBackend::Windows);
-        assert_eq!(parse_rdp_backend("unknown"), RdpBackend::Auto);
-        assert_eq!(RdpBackend::default(), RdpBackend::Auto);
+        for name in ["auto", "builtin", "internal"] {
+            assert_eq!(parse_rdp_backend(name).unwrap(), RdpBackend::Builtin);
+        }
+        for name in ["windows", "active-x"] {
+            assert_eq!(parse_rdp_backend(name).unwrap(), RdpBackend::Windows);
+        }
+        assert!(parse_rdp_backend("unknown").is_err());
+        assert_eq!(RdpBackend::default(), RdpBackend::Builtin);
     }
 
     #[test]

@@ -157,6 +157,21 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if let Some(crate::models::SessionLaunchConfig::Rdp(config)) = self
+            .session
+            .metadata(session_id)
+            .map(|metadata| &metadata.launch_config)
+            && let Err(error) = config.backend.validate_config(config)
+        {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                error.kind,
+                error.message,
+            );
+            self.settle_remote_desktop_restore(cx);
+            cx.notify();
+            return;
+        }
         let route_missing = !self.remote_desktop.routes.contains_key(session_id);
         if route_missing {
             let connection = self
@@ -176,6 +191,21 @@ impl NyaTermApp {
                     })
                 });
             if let Some(connection) = connection {
+                if let Some(crate::models::SessionLaunchConfig::Rdp(config)) = self
+                    .session
+                    .metadata(session_id)
+                    .map(|metadata| &metadata.launch_config)
+                    && let Err(error) = config.backend.validate_route(true)
+                {
+                    self.remote_desktop.insert_failed_session(
+                        session_id.to_string(),
+                        error.kind,
+                        error.message,
+                    );
+                    self.settle_remote_desktop_restore(cx);
+                    cx.notify();
+                    return;
+                }
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     session.state = RemoteDesktopViewState::Connecting;
                 }
@@ -250,6 +280,16 @@ impl NyaTermApp {
             crate::models::SessionLaunchConfig::Rdp(config) => config,
             _ => return,
         };
+        if let Err(error) = config.backend.validate_config(&config) {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                error.kind,
+                error.message,
+            );
+            self.settle_remote_desktop_restore(cx);
+            cx.notify();
+            return;
+        }
         let mut authentication_disabled = false;
         if config.password.is_none()
             && let Some(connection_id) = metadata.source_connection_id.as_deref()
@@ -499,7 +539,7 @@ impl NyaTermApp {
             );
             self.release_remote_keys(session_id);
         }
-        // Native sessions live in the UI process, not in the helper manager;
+        // ActiveX sessions use their own isolated host, not the IronRDP manager;
         // asking the manager to close one would fail and leave the tab behind.
         #[cfg(windows)]
         let native = self

@@ -90,6 +90,7 @@ fn fit_window_rdp_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig
     RdpSessionConfig {
         relay: None,
         backend: RdpBackend::Builtin,
+        windows_authentication: None,
         name: name.into(),
         host: "127.0.0.1".into(),
         port: 1,
@@ -486,25 +487,6 @@ fn cursor_repaints_follow_the_renderer_budget() {
     );
 }
 
-#[cfg(windows)]
-#[test]
-fn native_rdp_is_selected_only_when_available_and_compatible() {
-    use nyaterm_remote_desktop::RdpBackend;
-
-    use super::start::native_rdp_selected_for;
-
-    assert!(native_rdp_selected_for(RdpBackend::Auto, false, true));
-    assert!(!native_rdp_selected_for(RdpBackend::Auto, false, false));
-    assert!(native_rdp_selected_for(RdpBackend::Windows, false, true));
-    assert!(
-        native_rdp_selected_for(RdpBackend::Windows, false, false),
-        "an explicit Windows choice still attempts the control and reports its error"
-    );
-    assert!(!native_rdp_selected_for(RdpBackend::Builtin, false, true));
-    assert!(!native_rdp_selected_for(RdpBackend::Auto, true, true));
-    assert!(!native_rdp_selected_for(RdpBackend::Windows, true, true));
-}
-
 #[test]
 fn continuous_frame_drains_wait_for_the_next_display_frame() {
     assert_eq!(
@@ -882,5 +864,52 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
             assert!(app.remote_desktop.sessions["healthy"].texture.is_some());
             assert!(!app.remote_desktop.sessions["healthy"].uploads_stopped);
         });
+    });
+}
+
+#[test]
+fn unsupported_activex_never_queues_a_helper_or_waits_for_layout_on_start_or_retry() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use gpui::TestAppContext;
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::RdpBackend;
+    let root = TestTempDir::new("nyaterm-activex-unsupported");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "unsupported");
+    app.update(&mut cx, |app, cx| {
+        let mut config = fit_window_rdp_config("unsupported");
+        config.backend = RdpBackend::Windows;
+        for relay in [
+            None,
+            Some(nyaterm_core::connection_route::RelayEndpoint {
+                address: "127.0.0.1:1".parse().unwrap(),
+                token: "12345678901234567890123456789012".into(),
+            }),
+        ] {
+            config.relay = relay;
+            app.session
+                .metadata_mut("unsupported")
+                .unwrap()
+                .launch_config = SessionLaunchConfig::Rdp(config.clone());
+            app.remote_desktop.insert_connecting("unsupported".into());
+            app.begin_rdp_runtime("unsupported", config.clone(), cx);
+            for retry in [false, true] {
+                if retry {
+                    app.retry_rdp_runtime("unsupported", cx);
+                }
+                let session = &app.remote_desktop.sessions["unsupported"];
+                assert_eq!(session.state, RemoteDesktopViewState::Failed);
+                assert!(session.deferred_start.is_none());
+                assert!(session.reconnect_at.is_none());
+                assert!(app.remote_desktop.manager.state("unsupported").is_none());
+                #[cfg(windows)]
+                {
+                    assert!(session.native_rdp.is_none());
+                    assert!(session.native_rdp_config.is_none());
+                }
+            }
+        }
     });
 }

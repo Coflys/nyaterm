@@ -1,10 +1,11 @@
 [workspace]
-# The application spawns three helpers at runtime and looks for them beside its own
-# executable, so a bare `cargo build` must produce all four binaries.
+# The application resolves its helpers beside its executable. Include the Windows
+# ActiveX host in development builds; release packaging filters it by platform.
 default-members = [
     "crates/nyaterm-app",
     "crates/nyaterm-mcp",
     "crates/nyaterm-rdp-helper",
+    "crates/nyaterm-activex-helper",
     "crates/nyaterm-vnc-helper",
 ]
 members = [
@@ -17,6 +18,7 @@ members = [
     "crates/nyaterm-plugin-api",
     "crates/nyaterm-plugin-host",
     "crates/nyaterm-rdp-helper",
+    "crates/nyaterm-activex-helper",
     "crates/nyaterm-remote-desktop",
     "crates/nyaterm-store",
     "crates/nyaterm-terminal",

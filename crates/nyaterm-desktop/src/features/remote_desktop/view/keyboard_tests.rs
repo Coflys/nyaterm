@@ -65,6 +65,7 @@ fn focused_rdp_and_vnc_surfaces_keep_tab_and_shift_tab_out_of_local_navigation()
                 SessionLaunchConfig::Rdp(RdpSessionConfig {
                     relay: None,
                     backend: Default::default(),
+                    windows_authentication: None,
                     name: "RDP".into(),
                     host: "127.0.0.1".into(),
                     port: 3389,

@@ -30,6 +30,9 @@ pub(super) enum ConnectionEditorValidationError {
     RdpDisplayWidthInvalid,
     RdpDisplayHeightInvalid,
     RdpReconnectAttemptsInvalid,
+    RdpWindowsAuthenticationRequired,
+    RdpClipboardUnsupported,
+    RdpRelayUnsupported,
     VncReconnectAttemptsInvalid,
     VncPasswordTooLong,
     VncUsernameTooLong,
@@ -168,7 +171,7 @@ pub(super) fn connection_editor_from_saved(
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: auth.mode,
-        rdp_backend: "auto".to_string(),
+        rdp_backend: "builtin".to_string(),
         rdp_security: RdpSecuritySettings::default(),
         rdp_display: RdpDisplaySettings::default(),
         rdp_clipboard: RdpClipboardSettings::default(),
@@ -632,6 +635,20 @@ pub(super) fn build_saved_connection_from_editor(
             }
             if editor.rdp_reconnect.max_attempts > 20 {
                 return Err(ConnectionEditorValidationError::RdpReconnectAttemptsInvalid);
+            }
+            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+                if editor.proxy_id.is_some() || editor.proxy_jump_id.is_some() {
+                    return Err(ConnectionEditorValidationError::RdpRelayUnsupported);
+                }
+                if editor.rdp_security.windows_authentication.as_deref() != Some("system") {
+                    return Err(ConnectionEditorValidationError::RdpWindowsAuthenticationRequired);
+                }
+                if !matches!(
+                    editor.rdp_clipboard.mode.as_str(),
+                    "disabled" | "off" | "text-and-files"
+                ) {
+                    return Err(ConnectionEditorValidationError::RdpClipboardUnsupported);
+                }
             }
             ConnectionType::Rdp {
                 host,
@@ -1510,6 +1527,7 @@ mod tests {
         let expected_security = RdpSecuritySettings {
             use_nla: false,
             certificate_policy: "strict".to_string(),
+            windows_authentication: Some("system".into()),
             // Opposite of the default, so a silently re-defaulted field fails the assert.
             administrative_session: true,
         };
@@ -2081,6 +2099,20 @@ mod account_edit_tests {
                 .password
                 .as_deref(),
             Some("existing")
+        );
+    }
+    #[test]
+    fn editing_an_unrelated_field_preserves_an_unknown_rdp_backend() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"future-rdp", "name":"Remote desktop", "type":"rdp",
+            "host":"example.invalid", "port":3389, "username":"user", "backend":"future-engine"
+        }))
+        .unwrap();
+        let mut editor = connection_editor_from_saved(connection, false);
+        editor.name = "Edited".into();
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        assert!(
+            matches!(saved.config, nyaterm_core::ConnectionType::Rdp { backend, .. } if backend == "future-engine")
         );
     }
 }

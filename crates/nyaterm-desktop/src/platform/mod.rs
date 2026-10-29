@@ -5,12 +5,6 @@ pub(crate) mod linux;
 mod windows;
 
 #[cfg(windows)]
-pub(crate) use windows::{
-    NativeRdpConnectionEvent, NativeRdpControl, NativeRdpDisconnectInfo, NativeRdpRect,
-    NativeRdpSessionDetails, NativeRdpSnapshot, native_rdp_available,
-};
-
-#[cfg(windows)]
 pub(crate) mod windows_acl;
 
 #[derive(Debug, Clone, Copy)]

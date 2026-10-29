@@ -198,6 +198,7 @@ pub struct NyaSelectOption {
     search_text: Option<SharedString>,
     subtitle: Option<SharedString>,
     font_family: Option<SharedString>,
+    disabled: bool,
 }
 
 impl NyaSelectOption {
@@ -208,7 +209,14 @@ impl NyaSelectOption {
             search_text: None,
             subtitle: None,
             font_family: None,
+            disabled: false,
         }
+    }
+
+    /// Disable new selection while retaining an existing saved value for display.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     pub fn search_text(mut self, search_text: impl Into<SharedString>) -> Self {
@@ -243,6 +251,7 @@ struct NyaSelectItem {
     search_text: Option<SharedString>,
     subtitle: Option<SharedString>,
     font_family: Option<SharedString>,
+    disabled: bool,
 }
 
 impl NyaSelectItem {
@@ -278,6 +287,10 @@ impl NyaSelectItem {
 }
 
 impl gpui_kit::component::select::SelectItem for NyaSelectItem {
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+
     type Value = String;
 
     fn title(&self) -> SharedString {
@@ -526,6 +539,7 @@ impl NyaSelectState {
                 search_text: option.search_text.clone(),
                 subtitle: option.subtitle.clone(),
                 font_family: option.font_family.clone(),
+                disabled: option.disabled,
             })
             .collect()
     }

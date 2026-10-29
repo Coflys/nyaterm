@@ -356,6 +356,7 @@ impl ShellFeatureState {
         self.resize_handle_hover.leave(id)
     }
 
+    #[cfg(windows)]
     pub(in crate::features) fn clear_resize_handle_hover(&mut self) -> bool {
         self.resize_handle_hover.clear()
     }
@@ -666,6 +667,7 @@ impl ShellFeatureState {
         self.chrome.open_tabs_menu_open
     }
 
+    #[cfg(windows)]
     pub(in crate::features) fn header_status_menu_is_open(&self) -> bool {
         self.chrome.header_status_menu_open
     }
@@ -925,12 +927,9 @@ impl ResizeHandleHoverState {
         active
     }
 
-    /// Drops both the dwell timer and the visible highlight.
-    ///
-    /// Needed when the pointer leaves the GPUI window into a native child window:
-    /// that window never sends `on_hover(false)`, so a hovered handle would stay
-    /// highlighted.
-    pub(in crate::features) fn clear(&mut self) -> bool {
+    /// Native child windows consume pointer-leave events, so clear stale dwell state.
+    #[cfg(windows)]
+    fn clear(&mut self) -> bool {
         let highlighted = self.active_id.is_some();
         if self.pending_id.is_some() || highlighted {
             self.generation = self.generation.wrapping_add(1);
@@ -1411,6 +1410,7 @@ mod tests {
         assert!(!shell.resize_handle_is_highlighted(&second));
     }
 
+    #[cfg(windows)]
     #[test]
     fn clearing_resize_hover_drops_highlight_and_invalidates_dwell() {
         let mut shell = shell(BottomPanelMode::Hidden);

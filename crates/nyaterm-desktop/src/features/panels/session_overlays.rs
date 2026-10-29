@@ -552,6 +552,7 @@ mod tests {
                 SessionLaunchConfig::Rdp(RdpSessionConfig {
                     relay: None,
                     backend: Default::default(),
+                    windows_authentication: None,
                     name: "103".into(),
                     host: "10.168.10.103".into(),
                     port: 3389,

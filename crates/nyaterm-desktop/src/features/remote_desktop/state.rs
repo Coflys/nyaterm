@@ -101,10 +101,7 @@ pub(super) struct RemoteDesktopSessionState {
     #[cfg(windows)]
     pub(super) native_rdp_config: Option<RdpSessionConfig>,
     #[cfg(windows)]
-    pub(super) native_rdp: Option<crate::platform::NativeRdpControl>,
-    /// Still frame shown behind an in-window menu while the popup is hidden.
-    #[cfg(windows)]
-    pub(super) native_overlay_image: Option<std::sync::Arc<gpui::RenderImage>>,
+    pub(super) native_rdp: Option<nyaterm_remote_desktop::activex::NativeRdpControl>,
 }
 
 impl Default for RemoteDesktopSessionState {
@@ -149,13 +146,21 @@ impl Default for RemoteDesktopSessionState {
             native_rdp_config: None,
             #[cfg(windows)]
             native_rdp: None,
-            #[cfg(windows)]
-            native_overlay_image: None,
         }
     }
 }
 
 impl RemoteDesktopFeatureState {
+    #[cfg(windows)]
+    pub(in crate::features) fn take_native_hosts_for_shutdown(
+        &mut self,
+    ) -> Vec<nyaterm_remote_desktop::activex::NativeRdpControl> {
+        self.sessions
+            .values_mut()
+            .filter_map(|session| session.native_rdp.take())
+            .collect()
+    }
+
     pub(in crate::features) fn release_inactive_textures(&mut self, active: &str) {
         for (id, session) in &mut self.sessions {
             if id == active {
