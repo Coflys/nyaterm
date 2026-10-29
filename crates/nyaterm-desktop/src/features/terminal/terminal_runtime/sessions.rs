@@ -333,6 +333,9 @@ impl NyaTermApp {
             );
             return;
         }
+        if self.request_settings_quit_confirmation(open_sessions, window, cx) {
+            return;
+        }
         if self.settings.summary().confirm_on_close && open_sessions > 0 {
             // Reuse the close-all confirmation as the quit-with-sessions gate.
             // A title-bar close control can also produce the native window-close

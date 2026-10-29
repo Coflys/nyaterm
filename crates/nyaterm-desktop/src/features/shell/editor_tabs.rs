@@ -45,6 +45,7 @@ impl NyaTermApp {
     }
 
     pub(crate) fn cancel_editor_exit_approval(&mut self) {
+        self.settings.take_quit_confirmation();
         self.shell.workspace.editor_exit_approvals.clear();
     }
 

@@ -480,7 +480,7 @@ impl DesktopController {
     }
 
     /// Run each workspace's unsaved-draft gate before releasing any process
-    /// resources. Covers editor documents and per-window theme drafts.
+    /// resources. Covers editor documents and all per-window settings drafts.
     pub fn defer_quit_for_dirty_editors(
         &mut self,
         current: WorkspaceId,
@@ -495,7 +495,8 @@ impl DesktopController {
                 .update(cx, |shell, cx| {
                     shell.app.as_ref().is_some_and(|app| {
                         let app = app.read(cx);
-                        app.has_unconfirmed_editor_changes() || app.has_unconfirmed_theme_changes()
+                        app.has_unconfirmed_editor_changes()
+                            || app.has_unconfirmed_settings_changes()
                     })
                 })
                 .unwrap_or(false);
