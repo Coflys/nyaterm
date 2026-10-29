@@ -21,6 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BSTR, GUID, HSTRING, IUnknown, IUnknown_Vtbl, Interface, PCWSTR, s, w};
 
+use crate::display::DisplayUpdates;
 use crate::events::{ControlEvent, EventSubscription};
 
 #[windows::core::interface("c1e6743a-41c1-4a74-832a-0dd06c1c7a0e")]
@@ -45,9 +46,7 @@ pub struct NativeRdpControl {
     control: IDispatch,
     events: EventSubscription,
     rect: NativeRdpRect,
-    fit_window: bool,
-    desktop_size: (u32, u32),
-    pending_resize: Option<Instant>,
+    display_updates: DisplayUpdates,
     started_at: Option<Instant>,
     connected: bool,
     terminal: bool,
@@ -125,10 +124,7 @@ impl NativeRdpControl {
                 control,
                 events,
                 rect,
-                fit_window: config.display.mode
-                    == nyaterm_remote_desktop::RdpDisplayMode::FitWindow,
-                desktop_size: (config.display.width, config.display.height),
-                pending_resize: None,
+                display_updates: DisplayUpdates::new(&config.display),
                 started_at: None,
                 connected: false,
                 terminal: false,
@@ -240,9 +236,7 @@ impl NativeRdpControl {
     pub fn viewport(&mut self, rect: NativeRdpRect, visible: bool) -> Result<(), String> {
         rect.validate().map_err(|e| e.to_string())?;
         if self.rect != rect {
-            if self.fit_window || self.rect.scale_percent != rect.scale_percent {
-                self.pending_resize = Some(Instant::now());
-            }
+            self.display_updates.viewport(rect, Instant::now());
             self.rect = rect;
             unsafe {
                 MoveWindow(self.host, rect.x, rect.y, rect.width, rect.height, true)
@@ -294,6 +288,7 @@ impl NativeRdpControl {
             version: get_text(&self.control, "Version").ok(),
             cipher_strength: get_u32(&self.control, "CipherStrength").ok(),
             status_text: None,
+            dynamic_resize_available: self.display_updates.available(),
             desktop_width: get_u32(&self.control, "DesktopWidth").ok(),
             desktop_height: get_u32(&self.control, "DesktopHeight").ok(),
             color_depth: get_u32(&self.control, "ColorDepth").ok(),
@@ -314,7 +309,6 @@ impl NativeRdpControl {
             match event {
                 ControlEvent::Connected if !self.terminal && !self.connected => {
                     self.connected = true;
-                    self.pending_resize = Some(Instant::now());
                     self.started_at = None;
                     self.reconnect_deadline = None;
                     output.push(NativeRdpConnectionEvent::Connected);
@@ -370,18 +364,16 @@ impl NativeRdpControl {
             unsafe {
                 let _ = ShowWindow(self.host, SW_HIDE);
             }
-        } else if self.connected
-            && self
-                .pending_resize
-                .is_some_and(|at| at.elapsed() > Duration::from_millis(300))
-        {
-            self.pending_resize = None;
-            let (width, height) = if self.fit_window {
-                display_size(self.rect)
-            } else {
-                self.desktop_size
-            };
-            update_session_display_settings(&self.control, width, height, self.rect.scale_percent)?;
+        } else if self.connected {
+            self.display_updates
+                .apply_due(Instant::now(), |parameters| {
+                    update_session_display_settings(
+                        &self.control,
+                        parameters.width,
+                        parameters.height,
+                        parameters.scale,
+                    )
+                });
         }
         Ok(output)
     }
@@ -461,11 +453,6 @@ fn performance_flags(display: &RdpDisplayConfig) -> u32 {
         flags |= 0x0000_0100;
     }
     flags
-}
-
-fn display_size(rect: NativeRdpRect) -> (u32, u32) {
-    let dim = |value: i32| (value.clamp(200, 8192) as u32) & !1;
-    (dim(rect.width), dim(rect.height))
 }
 
 fn update_session_display_settings(

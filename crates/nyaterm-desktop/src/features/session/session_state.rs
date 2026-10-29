@@ -141,6 +141,17 @@ impl NyaTermApp {
                     {
                         details.push((t!("sessionInfo.rdpControlVersion"), version.to_string()));
                     }
+                    if let Some(available) = native.dynamic_resize_available {
+                        details.push((
+                            t!("sessionInfo.dynamicResize"),
+                            if available {
+                                t!("sessionInfo.dynamicResizeAvailable")
+                            } else {
+                                t!("sessionInfo.dynamicResizeUnavailable")
+                            }
+                            .to_string(),
+                        ));
+                    }
                     if let Some(bits) = native.cipher_strength {
                         details.push((t!("sessionInfo.encryption"), format!("{bits}-bit")));
                     }

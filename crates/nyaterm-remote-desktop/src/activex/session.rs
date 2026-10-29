@@ -19,6 +19,7 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 struct Shared {
     events: VecDeque<NativeRdpConnectionEvent>,
     details: NativeRdpSessionDetails,
+    details_changed: bool,
     pointer_inside: bool,
     viewport: Option<(NativeRdpRect, bool)>,
 }
@@ -134,6 +135,12 @@ impl NativeRdpControl {
             .unwrap_or_else(|e| e.into_inner())
             .details
             .clone()
+    }
+
+    /// Coalesce details notifications without copying session state into desktop.
+    pub fn take_details_changed(&mut self) -> bool {
+        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut shared.details_changed)
     }
 }
 
@@ -254,7 +261,10 @@ fn run(
                     }
                 }
                 Ok(HostEvent::Details(details)) if hello => {
-                    shared.lock().unwrap_or_else(|e| e.into_inner()).details = details
+                    let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    let changed = state.details != details;
+                    state.details_changed |= changed;
+                    state.details = details;
                 }
                 Ok(HostEvent::PointerInside(inside)) if hello => {
                     shared

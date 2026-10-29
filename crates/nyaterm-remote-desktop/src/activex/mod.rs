@@ -51,6 +51,9 @@ pub struct NativeRdpDisconnectInfo {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRdpSessionDetails {
+    /// None until probed; false means SmartSizing remains in use.
+    #[serde(default)]
+    pub dynamic_resize_available: Option<bool>,
     pub version: Option<String>,
     pub cipher_strength: Option<u32>,
     pub status_text: Option<String>,

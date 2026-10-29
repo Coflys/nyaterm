@@ -2,6 +2,8 @@
 
 #[cfg(windows)]
 mod control;
+#[cfg(any(windows, test))]
+mod display;
 #[cfg(windows)]
 mod events;
 

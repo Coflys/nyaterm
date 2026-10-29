@@ -5,6 +5,23 @@ use crate::RdpClipboardMode;
 
 use super::{HostCommand, NativeRdpRect, decode, encode};
 
+#[test]
+fn session_details_accept_old_hosts_and_round_trip_optional_resize_capability() {
+    use super::{HostEvent, NativeRdpSessionDetails};
+    let old: NativeRdpSessionDetails = serde_json::from_str("{}").unwrap();
+    assert_eq!(old.dynamic_resize_available, None);
+    for available in [None, Some(true), Some(false)] {
+        let event = HostEvent::Details(NativeRdpSessionDetails {
+            dynamic_resize_available: available,
+            ..Default::default()
+        });
+        let HostEvent::Details(details) = decode(&encode(&event).unwrap()).unwrap() else {
+            panic!("expected session details");
+        };
+        assert_eq!(details.dynamic_resize_available, available);
+    }
+}
+
 fn config() -> RdpSessionConfig {
     serde_json::from_value(serde_json::json!({
         "backend":"windows", "windows_authentication":"system",
