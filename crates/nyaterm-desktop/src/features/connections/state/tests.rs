@@ -2250,6 +2250,43 @@ fn rdp_backend_dropdown_selection_reaches_the_connection_editor() {
 }
 
 #[test]
+fn existing_windows_backend_is_retained_until_user_explicitly_changes_it() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.kind = ConnectionKindTab::Rdp;
+        draft.rdp_backend = "windows".into();
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "windows"
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("windows"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "windows"
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "builtin"
+        );
+    });
+}
+
+#[test]
 fn editing_the_username_while_an_account_is_selected_keeps_it_on_the_connection() {
     let mut draft = connection_editor_state_with_secret_draft();
     draft.account_id = Some("ops".into());
