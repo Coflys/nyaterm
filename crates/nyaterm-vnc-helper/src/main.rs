@@ -1318,7 +1318,13 @@ fn vnc_limits() -> VncLimits {
         )
         .unwrap_or(usize::MAX),
         max_clipboard_bytes: MAX_VNC_CLIPBOARD_TEXT_BYTES,
-        max_rectangles_per_update: 1024,
+        // The count field is a u16, so this is the protocol's own ceiling. It is not
+        // a resource bound: each rectangle's payload is limited by the byte and
+        // framebuffer limits above and by `limits::rectangle`, one rectangle is in
+        // flight at a time, and the output channel applies backpressure. A tighter
+        // count only rejects real servers, which split a busy update into thousands
+        // of small rectangles (NyaTerm issue #1045).
+        max_rectangles_per_update: u16::MAX,
         max_encoded_payload_bytes: 64 * 1024 * 1024,
         max_decoded_payload_bytes: usize::try_from(
             MAX_VNC_FRAMEBUFFER_WIDTH * MAX_VNC_FRAMEBUFFER_HEIGHT * 4,
