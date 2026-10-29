@@ -13,6 +13,8 @@ use raw_window_handle::RawWindowHandle;
 
 use crate::features::NyaTermApp;
 
+use super::runtime::fit_window_display_metrics;
+
 impl NyaTermApp {
     pub(super) fn native_rdp_view(
         &mut self,
@@ -312,12 +314,13 @@ fn native_disconnect_message(info: &NativeRdpDisconnectInfo) -> String {
 }
 
 fn native_phys_rect(bounds: Bounds<Pixels>, scale: f32) -> NativeRdpRect {
+    let metrics = fit_window_display_metrics(bounds, scale);
     NativeRdpRect {
         x: (f32::from(bounds.origin.x) * scale).round() as i32,
         y: (f32::from(bounds.origin.y) * scale).round() as i32,
-        width: (f32::from(bounds.size.width) * scale).round() as i32,
-        height: (f32::from(bounds.size.height) * scale).round() as i32,
-        scale_percent: ((scale * 100.).round() as u32).clamp(100, 500),
+        width: metrics.width as i32,
+        height: metrics.height as i32,
+        scale_percent: metrics.desktop_scale_factor,
     }
 }
 

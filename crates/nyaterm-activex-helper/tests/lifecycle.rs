@@ -196,7 +196,7 @@ fn prepared_host(
     let config = serde_json::from_value(serde_json::json!({
         "backend":"windows", "windows_authentication":"system", "name":"probe", "host":server, "port":port,
         "username":"", "domain":"", "password":null, "use_nla":true, "certificate_policy":"strict",
-        "display":{"mode":"fit_window","width":800,"height":600,"color_depth":32},
+        "display":{"mode":"fit_window","width":800,"height":600,"color_depth":32,"desktop_scale_factor":150},
         "clipboard":{"mode":"disabled"}, "reconnect":{"enabled":false,"max_attempts":0}
     })).unwrap();
     let rect = NativeRdpRect {

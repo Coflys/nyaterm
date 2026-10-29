@@ -72,7 +72,7 @@ impl NyaTermApp {
     }
 }
 
-pub(super) fn fit_window_display_metrics(
+pub(in crate::features) fn fit_window_display_metrics(
     bounds: Bounds<gpui::Pixels>,
     scale_factor: f32,
 ) -> RdpDisplayMetrics {

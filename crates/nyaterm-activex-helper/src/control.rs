@@ -28,6 +28,13 @@ unsafe trait IMsTscNonScriptable: IUnknown {
     fn set_clear_text_password(&self, password: *const u16) -> windows::core::HRESULT;
 }
 
+// This named-property interface is not exposed through IDispatch. Configure
+// initial DPI before Connect so the server negotiates the intended desktop scale.
+#[windows::core::interface("302d8188-0052-4807-806a-362b628f9ac5")]
+unsafe trait IMsRdpExtendedSettings: IUnknown {
+    fn put_property(&self, name: *const u16, value: *mut VARIANT) -> windows::core::HRESULT;
+}
+
 const MSTSC_PROG_ID: &str = "MsTscAx.MsTscAx";
 static ATL_READY: OnceLock<bool> = OnceLock::new();
 
@@ -154,6 +161,14 @@ impl NativeRdpControl {
         put_i32(&advanced, "RDPPort", config.port as i32)?;
         put_bool(&advanced, "EnableCredSspSupport", config.use_nla)?;
         put_bool(&advanced, "SmartSizing", true)?;
+        if config.display.desktop_scale_factor != 0 {
+            put_extended_property(
+                &self.control,
+                "DesktopScaleFactor",
+                config.display.desktop_scale_factor,
+            )?;
+            put_extended_property(&self.control, "DeviceScaleFactor", 100)?;
+        }
         // Windows system authentication is explicit and fails closed.
         put_i32(&advanced, "AuthenticationLevel", 1)?;
         put_bool(
@@ -460,23 +475,7 @@ fn update_session_display_settings(
     scale: u32,
 ) -> Result<(), String> {
     let dispid = get_disp_id(control, "UpdateSessionDisplaySettings")?;
-    // IDispatch arguments are reversed: width, height, physical width/height,
-    // orientation, desktop scale, device scale.
-    let mut arguments = [
-        VARIANT::from(if scale >= 175 {
-            180u32
-        } else if scale >= 125 {
-            140u32
-        } else {
-            100u32
-        }),
-        VARIANT::from(scale),
-        VARIANT::from(0u32),
-        VARIANT::from(0u32),
-        VARIANT::from(0u32),
-        VARIANT::from(height),
-        VARIANT::from(width),
-    ];
+    let mut arguments = display_resize_arguments(width, height, scale);
     let params = DISPPARAMS {
         rgvarg: arguments.as_mut_ptr(),
         rgdispidNamedArgs: std::ptr::null_mut(),
@@ -591,5 +590,44 @@ fn put_variant(control: &IDispatch, dispid: i32, value: VARIANT) -> Result<(), S
                 None,
             )
             .map_err(|error| format!("cannot set RDP property {dispid}: {error}"))
+    }
+}
+
+fn put_extended_property(control: &IDispatch, property: &str, value: u32) -> Result<(), String> {
+    let settings: IMsRdpExtendedSettings = control
+        .cast()
+        .map_err(|error| format!("the Windows RDP control has no extended settings: {error}"))?;
+    let name = BSTR::from(property);
+    let mut value = VARIANT::from(value);
+    unsafe { settings.put_property(name.as_ptr(), &mut value) }
+        .ok()
+        .map_err(|error| format!("cannot set RDP property {property}: {error}"))
+}
+
+fn display_resize_arguments(width: u32, height: u32, scale: u32) -> [VARIANT; 7] {
+    // Automation arguments are reversed. Keep the negotiated desktop scale;
+    // device scale 100 avoids applying the local DPI twice.
+    [
+        VARIANT::from(100u32),
+        VARIANT::from(if scale == 0 { 100 } else { scale }),
+        VARIANT::from(0u32),
+        VARIANT::from(0u32),
+        VARIANT::from(0u32),
+        VARIANT::from(height),
+        VARIANT::from(width),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_resize_arguments;
+
+    #[test]
+    fn display_resizes_preserve_remote_dpi_and_dimensions() {
+        let values =
+            display_resize_arguments(1600, 900, 150).map(|value| u32::try_from(&value).unwrap());
+        assert_eq!(values, [100, 150, 0, 0, 0, 900, 1600]);
+        let unset = display_resize_arguments(1600, 900, 0);
+        assert_eq!(u32::try_from(&unset[1]).unwrap(), 100);
     }
 }
