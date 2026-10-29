@@ -105,6 +105,7 @@ fn closed_port() -> u16 {
 fn test_config() -> RdpSessionConfig {
     RdpSessionConfig {
         relay: None,
+        backend: Default::default(),
         name: "test".to_string(),
         host: "127.0.0.1".to_string(),
         port: closed_port(),

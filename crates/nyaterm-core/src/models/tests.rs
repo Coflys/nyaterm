@@ -218,6 +218,7 @@ fn rdp_connection_defaults_and_endpoint_match_tauri_shape() {
     let ConnectionType::Rdp {
         port,
         domain,
+        backend,
         security,
         display,
         clipboard,
@@ -230,6 +231,7 @@ fn rdp_connection_defaults_and_endpoint_match_tauri_shape() {
 
     assert_eq!(*port, 3389);
     assert!(domain.is_empty());
+    assert_eq!(backend, "auto");
     assert!(security.use_nla);
     assert_eq!(security.certificate_policy, "prompt");
     // Added after this document shape was written; absent must mean "off", which is

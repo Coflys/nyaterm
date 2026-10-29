@@ -1331,7 +1331,9 @@ fn rgba_to_bgra(mut pixels: Vec<u8>) -> Vec<u8> {
 fn rgb_u32_to_bgra(pixels: Vec<u32>) -> Vec<u8> {
     let mut bgra = Vec::with_capacity(pixels.len().saturating_mul(4));
     for pixel in pixels {
-        bgra.extend_from_slice(&[pixel as u8, (pixel >> 8) as u8, (pixel >> 16) as u8, 0xff]);
+        // The source is 0x00RRGGBB; adding the alpha byte turns little-endian
+        // storage into the B, G, R, A byte order GPUI expects.
+        bgra.extend_from_slice(&((pixel & 0x00ff_ffff) | 0xff00_0000).to_le_bytes());
     }
     bgra
 }
@@ -1574,8 +1576,9 @@ mod tests {
         classify_error, classify_failure, convert_and_send_input, convert_input,
         desktop_update_payload, error_chain, forward_full_frame_request, forward_output,
         graphics_pipeline_effective, install_crypto_provider, is_transport_failure, output_channel,
-        performance_flags_bits, report_ironrdp_panic, secure_attention_input, send_iron_input,
-        send_reliable_iron_input, validate_active_session_id, validate_input_events,
+        performance_flags_bits, report_ironrdp_panic, rgb_u32_to_bgra, secure_attention_input,
+        send_iron_input, send_reliable_iron_input, validate_active_session_id,
+        validate_input_events,
     };
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
     use ironrdp_input::{Database as InputDatabase, Operation, Scancode};
@@ -1590,6 +1593,14 @@ mod tests {
     };
 
     #[test]
+    fn rgb_pixels_convert_to_bgra_bytes_with_an_opaque_alpha() {
+        assert_eq!(
+            rgb_u32_to_bgra(vec![0x0012_3456, 0x00ab_cdef]),
+            vec![0x56, 0x34, 0x12, 0xff, 0xef, 0xcd, 0xab, 0xff]
+        );
+    }
+
+    #[test]
     fn active_session_id_rejects_foreign_messages() {
         validate_active_session_id(None, "before-connect")
             .expect("pre-connect handling keeps its existing semantics");
@@ -1602,6 +1613,7 @@ mod tests {
     fn helper_config() -> RdpSessionConfig {
         RdpSessionConfig {
             relay: None,
+            backend: Default::default(),
             name: "test".to_string(),
             host: "server.example".to_string(),
             port: 3389,

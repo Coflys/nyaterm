@@ -219,6 +219,7 @@ impl NyaTermApp {
                 username: "root".to_string(),
                 domain: String::new(),
                 auth_mode: "password".to_string(),
+                rdp_backend: "auto".to_string(),
                 rdp_security: RdpSecuritySettings::default(),
                 rdp_display: RdpDisplaySettings::default(),
                 rdp_clipboard: RdpClipboardSettings::default(),

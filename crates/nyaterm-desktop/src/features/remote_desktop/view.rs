@@ -230,6 +230,13 @@ impl NyaTermApp {
                 )
                 .into_any_element();
         }
+        // The failure and disconnected views above use the same retry/close
+        // actions for both runtimes; only a session that is still connecting or
+        // connected belongs to the native popup.
+        #[cfg(windows)]
+        if session.native_rdp_config.is_some() || session.native_rdp.is_some() {
+            return self.native_rdp_view(session_id, cx);
+        }
         let (Some(framebuffer), Some(texture)) = (session.framebuffer.as_ref(), session.texture)
         else {
             let detail = match session.state {
@@ -434,7 +441,7 @@ impl NyaTermApp {
                     cx.stop_propagation();
                     this.mark_user_activity();
                     if remote_cursor_texture_visible {
-                        cx.notify();
+                        this.request_remote_cursor_repaint(&move_id, cx);
                     }
                 }
             }))

@@ -406,6 +406,22 @@ fn rdp_session(
                 fields,
                 cx,
             },
+            "connection-editor-rdp-backend",
+            t!("dialog.rdpBackend"),
+            ConnectionEditorSelect::RdpBackend,
+        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(t!("dialog.rdpBackendDesc")),
+        )
+        .child(connection_editor_select(
+            ConnectionEditorRenderContext {
+                palette,
+                fields,
+                cx,
+            },
             "connection-editor-rdp-clipboard-mode",
             t!("dialog.rdpClipboard"),
             ConnectionEditorSelect::RdpClipboardMode,

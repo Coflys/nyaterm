@@ -214,6 +214,9 @@ pub(super) fn set_connection_editor_select_value(
                 _ => None,
             };
         }
+        ConnectionEditorSelect::RdpBackend => {
+            editor.rdp_backend = value.unwrap_or_else(|| "auto".to_string());
+        }
         ConnectionEditorSelect::RdpCertificatePolicy => {
             editor.rdp_security.certificate_policy = value.unwrap_or_else(|| "prompt".to_string());
         }

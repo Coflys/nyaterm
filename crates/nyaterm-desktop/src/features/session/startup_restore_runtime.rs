@@ -4,7 +4,7 @@ use nyaterm_core::{
 };
 use nyaterm_remote_desktop::{
     RdpClipboardConfig, RdpDisplayConfig, RdpReconnectConfig, RdpSessionConfig, VncClipboardConfig,
-    VncDisplayConfig, VncReconnectConfig, VncSecurityConfig, VncSessionConfig,
+    VncDisplayConfig, VncReconnectConfig, VncSecurityConfig, VncSessionConfig, parse_rdp_backend,
     parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_vnc_scale_mode,
     parse_vnc_security_mode,
 };
@@ -570,6 +570,7 @@ impl NyaTermApp {
                 port,
                 username,
                 domain,
+                backend,
                 security,
                 display,
                 clipboard,
@@ -579,6 +580,7 @@ impl NyaTermApp {
                 let session_id = nyaterm_core::uuid();
                 let config = RdpSessionConfig {
                     relay: None,
+                    backend: parse_rdp_backend(backend),
                     name: connection.name.clone(),
                     host: host.clone(),
                     port: *port,

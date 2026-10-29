@@ -64,6 +64,8 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) cursor_position: CursorPosition,
     pub(super) cursor_visible: bool,
     pub(super) cursor_texture: Option<DynamicTexture>,
+    pub(super) cursor_repaint_pending: bool,
+    pub(super) last_cursor_repaint_at: Option<Instant>,
     pub(super) certificate_request: Option<RdpCertificatePrompt>,
     pub(super) vnc_key_request:
         Option<(nyaterm_remote_desktop::VncServerKeyRequest, Option<String>)>,
@@ -96,6 +98,13 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) deferred_start: Option<(RdpSessionConfig, Instant)>,
     pub(super) reconnect_attempts: u32,
     pub(super) reconnect_at: Option<Instant>,
+    #[cfg(windows)]
+    pub(super) native_rdp_config: Option<RdpSessionConfig>,
+    #[cfg(windows)]
+    pub(super) native_rdp: Option<crate::platform::NativeRdpControl>,
+    /// Still frame shown behind an in-window menu while the popup is hidden.
+    #[cfg(windows)]
+    pub(super) native_overlay_image: Option<std::sync::Arc<gpui::RenderImage>>,
 }
 
 impl Default for RemoteDesktopSessionState {
@@ -110,6 +119,8 @@ impl Default for RemoteDesktopSessionState {
             cursor_position: CursorPosition::default(),
             cursor_visible: true,
             cursor_texture: None,
+            cursor_repaint_pending: false,
+            last_cursor_repaint_at: None,
             certificate_request: None,
             vnc_key_request: None,
             vnc_trust_previous: None,
@@ -134,6 +145,12 @@ impl Default for RemoteDesktopSessionState {
             deferred_start: None,
             reconnect_attempts: 0,
             reconnect_at: None,
+            #[cfg(windows)]
+            native_rdp_config: None,
+            #[cfg(windows)]
+            native_rdp: None,
+            #[cfg(windows)]
+            native_overlay_image: None,
         }
     }
 }
@@ -149,6 +166,11 @@ impl RemoteDesktopFeatureState {
             }
             if let Some(texture) = session.cursor_texture.take() {
                 self.pending_texture_removals.push(texture);
+            }
+            session.cursor_repaint_pending = false;
+            #[cfg(windows)]
+            if let Some(native) = session.native_rdp.as_mut() {
+                native.set_visible(false);
             }
             session.texture_dirty = session.framebuffer.is_some();
         }

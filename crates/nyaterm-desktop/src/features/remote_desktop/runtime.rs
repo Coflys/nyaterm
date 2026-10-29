@@ -18,6 +18,8 @@ pub(super) use errors::format_remote_desktop_error;
 #[cfg(test)]
 use events::MAINTENANCE_INTERVAL;
 #[cfg(test)]
+use events::remote_desktop_drain_delay;
+#[cfg(test)]
 use events::remote_desktop_periodic_delay;
 #[cfg(test)]
 use events::remote_state_clears_input;
@@ -33,6 +35,8 @@ use input::rdp_key_modifiers;
 use input::record_remote_cursor_position_if_sent;
 #[cfg(test)]
 use input::remote_committed_text_supported;
+#[cfg(test)]
+use input::remote_cursor_repaint_interval;
 #[cfg(test)]
 use input::remote_modifier_transitions;
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 use crate::features::NyaTermApp;
 use gpui::Context;
+use nyaterm_remote_desktop::RdpBackend;
 use nyaterm_remote_desktop::RdpDisplayConfig;
 use nyaterm_remote_desktop::RdpDisplayMetrics;
 use nyaterm_remote_desktop::RdpDisplayMode;
@@ -50,6 +51,24 @@ pub(in crate::features::remote_desktop) fn plan_rdp_start(
     RdpStartPlan::Connect(display)
 }
 
+#[cfg(windows)]
+pub(super) fn native_rdp_selected_for(
+    backend: RdpBackend,
+    has_relay: bool,
+    native_available: bool,
+) -> bool {
+    if has_relay {
+        return false;
+    }
+    match backend {
+        // An explicit Windows choice is an attempt even when the prerequisite
+        // check fails; its error is more useful than a silent built-in session.
+        RdpBackend::Windows => true,
+        RdpBackend::Auto => native_available,
+        RdpBackend::Builtin => false,
+    }
+}
+
 impl NyaTermApp {
     /// Open an RDP session and return the id its tab is registered under.
     pub(in crate::features) fn schedule_rdp_runtime(
@@ -70,6 +89,12 @@ impl NyaTermApp {
         mut config: RdpSessionConfig,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        if self.native_rdp_selected(&config) {
+            self.launch_rdp_runtime(session_id, config);
+            return;
+        }
+
         let metrics = self
             .remote_desktop
             .sessions
@@ -105,11 +130,33 @@ impl NyaTermApp {
         }
     }
 
+    #[cfg(windows)]
+    fn native_rdp_selected(&self, config: &RdpSessionConfig) -> bool {
+        native_rdp_selected_for(
+            config.backend,
+            config.relay.is_some(),
+            crate::platform::native_rdp_available(),
+        )
+    }
+
     pub(in crate::features) fn launch_rdp_runtime(
         &mut self,
         session_id: &str,
         config: RdpSessionConfig,
     ) {
+        #[cfg(windows)]
+        if self.native_rdp_selected(&config) {
+            if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+                session.native_rdp_config = Some(config);
+                session.state = nyaterm_remote_desktop::RemoteDesktopViewState::Connecting;
+                session.error = None;
+            }
+            if let Some(metadata) = self.session.metadata_mut(session_id) {
+                metadata.disconnected = false;
+            }
+            return;
+        }
+
         match self
             .remote_desktop
             .manager

@@ -12,9 +12,9 @@ use super::{
     clear_rdp_reconnect_after_frame, defer_rdp_pointer_move, inline_remote_desktop_password,
     rdp_error_is_retryable, rdp_key_modifiers, rdp_reconnect_delay,
     record_remote_cursor_position_if_sent, remote_committed_text_supported,
-    remote_desktop_password_id, remote_desktop_periodic_delay, remote_modifier_transitions,
-    remote_state_clears_input, secure_attention_available, vnc_capabilities_for_state,
-    vnc_input_allowed, vnc_keysym_for_key,
+    remote_cursor_repaint_interval, remote_desktop_drain_delay, remote_desktop_password_id,
+    remote_desktop_periodic_delay, remote_modifier_transitions, remote_state_clears_input,
+    secure_attention_available, vnc_capabilities_for_state, vnc_input_allowed, vnc_keysym_for_key,
 };
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
@@ -82,12 +82,13 @@ fn fixed_size_connect_never_waits_and_never_takes_the_panel_size() {
 /// server must stop being asked for once the panel is known.
 fn fit_window_rdp_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
     use nyaterm_remote_desktop::{
-        RdpCertificatePolicy, RdpClipboardConfig, RdpDisplayConfig, RdpDisplayMode,
+        RdpBackend, RdpCertificatePolicy, RdpClipboardConfig, RdpDisplayConfig, RdpDisplayMode,
         RdpReconnectConfig, RdpSessionConfig,
     };
 
     RdpSessionConfig {
         relay: None,
+        backend: RdpBackend::Builtin,
         name: name.into(),
         host: "127.0.0.1".into(),
         port: 1,
@@ -435,14 +436,82 @@ fn reconnect_backoff_caps_and_bounds_jitter() {
 #[test]
 fn a_waiting_pointer_move_gets_the_fine_cadence() {
     assert_eq!(
-        remote_desktop_periodic_delay(true),
+        remote_desktop_periodic_delay(true, false),
         POINTER_MOVE_INTERVAL,
         "a coalesced pointer move must not wait longer than its own send interval"
     );
-    assert_eq!(remote_desktop_periodic_delay(false), MAINTENANCE_INTERVAL);
+    assert_eq!(
+        remote_desktop_periodic_delay(false, true),
+        POINTER_MOVE_INTERVAL,
+        "a deferred cursor repaint must keep the periodic clock at the fine cadence"
+    );
+    assert_eq!(
+        remote_desktop_periodic_delay(false, false),
+        MAINTENANCE_INTERVAL
+    );
     assert!(
         MAINTENANCE_INTERVAL < RESIZE_DEBOUNCE,
         "the maintenance cadence has to be finer than the shortest thing it              services, or a resize debounce resolves late"
+    );
+}
+
+#[test]
+fn cursor_repaints_follow_the_renderer_budget() {
+    assert_eq!(
+        remote_cursor_repaint_interval(false),
+        Duration::from_millis(8)
+    );
+    assert_eq!(
+        remote_cursor_repaint_interval(true),
+        Duration::from_millis(33)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn native_rdp_is_selected_only_when_available_and_compatible() {
+    use nyaterm_remote_desktop::RdpBackend;
+
+    use super::start::native_rdp_selected_for;
+
+    assert!(native_rdp_selected_for(RdpBackend::Auto, false, true));
+    assert!(!native_rdp_selected_for(RdpBackend::Auto, false, false));
+    assert!(native_rdp_selected_for(RdpBackend::Windows, false, true));
+    assert!(
+        native_rdp_selected_for(RdpBackend::Windows, false, false),
+        "an explicit Windows choice still attempts the control and reports its error"
+    );
+    assert!(!native_rdp_selected_for(RdpBackend::Builtin, false, true));
+    assert!(!native_rdp_selected_for(RdpBackend::Auto, true, true));
+    assert!(!native_rdp_selected_for(RdpBackend::Windows, true, true));
+}
+
+#[test]
+fn continuous_frame_drains_wait_for_the_next_display_frame() {
+    assert_eq!(
+        remote_desktop_drain_delay(Duration::ZERO, false),
+        Duration::from_millis(16)
+    );
+    assert_eq!(
+        remote_desktop_drain_delay(Duration::from_millis(5), false),
+        Duration::from_millis(11)
+    );
+    assert_eq!(
+        remote_desktop_drain_delay(Duration::from_millis(20), false),
+        Duration::from_millis(1),
+        "a drain that already spent a frame's budget must still yield the UI"
+    );
+}
+
+#[test]
+fn software_renderers_get_a_lower_frame_delivery_rate() {
+    assert_eq!(
+        remote_desktop_drain_delay(Duration::ZERO, true),
+        Duration::from_millis(33)
+    );
+    assert_eq!(
+        remote_desktop_drain_delay(Duration::from_millis(10), true),
+        Duration::from_millis(23)
     );
 }
 
@@ -678,6 +747,35 @@ fn disconnecting_states_clear_local_composition_and_key_suppression() {
         &RemoteDesktopViewState::Disconnected
     ));
     assert!(remote_state_clears_input(&RemoteDesktopViewState::Failed));
+}
+
+#[cfg(windows)]
+#[test]
+fn closing_a_native_rdp_session_skips_the_helper_manager() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::TestAppContext;
+    use nyaterm_core::test_support::TestTempDir;
+
+    let root = TestTempDir::new("nyaterm-native-close");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let session = RemoteDesktopSessionState {
+                native_rdp_config: Some(fit_window_rdp_config("native")),
+                ..Default::default()
+            };
+            app.remote_desktop
+                .sessions
+                .insert("native-close".into(), session);
+            assert!(
+                app.close_rdp_runtime("native-close").is_ok(),
+                "native sessions have no helper session to close"
+            );
+            assert!(!app.remote_desktop.sessions.contains_key("native-close"));
+        });
+    });
 }
 
 #[test]

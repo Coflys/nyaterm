@@ -102,6 +102,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_rdp_backend() -> String {
+    "auto".to_string()
+}
+
+fn is_default_rdp_backend(value: &String) -> bool {
+    value == "auto"
+}
+
 fn default_rdp_certificate_policy() -> String {
     "prompt".to_string()
 }

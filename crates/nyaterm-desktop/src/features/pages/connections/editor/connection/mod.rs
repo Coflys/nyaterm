@@ -751,6 +751,21 @@ impl NyaTermApp {
                 })
                 .collect::<Vec<_>>(),
         );
+        let rdp_backend_options = [
+            ("auto", t!("dialog.rdpBackendAuto")),
+            ("builtin", t!("dialog.rdpBackendBuiltin")),
+            ("windows", t!("dialog.rdpBackendWindows")),
+        ]
+        .into_iter()
+        .map(|(value, label)| {
+            let current = match editor.rdp_backend.as_str() {
+                "builtin" | "internal" => "builtin",
+                "windows" => "windows",
+                _ => "auto",
+            };
+            ConnectionEditorChoice::new(Some(value.to_string()), label, current == value)
+        })
+        .collect::<Vec<_>>();
         let rdp_certificate_options = [
             ("prompt", t!("dialog.rdpCertificatePrompt")),
             ("strict", t!("dialog.rdpCertificateStrict")),
@@ -1111,6 +1126,11 @@ impl NyaTermApp {
             (
                 ConnectionEditorSelect::SshTerminalType,
                 ssh_terminal_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::RdpBackend,
+                rdp_backend_options.as_slice(),
                 String::new(),
             ),
             (
@@ -2275,7 +2295,7 @@ fn connection_editor_agent_identity_picker(
     .into_any_element()
 }
 
-fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
+fn connection_editor_select_keys() -> [ConnectionEditorSelect; 32] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -2294,6 +2314,7 @@ fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
         ConnectionEditorSelect::SshAgentForwardingPolicy,
         ConnectionEditorSelect::SshProfile,
         ConnectionEditorSelect::SshTerminalType,
+        ConnectionEditorSelect::RdpBackend,
         ConnectionEditorSelect::RdpCertificatePolicy,
         ConnectionEditorSelect::RdpDisplayMode,
         ConnectionEditorSelect::RdpClipboardMode,
@@ -2333,6 +2354,7 @@ fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'static str {
         ConnectionEditorSelect::SshAlgorithmMode => "connection-editor-ssh-algorithm-mode",
         ConnectionEditorSelect::SshProfile => "connection-editor-ssh-profile",
         ConnectionEditorSelect::SshTerminalType => "connection-editor-ssh-terminal-type",
+        ConnectionEditorSelect::RdpBackend => "connection-editor-rdp-backend",
         ConnectionEditorSelect::RdpCertificatePolicy => "connection-editor-rdp-certificate-policy",
         ConnectionEditorSelect::RdpDisplayMode => "connection-editor-rdp-display-mode",
         ConnectionEditorSelect::RdpClipboardMode => "connection-editor-rdp-clipboard-mode",
@@ -3199,6 +3221,7 @@ mod tests {
             username: String::new(),
             domain: String::new(),
             auth_mode: "password".to_string(),
+            rdp_backend: "auto".to_string(),
             rdp_security: Default::default(),
             rdp_display: Default::default(),
             rdp_clipboard: Default::default(),

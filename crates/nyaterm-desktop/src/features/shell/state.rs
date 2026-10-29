@@ -172,6 +172,7 @@ pub(super) struct ShellChromeState {
     pub(super) activity_bar_layout: ActivityBarLayoutState,
     pub(super) activity_bar_context_menu: Option<ActivityBarContextMenuState>,
     pub(super) header_status: HeaderStatusState,
+    pub(super) header_status_menu_open: bool,
     pub(super) open_tabs_menu_open: bool,
     pub(super) new_session_menu_anchor: Option<NewSessionMenuAnchor>,
     pub(super) new_session_all_sessions_open: bool,
@@ -300,6 +301,7 @@ impl ShellFeatureState {
                 activity_bar_layout: init.activity_bar_layout,
                 activity_bar_context_menu: None,
                 header_status: HeaderStatusState::default(),
+                header_status_menu_open: false,
                 open_tabs_menu_open: false,
                 new_session_menu_anchor: None,
                 new_session_all_sessions_open: false,
@@ -352,6 +354,10 @@ impl ShellFeatureState {
 
     pub(in crate::features) fn leave_resize_handle_hover(&mut self, id: &SharedString) -> bool {
         self.resize_handle_hover.leave(id)
+    }
+
+    pub(in crate::features) fn clear_resize_handle_hover(&mut self) -> bool {
+        self.resize_handle_hover.clear()
     }
 
     pub(in crate::features) fn resize_handle_is_highlighted(&self, id: &SharedString) -> bool {
@@ -660,6 +666,14 @@ impl ShellFeatureState {
         self.chrome.open_tabs_menu_open
     }
 
+    pub(in crate::features) fn header_status_menu_is_open(&self) -> bool {
+        self.chrome.header_status_menu_open
+    }
+
+    pub(in crate::features) fn set_header_status_menu_open(&mut self, open: bool) {
+        self.chrome.header_status_menu_open = open;
+    }
+
     pub(in crate::features) fn prepare_session_switch(&mut self) {
         self.chrome.prepare_session_switch();
     }
@@ -909,6 +923,21 @@ impl ResizeHandleHoverState {
             self.active_id = None;
         }
         active
+    }
+
+    /// Drops both the dwell timer and the visible highlight.
+    ///
+    /// Needed when the pointer leaves the GPUI window into a native child window:
+    /// that window never sends `on_hover(false)`, so a hovered handle would stay
+    /// highlighted.
+    pub(in crate::features) fn clear(&mut self) -> bool {
+        let highlighted = self.active_id.is_some();
+        if self.pending_id.is_some() || highlighted {
+            self.generation = self.generation.wrapping_add(1);
+            self.pending_id = None;
+            self.active_id = None;
+        }
+        highlighted
     }
 
     pub(in crate::features) fn is_highlighted(&self, id: &SharedString) -> bool {
@@ -1380,6 +1409,29 @@ mod tests {
         assert!(shell.activate_resize_handle_hover(&second, second_generation));
         assert!(shell.leave_resize_handle_hover(&second));
         assert!(!shell.resize_handle_is_highlighted(&second));
+    }
+
+    #[test]
+    fn clearing_resize_hover_drops_highlight_and_invalidates_dwell() {
+        let mut shell = shell(BottomPanelMode::Hidden);
+        let id = SharedString::from("resize-handle");
+        let pending_generation = shell
+            .begin_resize_handle_hover(id.clone())
+            .expect("enter should arm dwell");
+        assert!(!shell.clear_resize_handle_hover());
+        assert!(
+            !shell.activate_resize_handle_hover(&id, pending_generation),
+            "clearing the pending dwell must make its timer stale"
+        );
+
+        let generation = shell
+            .begin_resize_handle_hover(id.clone())
+            .expect("re-enter should arm a new dwell");
+        assert!(shell.activate_resize_handle_hover(&id, generation));
+        assert!(shell.resize_handle_is_highlighted(&id));
+        assert!(shell.clear_resize_handle_hover());
+        assert!(!shell.resize_handle_is_highlighted(&id));
+        assert!(!shell.clear_resize_handle_hover());
     }
 
     #[test]

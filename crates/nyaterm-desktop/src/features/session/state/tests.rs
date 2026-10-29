@@ -869,6 +869,73 @@ fn session_metadata(name: &str, multiplex_key: Option<&str>) -> SessionRuntimeMe
     }
 }
 
+fn rdp_session_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
+    nyaterm_remote_desktop::RdpSessionConfig {
+        relay: None,
+        backend: Default::default(),
+        name: name.into(),
+        host: "127.0.0.1".into(),
+        port: 3389,
+        username: String::new(),
+        domain: String::new(),
+        password: None,
+        use_nla: false,
+        certificate_policy: Default::default(),
+        administrative_session: false,
+        display: Default::default(),
+        clipboard: Default::default(),
+        reconnect: Default::default(),
+    }
+}
+
+fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
+    SessionRuntimeMetadata {
+        ssh_config: None,
+        ssh_multiplex_key: None,
+        source_connection_id: Some(connection_id.to_string()),
+        ai_execution_profile: AiExecutionProfile::Posix,
+        launch_config: SessionLaunchConfig::Rdp(rdp_session_config("rdp")),
+        disconnected: false,
+    }
+}
+
+fn saved_rdp_connection(id: &str) -> nyaterm_core::SavedConnection {
+    nyaterm_core::SavedConnection {
+        extensions: Default::default(),
+        tags: Vec::new(),
+        id: id.to_string(),
+        name: id.to_string(),
+        config: nyaterm_core::ConnectionType::Rdp {
+            host: "127.0.0.1".into(),
+            port: 3389,
+            username: String::new(),
+            domain: String::new(),
+            backend: "auto".into(),
+            security: Default::default(),
+            display: Default::default(),
+            clipboard: Default::default(),
+            reconnect: Default::default(),
+        },
+        group_id: None,
+        description: None,
+        sort_order: 0,
+        icon: None,
+        icon_auto_detect: None,
+        auth: None,
+        recording: None,
+        ssh_algorithms: None,
+        ssh_profile: Default::default(),
+        terminal_type: None,
+        sftp: Default::default(),
+        network: None,
+        post_login: None,
+        asset: None,
+        created_at_ms: None,
+        updated_at_ms: None,
+        last_used_at_ms: None,
+    }
+}
+
 struct EmptyRemoteFilePreferenceStore;
 
 impl RemoteFileBackendPreferenceStore for EmptyRemoteFilePreferenceStore {
@@ -1404,6 +1471,63 @@ fn session_catalog_registration_and_reordering_stay_synchronized() {
         ["session-c", "session-b", "session-a"]
     );
     assert!(!sessions.move_session_after("missing", "session-a"));
+}
+
+#[test]
+fn a_remote_desktop_connection_reuses_its_first_open_session() {
+    let test_dir = TestConfigDir::new("nyaterm-rdp-session-lookup-test");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, test_dir.path());
+
+    let mut local = session_metadata("local", None);
+    local.source_connection_id = Some("saved-rdp".into());
+    sessions.register_session_metadata("local", local);
+    sessions.register_session_metadata("rdp-a", remote_desktop_metadata("saved-rdp"));
+    sessions.register_session_metadata("rdp-b", remote_desktop_metadata("saved-rdp"));
+    sessions.register_session_metadata("rdp-other", remote_desktop_metadata("other-rdp"));
+
+    assert_eq!(
+        sessions.rdp_session_for_connection("saved-rdp").as_deref(),
+        Some("rdp-a")
+    );
+    assert_eq!(
+        sessions.rdp_session_for_connection("other-rdp").as_deref(),
+        Some("rdp-other")
+    );
+    assert_eq!(sessions.rdp_session_for_connection("missing"), None);
+}
+
+#[test]
+fn opening_an_rdp_connection_again_selects_its_open_tab() {
+    let test_dir = TestConfigDir::new("nyaterm-rdp-dedup-start-test");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, test_dir.path(), "remote");
+    let cx = session_focus_test_window(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let mut metadata = app.session.metadata("remote").unwrap().clone();
+            metadata.source_connection_id = Some("saved-rdp".into());
+            metadata.launch_config = SessionLaunchConfig::Rdp(rdp_session_config("remote"));
+            app.session.register_session_metadata("remote", metadata);
+            let sessions_before = app.session.session_order_len();
+
+            app.start_saved_connection_with_options(
+                saved_rdp_connection("saved-rdp"),
+                Default::default(),
+                window,
+                cx,
+            );
+
+            assert_eq!(app.session.active_id(), Some("remote"));
+            assert_eq!(app.session.session_order_len(), sessions_before);
+            assert!(
+                !app.session.start_has_active_pending(),
+                "reopening must not start a second connection"
+            );
+        });
+    });
 }
 
 #[test]

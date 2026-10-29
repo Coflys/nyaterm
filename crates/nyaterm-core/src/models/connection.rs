@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 use super::{
     SavedConnection, default_backspace_mode_serial, default_backspace_mode_ssh,
     default_backspace_mode_telnet, default_baud_rate, default_data_bits, default_parity,
-    default_rdp_certificate_policy, default_rdp_clipboard_mode, default_rdp_color_depth,
-    default_rdp_display_mode, default_rdp_height, default_rdp_port, default_rdp_reconnect_attempts,
-    default_rdp_width, default_sftp_shell_detection_timeout_ms, default_ssh_port, default_ssh_user,
-    default_stop_bits, default_telnet_auto_login_timeout_ms, default_telnet_enter_mode,
-    default_telnet_port, default_true, default_vnc_port, default_vnc_reconnect_attempts,
-    default_vnc_scale_mode, default_vnc_security_mode, is_default_sftp_shell_detection_timeout_ms,
+    default_rdp_backend, default_rdp_certificate_policy, default_rdp_clipboard_mode,
+    default_rdp_color_depth, default_rdp_display_mode, default_rdp_height, default_rdp_port,
+    default_rdp_reconnect_attempts, default_rdp_width, default_sftp_shell_detection_timeout_ms,
+    default_ssh_port, default_ssh_user, default_stop_bits, default_telnet_auto_login_timeout_ms,
+    default_telnet_enter_mode, default_telnet_port, default_true, default_vnc_port,
+    default_vnc_reconnect_attempts, default_vnc_scale_mode, default_vnc_security_mode,
+    is_default_rdp_backend, is_default_sftp_shell_detection_timeout_ms,
     is_default_telnet_auto_login_config,
 };
 
@@ -600,6 +601,12 @@ pub enum ConnectionType {
         username: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         domain: String,
+        /// `auto`, `builtin`, or `windows`.
+        #[serde(
+            default = "default_rdp_backend",
+            skip_serializing_if = "is_default_rdp_backend"
+        )]
+        backend: String,
         #[serde(default)]
         security: RdpSecuritySettings,
         #[serde(default)]

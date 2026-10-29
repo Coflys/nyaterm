@@ -226,6 +226,75 @@ impl DesktopController {
         }
     }
 
+    /// A remote-desktop server tolerates one interactive session per saved
+    /// connection, so a second open in another workspace focuses that tab
+    /// instead of starting a competing session.
+    pub(crate) fn focus_existing_rdp_session(
+        &mut self,
+        connection_id: &str,
+        requesting_workspace_id: WorkspaceId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut target = None;
+        for (workspace_id, window) in &self.windows {
+            if *workspace_id == requesting_workspace_id
+                || self.closing_workspaces.contains(workspace_id)
+            {
+                continue;
+            }
+            let Ok(app) = window.shell.update(cx, |shell, _| shell.app.clone()) else {
+                continue;
+            };
+            let Some(app) = app else {
+                continue;
+            };
+            if let Some(session_id) = app
+                .read(cx)
+                .remote_desktop_session_for_connection(connection_id)
+            {
+                target = Some((*workspace_id, session_id));
+                break;
+            }
+        }
+        let Some((workspace_id, session_id)) = target else {
+            return false;
+        };
+        // Defer the cross-window update: this method runs inside the requesting
+        // app's update, and switching the other workspace can notify observers
+        // back through this controller.
+        let controller = cx.entity();
+        cx.defer(move |cx| {
+            controller.update(cx, |controller, cx| {
+                controller.activate_session_in_workspace(workspace_id, &session_id, cx);
+            });
+        });
+        true
+    }
+
+    fn activate_session_in_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.windows.get(&workspace_id) else {
+            return;
+        };
+        let Ok(app) = entry.shell.update(cx, |shell, _| shell.app.clone()) else {
+            return;
+        };
+        let Some(app) = app else {
+            return;
+        };
+        app.update(cx, |app, cx| {
+            app.select_session_from_controller(session_id, cx);
+        });
+        let _ = entry.handle.update(cx, |_, window, cx| {
+            show_window(window, cx);
+        });
+        self.most_recent_workspace_id = Some(workspace_id);
+    }
+
     pub(super) fn activate_and_deliver(
         &mut self,
         workspace_id: Option<WorkspaceId>,

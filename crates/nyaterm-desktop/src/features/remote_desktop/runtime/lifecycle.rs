@@ -494,7 +494,21 @@ impl NyaTermApp {
             );
             self.release_remote_keys(session_id);
         }
+        // Native sessions live in the UI process, not in the helper manager;
+        // asking the manager to close one would fail and leave the tab behind.
+        #[cfg(windows)]
+        let native = self
+            .remote_desktop
+            .sessions
+            .get(session_id)
+            .is_some_and(|session| {
+                session.native_rdp.is_some() || session.native_rdp_config.is_some()
+            });
         self.remote_desktop.remove_session(session_id);
+        #[cfg(windows)]
+        if native {
+            return Ok(());
+        }
         self.remote_desktop.manager.close_detached(session_id)
     }
 

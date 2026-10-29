@@ -119,7 +119,48 @@ impl NyaTermApp {
             SessionLaunchConfig::Rdp(config) => {
                 let yes = || t!("sessionInfo.yes").to_string();
                 let no = || t!("sessionInfo.no").to_string();
+                #[cfg(windows)]
+                let native_details = self.native_rdp_session_details(session_id);
+                #[cfg(windows)]
+                let native_engine = native_details.is_some();
+                #[cfg(not(windows))]
+                let native_engine = false;
                 details.push((t!("sessionInfo.launch"), "RDP".to_string()));
+                #[cfg(windows)]
+                if let Some(native) = native_details.as_ref() {
+                    details.push((t!("sessionInfo.sectionWindowsClient"), String::new()));
+                    details.push((
+                        t!("sessionInfo.engine"),
+                        t!("sessionInfo.windowsRemoteDesktop").to_string(),
+                    ));
+                    if let Some(version) = native
+                        .version
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        details.push((t!("sessionInfo.rdpControlVersion"), version.to_string()));
+                    }
+                    if let Some(bits) = native.cipher_strength {
+                        details.push((t!("sessionInfo.encryption"), format!("{bits}-bit")));
+                    }
+                    if let Some(status) = native
+                        .status_text
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        details.push((t!("sessionInfo.connectionStatus"), status.to_string()));
+                    }
+                    if let (Some(width), Some(height)) =
+                        (native.desktop_width, native.desktop_height)
+                    {
+                        details.push((
+                            t!("sessionInfo.activeResolution"),
+                            format!("{width} × {height}"),
+                        ));
+                    }
+                }
                 details.push((t!("sessionInfo.sectionClient"), String::new()));
                 details.push((
                     t!("sessionInfo.clientVersion"),
@@ -141,7 +182,11 @@ impl NyaTermApp {
                 details.push((t!("sessionInfo.sectionNetwork"), String::new()));
                 details.push((
                     t!("sessionInfo.transport"),
-                    t!("sessionInfo.tcpOnly").to_string(),
+                    if native_engine {
+                        t!("sessionInfo.windowsManaged").to_string()
+                    } else {
+                        t!("sessionInfo.tcpOnly").to_string()
+                    },
                 ));
                 details.push((
                     t!("sessionInfo.rtt"),
@@ -158,19 +203,27 @@ impl NyaTermApp {
                 details.push((t!("sessionInfo.sectionGraphics"), String::new()));
                 details.push((
                     t!("sessionInfo.codecs"),
-                    t!("sessionInfo.bitmapUpdates").to_string(),
+                    if native_engine {
+                        t!("sessionInfo.windowsManaged").to_string()
+                    } else {
+                        t!("sessionInfo.bitmapUpdates").to_string()
+                    },
                 ));
                 details.push((
                     t!("sessionInfo.graphicsPipeline"),
-                    format!(
-                        "{} ({})",
-                        if config.display.graphics_pipeline {
-                            yes()
-                        } else {
-                            no()
-                        },
-                        t!("sessionInfo.forcedOff"),
-                    ),
+                    if native_engine {
+                        t!("sessionInfo.windowsManaged").to_string()
+                    } else {
+                        format!(
+                            "{} ({})",
+                            if config.display.graphics_pipeline {
+                                yes()
+                            } else {
+                                no()
+                            },
+                            t!("sessionInfo.forcedOff"),
+                        )
+                    },
                 ));
                 details.push((
                     t!("sessionInfo.resolution"),
@@ -188,11 +241,15 @@ impl NyaTermApp {
                 };
                 details.push((
                     t!("sessionInfo.renderer"),
-                    match renderer {
-                        Some(specs) if !specs.device_name.trim().is_empty() => {
-                            format!("{} ({kind})", specs.device_name)
+                    if native_engine {
+                        t!("sessionInfo.windowsRemoteDesktop").to_string()
+                    } else {
+                        match renderer {
+                            Some(specs) if !specs.device_name.trim().is_empty() => {
+                                format!("{} ({kind})", specs.device_name)
+                            }
+                            _ => kind.to_string(),
                         }
-                        _ => kind.to_string(),
                     },
                 ));
                 details.push((t!("sessionInfo.sectionRemote"), String::new()));

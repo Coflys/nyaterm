@@ -6,6 +6,13 @@ use windows_sys::Win32::System::LibraryLoader::{
 use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::core::{s, w};
 
+mod native_rdp;
+
+pub(crate) use native_rdp::{
+    NativeRdpConnectionEvent, NativeRdpControl, NativeRdpDisconnectInfo, NativeRdpRect,
+    NativeRdpSessionDetails, NativeRdpSnapshot, available as native_rdp_available,
+};
+
 static NATIVE_MENU_THEME_INIT: Once = Once::new();
 
 pub(super) fn window_material_capabilities() -> super::WindowMaterialCapabilities {

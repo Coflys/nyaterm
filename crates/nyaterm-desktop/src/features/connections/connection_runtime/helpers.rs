@@ -168,6 +168,7 @@ pub(super) fn connection_editor_from_saved(
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: auth.mode,
+        rdp_backend: "auto".to_string(),
         rdp_security: RdpSecuritySettings::default(),
         rdp_display: RdpDisplaySettings::default(),
         rdp_clipboard: RdpClipboardSettings::default(),
@@ -385,6 +386,7 @@ pub(super) fn connection_editor_from_saved(
             port,
             username,
             domain,
+            backend,
             security,
             display,
             clipboard,
@@ -394,6 +396,7 @@ pub(super) fn connection_editor_from_saved(
             editor.port = port.to_string();
             editor.username = username;
             editor.domain = domain;
+            editor.rdp_backend = backend;
             editor.rdp_security = security;
             editor.rdp_display = display;
             editor.rdp_clipboard = clipboard;
@@ -635,6 +638,7 @@ pub(super) fn build_saved_connection_from_editor(
                 port,
                 username: editor.username.trim().to_string(),
                 domain: editor.domain.trim().to_string(),
+                backend: editor.rdp_backend.clone(),
                 security: editor.rdp_security.clone(),
                 display: editor.rdp_display.clone(),
                 clipboard: editor.rdp_clipboard.clone(),
@@ -1502,6 +1506,7 @@ mod tests {
 
     #[test]
     fn connection_editor_round_trip_preserves_rdp_settings_and_auth_mode() {
+        let expected_backend = "windows";
         let expected_security = RdpSecuritySettings {
             use_nla: false,
             certificate_policy: "strict".to_string(),
@@ -1548,6 +1553,7 @@ mod tests {
                 port: 3390,
                 username: "operator".to_string(),
                 domain: "ACME".to_string(),
+                backend: expected_backend.to_string(),
                 security: expected_security.clone(),
                 display: expected_display.clone(),
                 clipboard: expected_clipboard.clone(),
@@ -1579,6 +1585,7 @@ mod tests {
         assert_eq!(editor.kind, ConnectionKindTab::Rdp);
         assert_eq!(editor.domain, "ACME");
         assert_eq!(editor.auth_mode, "none");
+        assert_eq!(editor.rdp_backend, expected_backend);
 
         let mut invalid = editor.clone();
         invalid.username.clear();
@@ -1611,6 +1618,7 @@ mod tests {
             port,
             username,
             domain,
+            backend,
             security,
             display,
             clipboard,
@@ -1620,6 +1628,7 @@ mod tests {
             panic!("expected RDP connection");
         };
 
+        assert_eq!(backend, expected_backend);
         assert_eq!(host, "desktop.example.com");
         assert_eq!(port, 3390);
         assert_eq!(username, "operator");

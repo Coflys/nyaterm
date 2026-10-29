@@ -14,6 +14,7 @@ use gpui_kit::component::{
 };
 
 type MenuClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type MenuOpenChangeHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type ContextMenuItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<NyaMenuItem>>;
 
 const NYA_MENU_WIDTH: f32 = 220.;
@@ -524,6 +525,7 @@ pub struct NyaDropdownMenu {
     scrollable: Option<bool>,
     items: DropdownItemsBuilder,
     on_trigger: Option<MenuClickHandler>,
+    on_open_change: Option<MenuOpenChangeHandler>,
 }
 
 /// Built when the menu opens, not when the trigger renders.
@@ -551,6 +553,7 @@ impl NyaDropdownMenu {
             scrollable: None,
             items: Rc::new(|_, _| Vec::new()),
             on_trigger: None,
+            on_open_change: None,
         }
     }
 
@@ -641,6 +644,15 @@ impl NyaDropdownMenu {
         self.on_trigger = Some(Rc::new(handler));
         self
     }
+
+    /// Called when the menu opens or closes, with the new open state.
+    pub fn on_open_change(
+        mut self,
+        handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open_change = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for NyaDropdownMenu {
@@ -671,7 +683,8 @@ impl RenderOnce for NyaDropdownMenu {
         let max_width = self.max_width;
         let max_height = self.max_height;
         let scrollable = self.scrollable;
-        trigger.disabled(self.disabled).dropdown_menu_with_anchor(
+        let on_open_change = self.on_open_change;
+        let popover = trigger.disabled(self.disabled).dropdown_menu_with_anchor(
             self.anchor.component_anchor(),
             move |menu, window, cx| {
                 let items = items_builder(window, cx);
@@ -682,7 +695,13 @@ impl RenderOnce for NyaDropdownMenu {
                     .iter()
                     .fold(menu, |menu, item| item.append_to(menu, window, cx))
             },
-        )
+        );
+        match on_open_change {
+            Some(handler) => {
+                popover.on_open_change(move |open, window, cx| handler(open, window, cx))
+            }
+            None => popover,
+        }
     }
 }
 

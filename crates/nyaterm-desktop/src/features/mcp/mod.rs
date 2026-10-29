@@ -504,6 +504,7 @@ mod tests {
                 port: 3389,
                 username: String::new(),
                 domain: String::new(),
+                backend: Default::default(),
                 security: Default::default(),
                 display: Default::default(),
                 clipboard: Default::default(),

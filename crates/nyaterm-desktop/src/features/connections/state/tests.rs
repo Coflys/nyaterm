@@ -1944,6 +1944,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: "password".to_string(),
+        rdp_backend: "auto".to_string(),
         rdp_security: Default::default(),
         rdp_display: Default::default(),
         rdp_clipboard: Default::default(),

@@ -64,10 +64,21 @@ pub struct VncServerCapabilities {
     pub committed_unicode_keysyms: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpBackend {
+    #[default]
+    Auto,
+    Builtin,
+    Windows,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RdpSessionConfig {
     #[serde(default)]
     pub relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
+    #[serde(default)]
+    pub backend: RdpBackend,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -88,6 +99,7 @@ impl fmt::Debug for RdpSessionConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RdpSessionConfig")
+            .field("backend", &self.backend)
             .field("name", &self.name)
             .field("host", &self.host)
             .field("port", &self.port)
@@ -1065,6 +1077,14 @@ pub fn parse_rdp_display_mode(value: &str) -> RdpDisplayMode {
     }
 }
 
+pub fn parse_rdp_backend(value: &str) -> RdpBackend {
+    match value {
+        "builtin" | "internal" => RdpBackend::Builtin,
+        "windows" | "active-x" => RdpBackend::Windows,
+        _ => RdpBackend::Auto,
+    }
+}
+
 pub fn parse_rdp_clipboard_mode(value: &str) -> RdpClipboardMode {
     match value.trim() {
         "disabled" | "off" => RdpClipboardMode::Disabled,
@@ -1092,10 +1112,11 @@ pub fn parse_vnc_scale_mode(value: &str) -> VncScaleMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, MAX_WIDTH, MIN_HEIGHT, RdpCertificatePolicy,
-        RdpClipboardConfig, RdpClipboardMode, RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode,
-        RdpSessionConfig, parse_rdp_certificate_policy, parse_rdp_clipboard_mode,
-        parse_rdp_display_mode, validate_committed_text,
+        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, MAX_WIDTH, MIN_HEIGHT, RdpBackend,
+        RdpCertificatePolicy, RdpClipboardConfig, RdpClipboardMode, RdpDisplayConfig,
+        RdpDisplayMetrics, RdpDisplayMode, RdpSessionConfig, parse_rdp_backend,
+        parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
+        validate_committed_text,
     };
 
     #[test]
@@ -1142,6 +1163,7 @@ mod tests {
         });
         let session: RdpSessionConfig = serde_json::from_value(document).unwrap();
         assert!(!session.administrative_session);
+        assert_eq!(session.backend, RdpBackend::Auto);
         assert_eq!(session.display, display);
         let encoded = serde_json::to_value(&session).unwrap();
         assert_eq!(
@@ -1173,6 +1195,16 @@ mod tests {
     #[test]
     fn legacy_native_display_mode_is_fixed() {
         assert_eq!(parse_rdp_display_mode("native"), RdpDisplayMode::Fixed);
+    }
+
+    #[test]
+    fn rdp_backend_accepts_public_and_legacy_names() {
+        assert_eq!(parse_rdp_backend("builtin"), RdpBackend::Builtin);
+        assert_eq!(parse_rdp_backend("internal"), RdpBackend::Builtin);
+        assert_eq!(parse_rdp_backend("windows"), RdpBackend::Windows);
+        assert_eq!(parse_rdp_backend("active-x"), RdpBackend::Windows);
+        assert_eq!(parse_rdp_backend("unknown"), RdpBackend::Auto);
+        assert_eq!(RdpBackend::default(), RdpBackend::Auto);
     }
 
     #[test]
