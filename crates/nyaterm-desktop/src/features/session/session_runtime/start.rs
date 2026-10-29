@@ -144,24 +144,6 @@ impl NyaTermApp {
         self.focus_user_started_session_surface(SessionStartFocusTarget::Terminal, window, cx);
     }
 
-    /// Used by the workspace controller to find this window's RDP tab for a
-    /// saved connection before another workspace opens a second session.
-    pub(crate) fn remote_desktop_session_for_connection(
-        &self,
-        connection_id: &str,
-    ) -> Option<String> {
-        self.session.rdp_session_for_connection(connection_id)
-    }
-
-    /// Used by the workspace controller after it focuses this window.
-    pub(crate) fn select_session_from_controller(
-        &mut self,
-        session_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.select_session(session_id.to_string(), cx);
-    }
-
     pub(in crate::features) fn start_saved_connection(
         &mut self,
         connection: SavedConnection,
@@ -183,34 +165,6 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A remote-desktop server tolerates one interactive session per tab; a
-        // second start would shadow the first one behind another native window.
-        if options.retry_request_id.is_none()
-            && matches!(&connection.config, ConnectionType::Rdp { .. })
-        {
-            let workspace_id = self.workspace_id;
-            let handled_elsewhere = self
-                .desktop_controller
-                .as_ref()
-                .and_then(|controller| controller.upgrade())
-                .is_some_and(|controller| {
-                    controller.update(cx, |controller, cx| {
-                        controller.focus_existing_rdp_session(&connection.id, workspace_id, cx)
-                    })
-                });
-            if handled_elsewhere {
-                return;
-            }
-            if let Some(session_id) = self.session.rdp_session_for_connection(&connection.id) {
-                self.select_session(session_id, cx);
-                self.focus_user_started_session_surface(
-                    SessionStartFocusTarget::RemoteDesktop,
-                    window,
-                    cx,
-                );
-                return;
-            }
-        }
         let focus_target = session_start_focus_target(&connection.config);
         self.continue_saved_connection_start(connection, options, cx);
         self.focus_user_started_session_surface(focus_target, window, cx);

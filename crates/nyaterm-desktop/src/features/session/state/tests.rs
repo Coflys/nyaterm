@@ -873,6 +873,7 @@ fn rdp_session_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
     nyaterm_remote_desktop::RdpSessionConfig {
         relay: None,
         backend: Default::default(),
+        windows_authentication: None,
         name: name.into(),
         host: "127.0.0.1".into(),
         port: 3389,
@@ -896,43 +897,6 @@ fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
         ai_execution_profile: AiExecutionProfile::Posix,
         launch_config: SessionLaunchConfig::Rdp(rdp_session_config("rdp")),
         disconnected: false,
-    }
-}
-
-fn saved_rdp_connection(id: &str) -> nyaterm_core::SavedConnection {
-    nyaterm_core::SavedConnection {
-        extensions: Default::default(),
-        tags: Vec::new(),
-        id: id.to_string(),
-        name: id.to_string(),
-        config: nyaterm_core::ConnectionType::Rdp {
-            host: "127.0.0.1".into(),
-            port: 3389,
-            username: String::new(),
-            domain: String::new(),
-            backend: "auto".into(),
-            security: Default::default(),
-            display: Default::default(),
-            clipboard: Default::default(),
-            reconnect: Default::default(),
-        },
-        group_id: None,
-        description: None,
-        sort_order: 0,
-        icon: None,
-        icon_auto_detect: None,
-        auth: None,
-        recording: None,
-        ssh_algorithms: None,
-        ssh_profile: Default::default(),
-        terminal_type: None,
-        sftp: Default::default(),
-        network: None,
-        post_login: None,
-        asset: None,
-        created_at_ms: None,
-        updated_at_ms: None,
-        last_used_at_ms: None,
     }
 }
 
@@ -1471,63 +1435,6 @@ fn session_catalog_registration_and_reordering_stay_synchronized() {
         ["session-c", "session-b", "session-a"]
     );
     assert!(!sessions.move_session_after("missing", "session-a"));
-}
-
-#[test]
-fn a_remote_desktop_connection_reuses_its_first_open_session() {
-    let test_dir = TestConfigDir::new("nyaterm-rdp-session-lookup-test");
-    let cx = TestAppContext::single();
-    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-    let mut sessions = session_state(&cx, test_dir.path());
-
-    let mut local = session_metadata("local", None);
-    local.source_connection_id = Some("saved-rdp".into());
-    sessions.register_session_metadata("local", local);
-    sessions.register_session_metadata("rdp-a", remote_desktop_metadata("saved-rdp"));
-    sessions.register_session_metadata("rdp-b", remote_desktop_metadata("saved-rdp"));
-    sessions.register_session_metadata("rdp-other", remote_desktop_metadata("other-rdp"));
-
-    assert_eq!(
-        sessions.rdp_session_for_connection("saved-rdp").as_deref(),
-        Some("rdp-a")
-    );
-    assert_eq!(
-        sessions.rdp_session_for_connection("other-rdp").as_deref(),
-        Some("rdp-other")
-    );
-    assert_eq!(sessions.rdp_session_for_connection("missing"), None);
-}
-
-#[test]
-fn opening_an_rdp_connection_again_selects_its_open_tab() {
-    let test_dir = TestConfigDir::new("nyaterm-rdp-dedup-start-test");
-    let mut cx = TestAppContext::single();
-    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-    let app = app_with_visible_local_session(&mut cx, test_dir.path(), "remote");
-    let cx = session_focus_test_window(&mut cx, &app);
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            let mut metadata = app.session.metadata("remote").unwrap().clone();
-            metadata.source_connection_id = Some("saved-rdp".into());
-            metadata.launch_config = SessionLaunchConfig::Rdp(rdp_session_config("remote"));
-            app.session.register_session_metadata("remote", metadata);
-            let sessions_before = app.session.session_order_len();
-
-            app.start_saved_connection_with_options(
-                saved_rdp_connection("saved-rdp"),
-                Default::default(),
-                window,
-                cx,
-            );
-
-            assert_eq!(app.session.active_id(), Some("remote"));
-            assert_eq!(app.session.session_order_len(), sessions_before);
-            assert!(
-                !app.session.start_has_active_pending(),
-                "reopening must not start a second connection"
-            );
-        });
-    });
 }
 
 #[test]
@@ -2657,3 +2564,28 @@ fn zmodem_handoff_preserves_ui_then_bridge_order_and_other_sessions() {
 }
 
 mod tab_actions;
+
+#[test]
+fn independent_rdp_instances_can_reference_the_same_saved_connection() {
+    let root = TestConfigDir::new("nyaterm-rdp-multiple-instances");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let first = app_with_visible_local_session(&mut cx, root.path(), "local");
+    let other_root = TestConfigDir::new("nyaterm-rdp-other-window");
+    let second = app_with_visible_local_session(&mut cx, other_root.path(), "other");
+    first.update(&mut cx, |app, _| {
+        app.session
+            .register_session_metadata("rdp-one", remote_desktop_metadata("saved-rdp"));
+        app.session
+            .register_session_metadata("rdp-two", remote_desktop_metadata("saved-rdp"));
+        assert!(app.session.has_session("rdp-one"));
+        assert!(app.session.has_session("rdp-two"));
+        app.session.remove_session_catalog("rdp-one");
+        assert!(app.session.has_session("rdp-two"));
+    });
+    second.update(&mut cx, |app, _| {
+        app.session
+            .register_session_metadata("rdp-three", remote_desktop_metadata("saved-rdp"));
+        assert!(app.session.has_session("rdp-three"));
+    });
+}

@@ -1543,22 +1543,6 @@ impl SessionFeatureState {
             .map(|(session_id, metadata)| (session_id.as_str(), metadata))
     }
 
-    /// The first RDP session started from `connection_id`, in tab order.
-    ///
-    /// Matching the exact launch kind matters: a connection edited from RDP to
-    /// VNC keeps its id, and the stale session must not answer for the new kind.
-    pub(in crate::features) fn rdp_session_for_connection(
-        &self,
-        connection_id: &str,
-    ) -> Option<String> {
-        self.ordered_sessions().into_iter().find_map(|session| {
-            let metadata = self.metadata.get(&session.id)?;
-            (metadata.source_connection_id.as_deref() == Some(connection_id)
-                && matches!(&metadata.launch_config, SessionLaunchConfig::Rdp(_)))
-            .then_some(session.id)
-        })
-    }
-
     pub(in crate::features) fn register_session_metadata(
         &mut self,
         session_id: &str,
