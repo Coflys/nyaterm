@@ -11,9 +11,10 @@ use super::{
     MAINTENANCE_INTERVAL, POINTER_MOVE_INTERVAL, RESIZE_DEBOUNCE, clear_rdp_reconnect_after_frame,
     defer_rdp_pointer_move, inline_remote_desktop_password, rdp_error_is_retryable,
     rdp_key_modifiers, rdp_reconnect_delay, record_remote_cursor_position_if_sent,
-    remote_committed_text_supported, remote_desktop_password_id, remote_desktop_periodic_delay,
-    remote_modifier_transitions, remote_state_clears_input, secure_attention_available,
-    vnc_capabilities_for_state, vnc_input_allowed, vnc_keysym_for_key,
+    remote_committed_text_supported, remote_desktop_authentication_disabled,
+    remote_desktop_password_id, remote_desktop_periodic_delay, remote_modifier_transitions,
+    remote_state_clears_input, secure_attention_available, vnc_capabilities_for_state,
+    vnc_input_allowed, vnc_keysym_for_key,
 };
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
 
@@ -127,6 +128,24 @@ fn reconnect_password_selection_resolves_locked_values_by_id() {
         remote_desktop_password_id(Some(&auth)).as_deref(),
         Some("pw-rdp")
     );
+}
+
+#[test]
+fn no_authentication_mode_skips_the_password_prompt() {
+    let none = ConnectionAuth {
+        mode: "none".to_string(),
+        ..ConnectionAuth::default()
+    };
+    assert!(remote_desktop_authentication_disabled(Some(&none)));
+    assert_eq!(inline_remote_desktop_password(Some(&none)), None);
+    assert_eq!(remote_desktop_password_id(Some(&none)), None);
+
+    let password = ConnectionAuth {
+        mode: "password".to_string(),
+        ..ConnectionAuth::default()
+    };
+    assert!(!remote_desktop_authentication_disabled(Some(&password)));
+    assert!(!remote_desktop_authentication_disabled(None));
 }
 
 #[test]
