@@ -496,19 +496,22 @@ fn service_with_config(
                         if !delay.is_zero() {
                             tokio::time::sleep(delay).await;
                         }
-                        let mut writer = writer.lock().await;
-                        let result = async {
-                            writer.write_u32(response.len() as u32).await?;
-                            writer.write_all(&response).await
-                        }
-                        .await;
+                        // The request stops being in flight once its answer is
+                        // committed; release the slot before the bytes reach the
+                        // client, so the follow-up request it sends cannot be
+                        // counted as one more concurrent operation.
                         if is_read {
                             files.lock().unwrap().active_reads -= 1;
                         }
                         if is_write {
                             files.lock().unwrap().active_writes -= 1;
                         }
-                        result
+                        let mut writer = writer.lock().await;
+                        async {
+                            writer.write_u32(response.len() as u32).await?;
+                            writer.write_all(&response).await
+                        }
+                        .await
                     };
                     if delay.is_zero() && !gated {
                         if send.await.is_err() {
