@@ -802,12 +802,6 @@ impl NyaTermApp {
                     self.credential_suggestions_overlay(cx),
                 ))
             })
-            .when(self.sync_input.is_open(), |this| {
-                this.child(full_window_overlay_layer(
-                    "sync-groups-input-layer",
-                    self.sync_groups_overlay(cx),
-                ))
-            })
             .when_some(
                 self.connection_state.inline_editor_panel_draft(),
                 |this, editor| {
@@ -1152,6 +1146,7 @@ impl NyaTermApp {
     fn modal_child_window_is_open_or_pending(&self) -> bool {
         self.connection_state.editor_window_is_open_or_pending()
             || self.commands.quick_editor_window_is_open_or_pending()
+            || self.sync_input.window_is_open_or_pending()
     }
 
     /// Dims the main window while a modal child window owns a draft.

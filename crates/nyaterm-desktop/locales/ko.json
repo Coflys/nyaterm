@@ -1407,6 +1407,7 @@
     "downloadFolderCompleted": "폴더 다운로드 완료",
     "downloadPath": "다운로드 디렉터리",
     "duplicateDescription": "대상 위치에 \"%{name}\"이라는 %{kind}이(가) 이미 있습니다. 진행 방법을 선택하세요.",
+    "duplicateDirectoryDescription": "대상 위치에 \"%{name}\" 폴더가 이미 있습니다. 덮어쓰면 폴더를 병합하고 내부의 같은 이름 파일을 교체하며, 대상에만 있는 파일은 유지합니다.",
     "duplicateKindFile": "파일",
     "duplicateKindFolder": "폴더",
     "duplicateOverwrite": "덮어쓰기",

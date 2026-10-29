@@ -1407,6 +1407,7 @@
     "downloadFolderCompleted": "資料夾下載完成",
     "downloadPath": "下載目錄",
     "duplicateDescription": "遠端路徑已有同名%{kind}「%{name}」，請選擇處理方式。",
+    "duplicateDirectoryDescription": "目標位置已有同名資料夾「%{name}」。覆蓋將合併資料夾並覆蓋內部同名檔案，保留目標獨有檔案。",
     "duplicateKindFile": "檔案",
     "duplicateKindFolder": "資料夾",
     "duplicateOverwrite": "覆蓋",

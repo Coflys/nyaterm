@@ -1407,6 +1407,7 @@
     "downloadFolderCompleted": "フォルダー完了",
     "downloadPath": "ダウンロード先",
     "duplicateDescription": "「%{name}」という名前の %{kind} が保存先に既に存在します。処理方法を選択してください。",
+    "duplicateDirectoryDescription": "保存先に「%{name}」というフォルダーが既にあります。上書きするとフォルダーが統合され、中の同名ファイルが置き換えられます。保存先にのみ存在するファイルは保持されます。",
     "duplicateKindFile": "ファイル",
     "duplicateKindFolder": "フォルダー",
     "duplicateOverwrite": "上書き",

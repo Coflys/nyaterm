@@ -7,6 +7,7 @@ use crate::app_shell::session_hub::ssh_connections::SshConnectionLease;
 use nyaterm_transport::RemoteFileService;
 
 mod auth_runtime;
+mod duplicate_prompts;
 mod prompt_runtime;
 mod recording_runtime;
 pub(in crate::features) mod runtime_auth;
@@ -58,7 +59,10 @@ pub(in crate::features) use auth_runtime::{
     AgentPromptBroker, AgentPromptRequest, AgentPromptState, CredentialPromptBroker,
     CredentialPromptRequest, CredentialPromptState, HostKeyPromptBroker, HostKeyPromptChoice,
     HostKeyPromptIssue, HostKeyPromptRequest, KeyboardInteractivePromptState,
-    NativeHostKeyVerifier, NativeOtpProvider, SftpDuplicatePromptState, unix_seconds_now,
+    NativeHostKeyVerifier, NativeOtpProvider, unix_seconds_now,
+};
+pub(in crate::features) use duplicate_prompts::{
+    DuplicatePromptAction, SftpDuplicatePromptState, UploadBatchDuplicateResolver,
 };
 pub(in crate::features) use prompt_runtime::{
     credential_prompt_id, credential_prompt_target, credential_text_input_id,

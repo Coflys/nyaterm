@@ -1400,6 +1400,7 @@
     "downloadFolderCompleted": "Folder done",
     "downloadPath": "Download Dir",
     "duplicateDescription": "A %{kind} named \"%{name}\" already exists at the destination. Choose how to proceed.",
+    "duplicateDirectoryDescription": "A folder named \"%{name}\" already exists at the destination. Overwrite merges the folders and replaces matching files inside, keeping files that exist only at the destination.",
     "duplicateKindFile": "file",
     "duplicateKindFolder": "folder",
     "duplicateOverwrite": "Overwrite",

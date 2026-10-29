@@ -12,18 +12,15 @@ use nyaterm_transport::{
 
 struct AcceptEphemeralHostKey;
 
-struct MergeDirectoriesAndRenameFiles;
+struct OverwriteRootDirectory;
 
-impl SftpDuplicateResolver for MergeDirectoriesAndRenameFiles {
+impl SftpDuplicateResolver for OverwriteRootDirectory {
     fn resolve_duplicate(
         &self,
         request: &SftpDuplicateRequest,
     ) -> Result<SftpDuplicateDecision, String> {
-        Ok(if request.is_directory {
-            SftpDuplicateDecision::Overwrite
-        } else {
-            SftpDuplicateDecision::Rename
-        })
+        assert!(request.is_directory, "only the root directory should ask");
+        Ok(SftpDuplicateDecision::Overwrite)
     }
 }
 
@@ -148,18 +145,18 @@ fn sftp_service_round_trips_file_manager_operations() -> anyhow::Result<()> {
             SftpTransferControl::default(),
             SftpPathTransferOptions::new(
                 SftpDuplicatePolicy::Ask,
-                Some(Arc::new(MergeDirectoriesAndRenameFiles)),
+                Some(Arc::new(OverwriteRootDirectory)),
                 SftpTransferOptions::default().with_download_threads(2),
             ),
             |_| {},
         )?;
         anyhow::ensure!(!summary.skipped);
-        anyhow::ensure!(fs::read(collision_target.join("foo"))? == b"existing");
+        anyhow::ensure!(fs::read(collision_target.join("foo"))? == b"first");
         let mut contents = fs::read_dir(&collision_target)?
             .map(|entry| fs::read(entry?.path()))
             .collect::<std::io::Result<Vec<_>>>()?;
         contents.sort();
-        anyhow::ensure!(contents == [b"existing".to_vec(), b"first".to_vec(), b"second".to_vec()]);
+        anyhow::ensure!(contents == [b"first".to_vec(), b"second".to_vec()]);
         Ok(())
     })();
 

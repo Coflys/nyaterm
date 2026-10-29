@@ -2159,6 +2159,7 @@ impl SftpService {
                                 });
                             };
                             let bytes = if is_directory {
+                                let contents_options = path_options.for_directory_contents();
                                 download_remote_directory_bytes(
                                     &session,
                                     &codec,
@@ -2166,7 +2167,7 @@ impl SftpService {
                                     &remote_path.display_path,
                                     &local_target,
                                     &control,
-                                    &path_options,
+                                    &contents_options,
                                     &mut progress,
                                     download_root,
                                     &config,
@@ -2523,6 +2524,7 @@ impl SftpService {
                         });
                     };
                     let bytes = if metadata.is_dir() {
+                        let contents_options = path_options.for_directory_contents();
                         upload_local_directory(
                             Arc::clone(&sftp),
                             &local_path,
@@ -2532,7 +2534,7 @@ impl SftpService {
                                 config: &config,
                                 multiplex: multiplex.as_ref(),
                                 control: &control,
-                                path_options: &path_options,
+                                path_options: &contents_options,
                             },
                             &mut progress,
                         )
@@ -2915,6 +2917,8 @@ mod copy_tests;
 mod editor_save_tests;
 #[cfg(test)]
 mod filename_tests;
+#[cfg(test)]
+mod overwrite_tests;
 
 fn last_sftp_retry_error(last_error: Option<anyhow::Error>) -> anyhow::Error {
     last_error.unwrap_or_else(|| anyhow::anyhow!("SFTP transfer failed before starting"))

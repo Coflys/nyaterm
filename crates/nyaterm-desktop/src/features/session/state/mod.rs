@@ -28,8 +28,8 @@ use super::auth_runtime::{
     AgentPromptBroker, AgentPromptRequest, CredentialPromptBroker, CredentialPromptRequest,
     CredentialPromptState, HostKeyPromptBroker, HostKeyPromptRequest,
     KeyboardInteractivePromptState, NativeOtpCodePreview, NativeOtpProvider,
-    SftpDuplicatePromptBroker, SftpDuplicatePromptState,
 };
+use super::duplicate_prompts::{SftpDuplicatePromptBroker, SftpDuplicatePromptState};
 use super::trzsz_runtime::TrzszSessionState;
 use super::zmodem_runtime::ZmodemSessionState;
 
@@ -2668,6 +2668,7 @@ impl SessionPromptState {
             id: request.id,
             request: request.request,
             response_tx: request.response_tx,
+            upload_batch: request.upload_batch,
         });
         Some(target)
     }

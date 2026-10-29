@@ -12,6 +12,7 @@ use nyaterm_transport::{
 };
 
 use crate::features::NyaTermApp;
+use crate::features::session::UploadBatchDuplicateResolver;
 use crate::features::transfers::SftpJobSession;
 use crate::models::{NavItem, TransferPathPromptKind, TransferPathPromptResult};
 
@@ -634,13 +635,22 @@ impl NyaTermApp {
             remote_path,
             session_id,
             config,
-            path_options,
+            mut path_options,
             fallback_name,
         } = request;
         if paths.is_empty() {
             return;
         }
         let total = paths.len();
+        if total > 1 && path_options.duplicate_policy() == SftpDuplicatePolicy::Ask {
+            path_options = SftpPathTransferOptions::new(
+                SftpDuplicatePolicy::Ask,
+                Some(Arc::new(UploadBatchDuplicateResolver::new(
+                    self.session.prompt_duplicate_broker(),
+                ))),
+                path_options.transfer_options().clone(),
+            );
+        }
         self.transfer.set_remote_path(remote_path.clone());
         self.transfer.browser.status = if total == 1 {
             format!(
