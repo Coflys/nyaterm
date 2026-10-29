@@ -379,9 +379,7 @@ impl NyaTermApp {
                 return;
             }
         }
-        if config.password.is_none()
-            && config.security.mode != nyaterm_remote_desktop::VncSecurityMode::None
-        {
+        if vnc_retry_requires_password(&config) {
             self.prompt_remote_desktop_password(session_id, reset_attempts, cx);
             return;
         }
@@ -642,6 +640,29 @@ pub(super) fn rdp_error_is_retryable(kind: RdpErrorKind) -> bool {
             | RdpErrorKind::Transport
             | RdpErrorKind::Session
     )
+}
+
+/// Whether a retry has to ask for a VNC password before it can start.
+///
+/// `auto` without a password is a working configuration, not a missing one: the
+/// helper lets the server select the `None` security type, which is exactly how a
+/// passwordless first connection succeeds. Only an explicit `vnc-auth` connection
+/// needs a password up front; an `auto` connection asks for one when the server's
+/// security selection actually demands credentials, which the helper reports as a
+/// fatal authentication error (see `events::apply_vnc_control_event`).
+pub(super) fn vnc_retry_requires_password(config: &VncSessionConfig) -> bool {
+    config.password.is_none()
+        && config.security.mode == nyaterm_remote_desktop::VncSecurityMode::VncAuth
+}
+
+/// Whether prompting for a password can resolve a VNC authentication failure.
+///
+/// `none` is excluded: a password could never satisfy that policy. A session that
+/// already holds a password is also excluded, so a rejected password reports the
+/// failure instead of asking for the same credential again.
+pub(super) fn vnc_auth_failure_accepts_password_prompt(config: &VncSessionConfig) -> bool {
+    config.password.is_none()
+        && config.security.mode != nyaterm_remote_desktop::VncSecurityMode::None
 }
 
 pub(super) fn rdp_reconnect_delay(attempt: u32, jitter_ms: u64) -> Duration {
