@@ -53,6 +53,7 @@
     "operatingSystem": "Operating system",
     "architecture": "Application architecture",
     "runtime": "Runtime",
+    "packageManager": "Package manager",
     "portable": "Portable",
     "installed": "Installed",
     "supportInfoCopied": "Support information copied",

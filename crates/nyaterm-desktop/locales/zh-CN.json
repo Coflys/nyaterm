@@ -53,6 +53,7 @@
     "operatingSystem": "操作系统",
     "architecture": "应用架构",
     "runtime": "运行环境",
+    "packageManager": "包管理器",
     "portable": "便携版",
     "installed": "安装版",
     "supportInfoCopied": "已复制支持信息",

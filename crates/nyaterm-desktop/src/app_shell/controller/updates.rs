@@ -3,6 +3,7 @@ use crate::features::update::UpdateCheckKind;
 use crate::features::update::UpdateEvent;
 use futures::StreamExt as _;
 use gpui::Context;
+use nyaterm_core::packaging;
 use std::time::Duration;
 
 impl DesktopController {
@@ -33,6 +34,12 @@ impl DesktopController {
                 }
             })
             .detach();
+        }
+
+        if packaging::updates_managed_externally() {
+            // An external package manager owns this build's update channel, so a
+            // probe would only advertise a version the install cannot apply.
+            return;
         }
 
         cx.spawn(async move |this, cx| {
