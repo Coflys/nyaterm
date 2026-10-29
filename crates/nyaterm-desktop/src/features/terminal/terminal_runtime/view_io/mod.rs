@@ -929,7 +929,8 @@ impl NyaTermApp {
     ) -> (bool, TerminalCursorBlinkBasis, String) {
         let is_active = self.session.active_id() == Some(session_id);
         let is_disconnected = self.session.is_disconnected(session_id);
-        let remote_cursor_visible = snapshot.cursor.visible
+        let remote_cursor_visible = !self.terminal.input.ime.is_active_for(Some(session_id))
+            && snapshot.cursor.visible
             && snapshot.cursor.shape != nyaterm_terminal::CursorShape::Hidden
             && snapshot.cursor.row != usize::MAX;
         let blink_enabled = self.settings.summary().cursor_blink || snapshot.cursor.blinking;

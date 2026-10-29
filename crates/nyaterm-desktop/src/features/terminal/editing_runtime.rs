@@ -530,7 +530,11 @@ mod tests {
                 app.settings.replace_summary(settings);
                 let version = app.terminal.editing.state().unwrap().model.version;
                 app.replace_and_mark_text_in_range(None, "zhong", None, window, cx);
-                assert_eq!(app.terminal.input.ime_marked_text, "zhong");
+                assert_eq!(app.terminal.input.ime.text(), "zhong");
+                assert_eq!(
+                    app.selected_text_range(false, window, cx).unwrap().range,
+                    5..5
+                );
                 assert_eq!(app.terminal.editing.state().unwrap().model.version, version);
                 let key = gpui::KeyDownEvent {
                     keystroke: gpui::Keystroke {
@@ -543,7 +547,8 @@ mod tests {
                 };
                 assert!(app.terminal_should_defer_key_text_to_input_handler(&key));
                 app.replace_text_in_range(None, "中文", window, cx);
-                assert!(app.terminal.input.ime_marked_text.is_empty());
+                assert!(app.terminal.input.ime.text().is_empty());
+                assert_eq!(app.terminal.input.ime.selection(), 0..0);
                 assert_eq!(app.terminal.editing.predicted_input().value, "a中文ef");
                 assert_eq!(
                     app.terminal.editing.state().unwrap().model.version,

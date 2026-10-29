@@ -1320,6 +1320,9 @@ impl NyaTermApp {
             return;
         }
         self.terminal.input.focus_active = focused;
+        if !focused {
+            self.clear_terminal_composition(cx);
+        }
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };
@@ -1532,7 +1535,7 @@ impl NyaTermApp {
         event: &KeyDownEvent,
     ) -> bool {
         terminal_should_defer_key_text_to_input_handler_for_state(
-            &self.terminal.input.ime_marked_text,
+            self.terminal.input.ime.text(),
             event,
         )
     }
