@@ -56,4 +56,6 @@ use lifecycle::rdp_error_is_retryable;
 #[cfg(test)]
 use lifecycle::rdp_reconnect_delay;
 #[cfg(test)]
+use lifecycle::remote_desktop_authentication_disabled;
+#[cfg(test)]
 use lifecycle::remote_desktop_password_id;

@@ -250,6 +250,7 @@ impl NyaTermApp {
             crate::models::SessionLaunchConfig::Rdp(config) => config,
             _ => return,
         };
+        let mut authentication_disabled = false;
         if config.password.is_none()
             && let Some(connection_id) = metadata.source_connection_id.as_deref()
             && let Some(connection) = self
@@ -258,6 +259,8 @@ impl NyaTermApp {
                 .iter()
                 .find(|connection| connection.id == connection_id)
         {
+            authentication_disabled =
+                remote_desktop_authentication_disabled(connection.auth.as_ref());
             config.password = inline_remote_desktop_password(connection.auth.as_ref());
             if config.password.is_none()
                 && let Some(password_id) = remote_desktop_password_id(connection.auth.as_ref())
@@ -272,7 +275,9 @@ impl NyaTermApp {
                 return;
             }
         }
-        if config.password.is_none() {
+        // "No authentication" connects with an empty password (and without NLA) instead of
+        // asking for one, e.g. for passwordless Windows accounts.
+        if config.password.is_none() && !authentication_disabled {
             self.prompt_remote_desktop_password(session_id, reset_attempts, cx);
             return;
         }
@@ -655,6 +660,12 @@ pub(super) fn clear_rdp_reconnect_after_frame(
 ) {
     cancel_rdp_reconnect_schedule(session);
     session.error = None;
+}
+
+pub(super) fn remote_desktop_authentication_disabled(
+    auth: Option<&nyaterm_core::ConnectionAuth>,
+) -> bool {
+    auth.is_some_and(|auth| auth.mode == "none")
 }
 
 pub(super) fn inline_remote_desktop_password(

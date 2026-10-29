@@ -4,7 +4,7 @@ mod single_instance;
 
 use anyhow::Context as _;
 use gpui::{App, AppContext};
-use nyaterm_app::assets;
+use nyaterm_app::{assets, crash_report};
 use nyaterm_core::app_identity::AppFlavor;
 use nyaterm_core::{ActivationRequest, AppRuntime, LOG_FILE_PREFIX, LOG_FILE_SUFFIX};
 use nyaterm_desktop::{AppShellStartup, DesktopController, DesktopControllerGlobal};
@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
     runtime
         .ensure_directories()
         .context("prepare runtime directories")?;
+    let crash_report_status = crash_report::install(runtime.crash_dir());
     let initial_activation = ActivationRequest::from_os_args(
         *uuid::Uuid::new_v4().as_bytes(),
         std::env::args_os().skip(1),
@@ -35,6 +36,12 @@ fn main() -> anyhow::Result<()> {
     let activation_tx = instance_owner.activation_sender();
     let activation_rx = instance_owner.take_activation_receiver();
     let _log_guard = init_tracing(&runtime)?;
+    if let Err(error) = crash_report_status {
+        tracing::warn!(%error, "panic reporting unavailable");
+    }
+    if let Err(error) = crash_report::cleanup_old_reports(&runtime.crash_dir()) {
+        tracing::warn!(%error, "could not clean up old panic reports");
+    }
     #[cfg(windows)]
     if let Err(error) = nyaterm_transport::local_conpty::configure_from_executable() {
         tracing::warn!(%error, "could not configure bundled ConPTY");

@@ -2,6 +2,7 @@ pub mod activation;
 pub mod agent_capture;
 pub mod ai;
 pub mod app_identity;
+pub mod ascend_npu;
 pub mod assets;
 pub mod capabilities;
 pub mod character_encoding;
