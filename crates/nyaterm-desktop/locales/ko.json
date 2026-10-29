@@ -2468,7 +2468,7 @@
     "defaultEncoding": "인코딩",
     "defaultEncodingDesc": "터미널 입출력에 사용할 문자 인코딩입니다.",
     "defaultFilePermissions": "파일 권한",
-    "defaultFilePermissionsDesc": "업로드한 파일의 8진수 권한 모드입니다(예: 644).",
+    "defaultFilePermissionsDesc": "새로 업로드하는 파일의 8진수 권한 모드입니다(예: 644). 기존 파일을 덮어쓸 때는 원래 권한을 유지합니다.",
     "defaultShell": "기본 로컬 셸",
     "defaultShellDesc": "새 로컬 터미널에 사용할 셸입니다.",
     "deleteKey": "키 삭제",

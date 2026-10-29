@@ -1413,7 +1413,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -2227,7 +2227,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3505,7 +3505,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3574,7 +3574,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5#5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3614,7 +3614,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5#5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3690,7 +3690,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5#5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -3701,7 +3701,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5#5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -3715,7 +3715,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.8.0"
-source = "git+https://github.com/nyakang/gpui-kit?rev=5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5#5aca244fdcfbeeb3243e41cdbfa954e8be4a39f5"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c0ca15118df36f96675b9ce355daa5ca2444f285#c0ca15118df36f96675b9ce355daa5ca2444f285"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3729,7 +3729,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "async-task",
@@ -3770,7 +3770,7 @@ dependencies = [
 [[package]]
 name = "gpui_ios"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -3791,7 +3791,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3835,7 +3835,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3874,7 +3874,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3885,7 +3885,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3901,7 +3901,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "schemars",
  "serde",
@@ -3911,7 +3911,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "log",
@@ -3921,7 +3921,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3950,7 +3950,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3977,7 +3977,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4412,7 +4412,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8526,7 +8526,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "derive_refineable",
 ]
@@ -9218,7 +9218,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "async-task",
  "backtrace",
@@ -10096,7 +10096,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "heapless",
  "rayon",
@@ -13873,7 +13873,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -13882,7 +13882,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=c054331114f9abdc44e5d587cd23314db6ac5aff#c054331114f9abdc44e5d587cd23314db6ac5aff"
+source = "git+https://github.com/nyakang/zed?rev=8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658#8e5a53c0aa6ff991bdf2bcbb4e6049e2f4715658"
 
 [[package]]
 name = "zune-core"

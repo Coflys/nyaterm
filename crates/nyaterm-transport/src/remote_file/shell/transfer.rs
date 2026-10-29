@@ -11,6 +11,7 @@ use tokio::time::Instant;
 use crate::download_path::{DownloadTargetAccess, TransferDownload};
 use crate::{SftpTransferControl, SftpTransferOptions, open_authenticated_ssh_handle};
 
+use super::metadata::{shell_file_replace_command, shell_upload_properties};
 use super::{REMOTE_FILE_COMMAND_TIMEOUT, ShellRemote, shell_quote, shell_quote_path};
 
 #[cfg(test)]
@@ -82,16 +83,28 @@ impl ShellRemote {
     where
         F: FnMut(u64) + Send + 'static,
     {
-        let length = std::fs::metadata(local)?.len();
+        let metadata = std::fs::metadata(local)?;
+        anyhow::ensure!(metadata.is_file(), "upload source is not a regular file");
+        let length = metadata.len();
         let temporary = format!("{remote}.nyaterm-upload-{}", uuid::Uuid::new_v4().simple());
-        let mode = options
-            .default_file_mode
-            .map(|mode| format!("chmod {mode:o} {} && ", shell_quote_path(&temporary)))
-            .unwrap_or_default();
+        control.wait_if_paused_blocking()?;
+        let original = shell_upload_properties(self, remote)?;
+        let replace = if let Some(properties) = original {
+            shell_file_replace_command(&properties, &temporary, remote)?
+        } else {
+            let mode = options
+                .default_file_mode
+                .map(|mode| format!("chmod {mode:o} {} && ", shell_quote_path(&temporary)))
+                .unwrap_or_default();
+            format!(
+                "{mode}mv -f {} {}",
+                shell_quote_path(&temporary),
+                shell_quote_path(remote)
+            )
+        };
         let command = format!(
-            "umask 077; cat > {temp} && test $(wc -c < {temp}) -eq {length} && {mode}mv -f -- {temp} {target}",
+            "umask 077; cat > {temp} && test $(wc -c < {temp}) -eq {length} && {replace}",
             temp = shell_quote(&temporary),
-            target = shell_quote(remote),
         );
         let result = self.stream_file(
             command,

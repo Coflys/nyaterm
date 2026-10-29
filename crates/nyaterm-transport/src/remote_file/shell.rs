@@ -9,6 +9,7 @@ use crate::{
 
 const REMOTE_FILE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub(super) mod metadata;
 mod transfer;
 
 #[derive(Debug, Default)]
@@ -56,9 +57,9 @@ impl ShellRemote {
             if !find.starts_with(b"x\0y") {
                 anyhow::bail!("enhanced SCP requires GNU find -printf with NUL output");
             }
-            let stat = self.exec_ok("LC_ALL=C stat -c 'x\\0y' .", None)?;
+            let stat = self.exec_ok("LC_ALL=C stat --printf 'x\\0y' .", None)?;
             if !stat.starts_with(b"x\0y") {
-                anyhow::bail!("enhanced SCP requires GNU stat -c with NUL output");
+                anyhow::bail!("enhanced SCP requires GNU stat --printf with NUL output");
             }
         }
         Ok(())

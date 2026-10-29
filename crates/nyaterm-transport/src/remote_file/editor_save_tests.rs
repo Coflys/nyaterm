@@ -1,4 +1,4 @@
-use crate::remote_file::{shell_editor_replace_command, shell_editor_upload_command};
+use crate::remote_file::{shell_file_replace_command, shell_file_upload_command};
 use crate::sftp::{SftpFileProperties, SftpFileType};
 
 fn properties(uid: u32, gid: u32, mode: u32) -> SftpFileProperties {
@@ -31,8 +31,8 @@ fn shell_editor_save_refuses_missing_original_attributes() {
             "mode" => attrs.permissions = None,
             _ => unreachable!(),
         }
-        assert!(shell_editor_replace_command(&attrs, "/tmp/edit", "/tmp/original").is_err());
-        assert!(shell_editor_upload_command(&attrs, "/tmp/edit", "/tmp/original", 3).is_err());
+        assert!(shell_file_replace_command(&attrs, "/tmp/edit", "/tmp/original").is_err());
+        assert!(shell_file_upload_command(&attrs, "/tmp/edit", "/tmp/original", 3).is_err());
     }
 }
 
@@ -45,7 +45,7 @@ mod posix {
     use std::process::{Command, Stdio};
 
     use crate::remote_file::editor_save_tests::properties;
-    use crate::remote_file::{shell_editor_replace_command, shell_editor_upload_command};
+    use crate::remote_file::{shell_file_replace_command, shell_file_upload_command};
 
     const UPLOAD_BYTES: &[u8] = b"new\0data";
 
@@ -128,9 +128,9 @@ mod posix {
             (temporary.to_str().unwrap(), original.to_str().unwrap())
         };
         let command = if let Some(size) = upload_size {
-            shell_editor_upload_command(attrs, temporary_path, original_path, size)
+            shell_file_upload_command(attrs, temporary_path, original_path, size)
         } else {
-            shell_editor_replace_command(attrs, temporary_path, original_path)
+            shell_file_replace_command(attrs, temporary_path, original_path)
         }
         .unwrap();
         let mut process = Command::new("sh");

@@ -52,6 +52,7 @@ use remote_metadata::{
 };
 mod transfer_paths;
 mod tuning;
+mod upload_metadata;
 use transfer_paths::{
     SftpLocalDownloadTargetContext, SftpRemoteWriteTargetContext, remote_join,
     resolve_local_download_target, resolve_remote_upload_target, resolve_remote_write_target,
@@ -59,6 +60,9 @@ use transfer_paths::{
 #[cfg(test)]
 use transfer_paths::{remote_conflict_candidate, resolve_duplicate_decision};
 use tuning::TransferParameters;
+#[cfg(test)]
+use upload_metadata::upload_file_mode as remote_upload_file_mode;
+use upload_metadata::{UploadMetadata, finish_upload_metadata};
 
 pub const SFTP_TRANSFER_CANCELLED: &str = "SFTP transfer cancelled";
 
@@ -2281,6 +2285,7 @@ impl SftpService {
         let multiplex = self.multiplex.clone();
         let attempts = options.max_retries().saturating_add(1);
         self.run_upload_operation("upload_file", attempts, async move {
+            let upload_metadata = UploadMetadata::default();
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let codec = SftpPathCodec::from_ssh_config(&config)?;
             let raw_path = codec.encode_path(&remote_path)?;
@@ -2301,6 +2306,7 @@ impl SftpService {
                         &remote_path,
                         &control,
                         &options,
+                        &upload_metadata,
                         &mut progress,
                     )
                     .await;
@@ -2342,6 +2348,7 @@ impl SftpService {
         let multiplex = self.multiplex.clone();
         let attempts = options.max_retries().saturating_add(1);
         self.run_upload_operation("upload_remote_file", attempts, async move {
+            let upload_metadata = UploadMetadata::default();
             let codec = SftpPathCodec::from_ssh_config(&config)?;
             let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
             let mut last_error = None;
@@ -2361,6 +2368,7 @@ impl SftpService {
                         &remote_path.display_path,
                         &control,
                         &options,
+                        &upload_metadata,
                         &mut progress,
                     )
                     .await;
@@ -2487,6 +2495,7 @@ impl SftpService {
             .max_retries()
             .saturating_add(1);
         self.run_upload_operation("upload_path", attempts, async move {
+            let upload_metadata = UploadMetadata::default();
             let metadata = tokio::fs::metadata(&local_path).await?;
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let codec = SftpPathCodec::from_ssh_config(&config)?;
@@ -2535,6 +2544,7 @@ impl SftpService {
                                 multiplex: multiplex.as_ref(),
                                 control: &control,
                                 path_options: &contents_options,
+                                upload_metadata: &upload_metadata,
                             },
                             &mut progress,
                         )
@@ -2547,6 +2557,7 @@ impl SftpService {
                             &remote_target,
                             &control,
                             path_options.transfer_options(),
+                            &upload_metadata,
                             &mut progress,
                         )
                         .await?
@@ -2919,30 +2930,11 @@ mod editor_save_tests;
 mod filename_tests;
 #[cfg(test)]
 mod overwrite_tests;
+#[cfg(test)]
+mod upload_metadata_tests;
 
 fn last_sftp_retry_error(last_error: Option<anyhow::Error>) -> anyhow::Error {
     last_error.unwrap_or_else(|| anyhow::anyhow!("SFTP transfer failed before starting"))
-}
-
-async fn apply_remote_upload_file_mode_bytes(
-    sftp: &SftpSession,
-    remote_path: Vec<u8>,
-    existing_mode: Option<u32>,
-    default_mode: Option<u32>,
-) {
-    let mode = remote_upload_file_mode(existing_mode, default_mode);
-    let Some(mode) = mode else {
-        return;
-    };
-    let attrs = russh_sftp::protocol::FileAttributes {
-        permissions: Some(mode),
-        ..russh_sftp::protocol::FileAttributes::empty()
-    };
-    let _ = sftp.set_metadata_bytes(remote_path, attrs).await;
-}
-
-fn remote_upload_file_mode(existing_mode: Option<u32>, default_mode: Option<u32>) -> Option<u32> {
-    default_mode.or_else(|| existing_mode.map(|mode| mode & 0o777))
 }
 
 async fn preserve_remote_modified_time_bytes(
@@ -3507,6 +3499,7 @@ where
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn upload_local_file<F>(
     sftp: &SftpSession,
     codec: &SftpPathCodec,
@@ -3514,6 +3507,7 @@ async fn upload_local_file<F>(
     remote_path: &str,
     control: &SftpTransferControl,
     options: &SftpTransferOptions,
+    upload_metadata: &UploadMetadata,
     progress: &mut F,
 ) -> anyhow::Result<u64>
 where
@@ -3526,11 +3520,13 @@ where
         remote_path,
         control,
         options,
+        upload_metadata,
         progress,
     )
     .await
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn upload_local_file_bytes<F>(
     sftp: &SftpSession,
     raw_path: Vec<u8>,
@@ -3538,6 +3534,7 @@ async fn upload_local_file_bytes<F>(
     remote_path: &str,
     control: &SftpTransferControl,
     options: &SftpTransferOptions,
+    upload_metadata: &UploadMetadata,
     progress: &mut F,
 ) -> anyhow::Result<u64>
 where
@@ -3547,21 +3544,7 @@ where
     let mut local = tokio::fs::File::open(local_path).await?;
     let local_metadata = local.metadata().await.ok();
     let total_bytes = local_metadata.as_ref().map(|metadata| metadata.len());
-    // Permission preservation is best-effort: unsupported lstat or a disappearing target
-    // must not break existing overwrite behavior. Direct lstat also saves a round trip
-    // compared with an exists check followed by lstat.
-    let existing_permissions = if options.default_file_mode.is_some() {
-        None
-    } else {
-        sftp.symlink_metadata_bytes(raw_path.clone())
-            .await
-            .ok()
-            .and_then(|metadata| {
-                (metadata.file_type() == russh_sftp::protocol::FileType::File)
-                    .then_some(metadata.permissions)
-                    .flatten()
-            })
-    };
+    let original = upload_metadata.capture(sftp, &raw_path, control).await?;
     let mut remote = await_sftp_request(control, sftp.create_bytes(raw_path.clone())).await?;
     let mut buffer = vec![0_u8; sftp_upload_buffer_size(options)];
     let mut bytes = 0_u64;
@@ -3592,13 +3575,14 @@ where
         });
     }
     await_sftp_request(control, remote.shutdown()).await?;
-    apply_remote_upload_file_mode_bytes(
+    finish_upload_metadata(
         sftp,
         raw_path.clone(),
-        existing_permissions,
+        original.as_ref(),
         options.default_file_mode,
+        control,
     )
-    .await;
+    .await?;
     if options.preserve_timestamps {
         preserve_remote_modified_time_bytes(sftp, raw_path, local_metadata).await;
     }
@@ -3639,6 +3623,7 @@ struct LocalDirectoryUploadContext<'a> {
     multiplex: Option<&'a SshMultiplexHandle>,
     control: &'a SftpTransferControl,
     path_options: &'a SftpPathTransferOptions,
+    upload_metadata: &'a UploadMetadata,
 }
 
 async fn upload_local_directory<F>(
@@ -3686,6 +3671,7 @@ where
                 &entry.remote_path,
                 context.control,
                 context.path_options.transfer_options(),
+                context.upload_metadata,
                 &mut report,
             )
             .await?;
@@ -3876,6 +3862,7 @@ where
         let worker_queue = Arc::clone(&queue);
         let worker_control = context.control.clone();
         let worker_options = context.path_options.transfer_options().clone();
+        let worker_metadata = context.upload_metadata.clone();
         let worker_bytes_transferred = Arc::clone(&bytes_transferred);
         let worker_item_count_completed = Arc::clone(&item_count_completed);
         let worker_large_lane = Arc::clone(&large_lane);
@@ -3898,6 +3885,7 @@ where
                     entry,
                     worker_control.clone(),
                     worker_options.clone(),
+                    worker_metadata.clone(),
                     worker_bytes_transferred.clone(),
                     worker_item_count_completed.clone(),
                     expected_bytes,
@@ -4009,6 +3997,7 @@ async fn upload_local_directory_entry(
     entry: LocalDirectoryUploadEntry,
     control: SftpTransferControl,
     options: SftpTransferOptions,
+    upload_metadata: UploadMetadata,
     bytes_transferred: Arc<AtomicU64>,
     item_count_completed: Arc<AtomicU64>,
     expected_bytes: u64,
@@ -4043,6 +4032,7 @@ async fn upload_local_directory_entry(
         &entry.remote_path,
         &control,
         &options,
+        &upload_metadata,
         &mut aggregate_progress,
     )
     .await?;
@@ -4562,10 +4552,10 @@ mod tests {
     }
 
     #[test]
-    fn upload_file_mode_prefers_configured_default_then_existing_mode() {
+    fn upload_file_mode_preserves_existing_permissions_including_special_bits() {
         assert_eq!(
-            remote_upload_file_mode(Some(0o755), Some(0o600)),
-            Some(0o600)
+            remote_upload_file_mode(Some(0o106755), Some(0o600)),
+            Some(0o6755)
         );
         assert_eq!(remote_upload_file_mode(None, Some(0o600)), Some(0o600));
         assert_eq!(remote_upload_file_mode(Some(0o755), None), Some(0o755));

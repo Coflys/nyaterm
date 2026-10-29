@@ -174,7 +174,12 @@ impl russh::server::Handler for FilePeer {
         let command = String::from_utf8_lossy(command).into_owned();
         self.commands.lock().unwrap().push(command.clone());
         session.channel_success(id)?;
-        if command.starts_with("umask") {
+        if command.starts_with("if test -e") {
+            session.data(id, b"missing".to_vec())?;
+            session.eof(id)?;
+            session.exit_status_request(id, 0)?;
+            session.close(id)?;
+        } else if command.starts_with("umask") {
             self.uploads.insert(id);
         } else {
             if command.starts_with("cat --") {

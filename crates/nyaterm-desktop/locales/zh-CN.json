@@ -2461,7 +2461,7 @@
     "defaultEncoding": "默认终端编码",
     "defaultEncodingDesc": "终端输入和输出使用的字符编码。",
     "defaultFilePermissions": "默认文件权限",
-    "defaultFilePermissionsDesc": "上传文件的八进制权限模式（例如 644）。",
+    "defaultFilePermissionsDesc": "新上传文件的八进制权限模式（例如 644）。覆盖已有文件时保留原权限。",
     "defaultShell": "默认本地 Shell",
     "defaultShellDesc": "创建新的本地终端会话时使用的命令行 shell。",
     "deleteKey": "删除密钥",

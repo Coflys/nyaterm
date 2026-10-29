@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use nyaterm_core::character_encoding::CharacterEncoding;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::FileAttributes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{OpenSftpConnection, OpenSftpSession, RemoteFilePath, SftpService};
@@ -13,6 +14,15 @@ use crate::session_config::{SftpSettings, SshSessionConfig};
 #[derive(Default)]
 pub(super) struct Files {
     pub(super) contents: HashMap<Vec<u8>, Vec<u8>>,
+    pub(super) attributes: HashMap<Vec<u8>, FileAttributes>,
+    pub(super) links: HashMap<Vec<u8>, Vec<u8>>,
+    pub(super) stat_error: Option<u32>,
+    pub(super) setstat_error: Option<u32>,
+    pub(super) ignore_chmod: bool,
+    pub(super) fail_chmod_once: bool,
+    pub(super) clear_special_on_write: bool,
+    pub(super) change_owner_on_write: bool,
+    pub(super) attribute_updates: Vec<FileAttributes>,
     pub(super) directories: HashSet<Vec<u8>>,
     pub(super) requests: usize,
     pub(super) request_kinds: Vec<u8>,
@@ -68,14 +78,43 @@ fn status(id: u32, code: u32) -> Vec<u8> {
     packet
 }
 
-fn attributes(packet: &mut Vec<u8>, size: usize, directory: bool, modified: Option<u32>) {
-    packet.extend_from_slice(&(5_u32 | if modified.is_some() { 8 } else { 0 }).to_be_bytes());
-    packet.extend_from_slice(&(size as u64).to_be_bytes());
-    packet.extend_from_slice(&(if directory { 0o040755_u32 } else { 0o100644 }).to_be_bytes());
-    if let Some(modified) = modified {
-        packet.extend_from_slice(&modified.to_be_bytes());
-        packet.extend_from_slice(&modified.to_be_bytes());
+fn default_attributes(size: usize, directory: bool, modified: Option<u32>) -> FileAttributes {
+    FileAttributes {
+        size: Some(size as u64),
+        permissions: Some(if directory { 0o040755 } else { 0o100644 }),
+        // Ownership is opt-in so browsing fixtures do not attempt SSH name lookups.
+        atime: modified,
+        mtime: modified,
+        ..FileAttributes::empty()
     }
+}
+
+fn push_attributes(packet: &mut Vec<u8>, attrs: &FileAttributes) {
+    let ids = attrs.uid.zip(attrs.gid);
+    let times = attrs.atime.zip(attrs.mtime);
+    let flags = u32::from(attrs.size.is_some())
+        | (u32::from(ids.is_some()) << 1)
+        | (u32::from(attrs.permissions.is_some()) << 2)
+        | (u32::from(times.is_some()) << 3);
+    packet.extend_from_slice(&flags.to_be_bytes());
+    if let Some(size) = attrs.size {
+        packet.extend_from_slice(&size.to_be_bytes());
+    }
+    if let Some((uid, gid)) = ids {
+        packet.extend_from_slice(&uid.to_be_bytes());
+        packet.extend_from_slice(&gid.to_be_bytes());
+    }
+    if let Some(mode) = attrs.permissions {
+        packet.extend_from_slice(&mode.to_be_bytes());
+    }
+    if let Some((atime, mtime)) = times {
+        packet.extend_from_slice(&atime.to_be_bytes());
+        packet.extend_from_slice(&mtime.to_be_bytes());
+    }
+}
+
+fn attributes(packet: &mut Vec<u8>, size: usize, directory: bool, modified: Option<u32>) {
+    push_attributes(packet, &default_attributes(size, directory, modified));
 }
 
 fn reply(
@@ -104,13 +143,26 @@ fn reply(
     match kind {
         3 | 11 => {
             let path = string(&mut input);
+            let path = if kind == 3 {
+                files.links.get(&path).cloned().unwrap_or(path)
+            } else {
+                path
+            };
             if kind == 3 {
                 let flags = number(&mut input);
                 if flags & 8 != 0 {
+                    if !files.contents.contains_key(&path) {
+                        files
+                            .attributes
+                            .insert(path.clone(), default_attributes(0, false, None));
+                    }
                     files.contents.entry(path.clone()).or_default();
                 }
                 if !files.contents.contains_key(&path) {
                     return status(id, 2);
+                }
+                if flags & 16 != 0 {
+                    files.contents.get_mut(&path).unwrap().clear();
                 }
             } else {
                 files.directory_opens.push(path.clone());
@@ -131,7 +183,59 @@ fn reply(
             }
             return status(id, 0);
         }
-        9 => return status(id, 0),
+        9 | 10 => {
+            let path = string(&mut input);
+            let path = if kind == 10 {
+                handles[&path].clone()
+            } else {
+                path
+            };
+            let path = files.links.get(&path).cloned().unwrap_or(path);
+            if let Some(error) = files.setstat_error {
+                return status(id, error);
+            }
+            let flags = number(&mut input);
+            let mut update = FileAttributes::empty();
+            if flags & 1 != 0 {
+                update.size = Some(u64::from_be_bytes(input[..8].try_into().unwrap()));
+                input = &input[8..];
+            }
+            if flags & 2 != 0 {
+                update.uid = Some(number(&mut input));
+                update.gid = Some(number(&mut input));
+            }
+            if flags & 4 != 0 {
+                update.permissions = Some(number(&mut input));
+            }
+            if flags & 8 != 0 {
+                update.atime = Some(number(&mut input));
+                update.mtime = Some(number(&mut input));
+            }
+            files.attribute_updates.push(update.clone());
+            if update.permissions.is_some() && std::mem::take(&mut files.fail_chmod_once) {
+                return status(id, 3);
+            }
+            let current = files
+                .attributes
+                .entry(path)
+                .or_insert_with(|| default_attributes(0, false, None));
+            if !files.ignore_chmod
+                && let Some(mode) = update.permissions
+            {
+                current.permissions = Some(0o100000 | mode);
+            }
+            if let Some(uid) = update.uid {
+                current.uid = Some(uid);
+            }
+            if let Some(gid) = update.gid {
+                current.gid = Some(gid);
+            }
+            if let Some(mtime) = update.mtime {
+                current.mtime = Some(mtime);
+                current.atime = update.atime;
+            }
+            return status(id, 0);
+        }
         5 => {
             let handle = string(&mut input);
             let path = handles[&handle].clone();
@@ -161,6 +265,18 @@ fn reply(
         6 => {
             let handle = string(&mut input);
             let path = handles[&handle].clone();
+            if files.clear_special_on_write || files.change_owner_on_write {
+                let attrs = files
+                    .attributes
+                    .entry(path.clone())
+                    .or_insert_with(|| default_attributes(0, false, None));
+                if files.clear_special_on_write {
+                    attrs.permissions = attrs.permissions.map(|mode| mode & !0o6000);
+                }
+                if files.change_owner_on_write {
+                    attrs.uid = Some(2000);
+                }
+            }
             let offset = u64::from_be_bytes(input[..8].try_into().unwrap()) as usize;
             input = &input[8..];
             let bytes = string(&mut input);
@@ -177,25 +293,32 @@ fn reply(
             } else {
                 path
             };
+            let path = if kind == 17 {
+                files.links.get(&path).cloned().unwrap_or(path)
+            } else {
+                path
+            };
+            if let Some(error) = files.stat_error {
+                return status(id, error);
+            }
             let directory = files.directories.contains(&path);
-            if !directory && !files.contents.contains_key(&path) {
+            if !directory && !files.contents.contains_key(&path) && !files.links.contains_key(&path)
+            {
                 return status(id, 2);
             }
             packet.push(105);
             packet.extend_from_slice(&id.to_be_bytes());
-            if files.omit_size {
-                packet.extend_from_slice(&4_u32.to_be_bytes());
-                packet.extend_from_slice(
-                    &(if directory { 0o040755_u32 } else { 0o100644 }).to_be_bytes(),
-                );
-            } else {
-                attributes(
-                    &mut packet,
-                    files.contents.get(&path).map_or(0, Vec::len),
-                    directory,
-                    files.modified,
-                );
+            let mut attrs = files
+                .attributes
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| default_attributes(0, directory, files.modified));
+            attrs.size =
+                (!files.omit_size).then(|| files.contents.get(&path).map_or(0, Vec::len) as u64);
+            if kind == 7 && files.links.contains_key(&path) {
+                attrs.permissions = Some(0o120777);
             }
+            push_attributes(&mut packet, &attrs);
         }
         12 | 16 => {
             let path = string(&mut input);
