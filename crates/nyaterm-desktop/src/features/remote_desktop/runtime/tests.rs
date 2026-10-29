@@ -752,6 +752,97 @@ fn disconnecting_states_clear_local_composition_and_key_suppression() {
 
 #[cfg(windows)]
 #[test]
+fn native_outcomes_release_startup_restore_after_periodic_maintenance() {
+    use crate::features::remote_desktop::native::apply_native_connection_event;
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{RestorableOpenTab, test_support::TestTempDir};
+    use nyaterm_remote_desktop::activex::NativeRdpConnectionEvent;
+    use nyaterm_ui::nya_root;
+
+    for event in [
+        NativeRdpConnectionEvent::Connected,
+        NativeRdpConnectionEvent::Failed(RdpError::new(
+            RdpErrorKind::ConnectionRefused,
+            "first attempt",
+        )),
+        NativeRdpConnectionEvent::Failed(RdpError::new(RdpErrorKind::Timeout, "timeout")),
+        NativeRdpConnectionEvent::Failed(RdpError::new(RdpErrorKind::HelperCrashed, "host exit")),
+        NativeRdpConnectionEvent::Failed(RdpError::new(
+            RdpErrorKind::Unsupported,
+            "control creation",
+        )),
+    ] {
+        let root = TestTempDir::new("nyaterm-native-restore-outcome");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| gpui::EmptyView);
+            nya_root(view, window, cx)
+        });
+        cx.update(|window, cx| {
+            let handle = window.window_handle().downcast().unwrap();
+            app.update(cx, |app, cx| {
+                app.shell.remember_main_window(handle);
+                app.remote_desktop
+                    .insert_connecting("restoring-native".into());
+                app.remote_desktop.restore_pending = Some("restoring-native".into());
+                app.stores.startup_restore.update(cx, |store, _| {
+                    store.set_queue(
+                        ["ssh", "rdp"]
+                            .map(|kind| {
+                                serde_json::from_value::<RestorableOpenTab>(serde_json::json!({
+                                    "session_type": kind, "connection_id": format!("missing-{kind}")
+                                }))
+                                .unwrap()
+                            })
+                            .to_vec(),
+                    );
+                });
+                app.drive_remote_desktop_periodic(window, cx);
+                assert!(app.remote_desktop.restore_pending.is_some());
+                let session = app
+                    .remote_desktop
+                    .sessions
+                    .get_mut("restoring-native")
+                    .unwrap();
+                apply_native_connection_event(session, NativeRdpConnectionEvent::Reconnecting);
+                app.drive_remote_desktop_periodic(window, cx);
+                assert!(app.remote_desktop.restore_pending.is_some());
+                assert_eq!(app.stores.startup_restore.read(cx).queue_len(), 2);
+                apply_native_connection_event(
+                    app.remote_desktop
+                        .sessions
+                        .get_mut("restoring-native")
+                        .unwrap(),
+                    event,
+                );
+                app.drive_remote_desktop_periodic(window, cx);
+                assert!(app.remote_desktop.restore_pending.is_none());
+                app.drive_remote_desktop_periodic(window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(
+                    app.session.restore_is_complete(),
+                    "later SSH/RDP entries were attempted"
+                );
+                assert_eq!(app.stores.startup_restore.read(cx).queue_len(), 0);
+                assert!(
+                    !app.pump_startup_restore_queue_if_ready(window, cx),
+                    "must not pump twice"
+                );
+            });
+        });
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn closing_a_native_rdp_session_skips_the_helper_manager() {
     use crate::features::test_support::app_with_visible_local_session;
     use gpui::TestAppContext;

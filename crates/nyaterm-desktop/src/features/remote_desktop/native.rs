@@ -14,6 +14,7 @@ use raw_window_handle::RawWindowHandle;
 use crate::features::NyaTermApp;
 
 use super::runtime::fit_window_display_metrics;
+use super::state::RemoteDesktopSessionState;
 
 impl NyaTermApp {
     pub(super) fn native_rdp_view(
@@ -48,7 +49,7 @@ impl NyaTermApp {
                         let parent = handle.hwnd.get();
                         let rect = native_phys_rect(bounds, window.scale_factor());
                         let dialog_open = window.has_active_nya_dialog(cx)
-                            || nyaterm_ui::nya_popup_menu_is_active(window, cx);
+                            || nyaterm_ui::nya_popup_is_active(window, cx);
                         let app = app.clone();
                         let session_id = session_id.clone();
                         window.defer(cx, move |window, cx| {
@@ -83,7 +84,12 @@ impl NyaTermApp {
         };
         if let Some(native) = session.native_rdp.as_mut() {
             native.set_bounds(rect);
-            native.set_visible(!overlay.obscured && native_rdp_state_is_displayable(session.state));
+            native.set_visible(native_rdp_surface_visible(
+                true,
+                true,
+                overlay.obscured,
+                session.state,
+            ));
             return;
         }
         let Some(mut config) = session.native_rdp_config.take() else {
@@ -116,33 +122,9 @@ impl NyaTermApp {
         dialog_open: bool,
         cx: &mut Context<Self>,
     ) -> NativeRdpOverlayState {
-        let menu = self.native_rdp_menu_overlay_obscured(dialog_open, cx);
         NativeRdpOverlayState {
-            obscured: self.security.screen_locked() || menu,
+            obscured: dialog_open || self.root_overlay_visibility(cx).obscures_native_surface(),
         }
-    }
-
-    fn native_rdp_menu_overlay_obscured(
-        &mut self,
-        dialog_open: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        dialog_open
-            || self.quick_switch_open(cx)
-            || self.commands.quick_editor_is_inline()
-            || self.commands.quick_details().is_some()
-            || self.commands.quick_variable_prompt().is_some()
-            || self.session.dialog_tab_actions_target().is_some()
-            || self.session.dialog_session_info_is_open()
-            || self.session.dialog_color_picker_is_open()
-            || self.shell.header_status_menu_is_open()
-            || self.shell.open_tabs_menu_is_open()
-            || self.shell.new_session_menu_is_open()
-            || self.shell.activity_bar_context_menu().is_some()
-            || self.connection_state.inline_editor_panel_draft().is_some()
-            || self.pending_ai_full_access().is_some()
-            || !self.mcp_pending_approval_requests().is_empty()
-            || self.session.prompt_has_active_ssh_auth()
     }
 
     pub(in crate::features) fn native_rdp_session_details(
@@ -229,46 +211,58 @@ impl NyaTermApp {
             }
         }
         let mut dirty = false;
+        let details_open = self.session.dialog_session_info_is_open();
         for (id, session) in &mut self.remote_desktop.sessions {
             let Some(native) = session.native_rdp.as_mut() else {
                 continue;
             };
-            native.set_visible(
-                window.is_visible()
-                    && visible.contains(id)
-                    && !obscured
-                    && native_rdp_state_is_displayable(session.state),
-            );
+            dirty |= native.take_details_changed() && details_open;
+            native.set_visible(native_rdp_surface_visible(
+                window.is_visible(),
+                visible.contains(id),
+                obscured,
+                session.state,
+            ));
             if window.is_window_active() && native.cursor_is_inside() {
                 dirty |= self.shell.clear_resize_handle_hover();
             }
-            while let Some(event) = native.poll_connection() {
-                match event {
-                    NativeRdpConnectionEvent::Connected => {
-                        session.state = RemoteDesktopViewState::Connected;
-                        session.error = None;
-                    }
-                    NativeRdpConnectionEvent::Reconnecting => {
-                        session.state = RemoteDesktopViewState::Reconnecting;
-                    }
-                    NativeRdpConnectionEvent::Disconnected(info) => {
-                        session.state = RemoteDesktopViewState::Failed;
-                        session.error = Some(
-                            RdpError::new(RdpErrorKind::Session, native_disconnect_message(&info))
-                                .into(),
-                        );
-                        native.set_visible(false);
-                    }
-                    NativeRdpConnectionEvent::Failed(error) => {
-                        session.state = RemoteDesktopViewState::Failed;
-                        session.error = Some(error.into());
-                        native.set_visible(false);
-                    }
-                }
+            let events: Vec<_> = std::iter::from_fn(|| native.poll_connection()).collect();
+            for event in events {
+                apply_native_connection_event(session, event);
                 dirty = true;
             }
         }
         dirty
+    }
+}
+
+// Shared by the native event drain and restore/lifecycle regression tests.
+pub(super) fn apply_native_connection_event(
+    session: &mut RemoteDesktopSessionState,
+    event: NativeRdpConnectionEvent,
+) {
+    match event {
+        NativeRdpConnectionEvent::Connected => {
+            session.state = RemoteDesktopViewState::Connected;
+            session.error = None;
+        }
+        NativeRdpConnectionEvent::Reconnecting => {
+            session.state = RemoteDesktopViewState::Reconnecting;
+        }
+        NativeRdpConnectionEvent::Disconnected(info) => {
+            session.state = RemoteDesktopViewState::Failed;
+            session.error =
+                Some(RdpError::new(RdpErrorKind::Session, native_disconnect_message(&info)).into());
+        }
+        NativeRdpConnectionEvent::Failed(error) => {
+            session.state = RemoteDesktopViewState::Failed;
+            session.error = Some(error.into());
+        }
+    }
+    if !native_rdp_state_is_displayable(session.state)
+        && let Some(native) = session.native_rdp.as_mut()
+    {
+        native.set_visible(false);
     }
 }
 
@@ -284,6 +278,15 @@ fn native_rdp_state_is_displayable(state: RemoteDesktopViewState) -> bool {
             | RemoteDesktopViewState::Connected
             | RemoteDesktopViewState::Reconnecting
     )
+}
+
+fn native_rdp_surface_visible(
+    window_visible: bool,
+    tab_visible: bool,
+    obscured: bool,
+    state: RemoteDesktopViewState,
+) -> bool {
+    window_visible && tab_visible && !obscured && native_rdp_state_is_displayable(state)
 }
 
 fn native_disconnect_message(info: &NativeRdpDisconnectInfo) -> String {
@@ -345,6 +348,17 @@ mod tests {
         assert!(native_rdp_state_is_displayable(
             RemoteDesktopViewState::Connected
         ));
+    }
+
+    #[test]
+    fn dismissing_an_overlay_never_resurrects_a_hidden_or_failed_tab() {
+        use super::native_rdp_surface_visible;
+        use RemoteDesktopViewState::{Connected, Failed};
+        assert!(!native_rdp_surface_visible(true, true, true, Connected));
+        assert!(native_rdp_surface_visible(true, true, false, Connected));
+        assert!(!native_rdp_surface_visible(true, false, false, Connected));
+        assert!(!native_rdp_surface_visible(false, true, false, Connected));
+        assert!(!native_rdp_surface_visible(true, true, false, Failed));
     }
 
     #[test]

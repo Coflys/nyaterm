@@ -30,6 +30,12 @@ struct PopupFocusRegistry(HashMap<WindowId, Vec<(WeakEntity<PopupMenu>, FocusHan
 
 impl Global for PopupFocusRegistry {}
 
+/// Whether a NyaTerm popup currently owns focus in this window. Entries only
+/// retain weak entities; dismissing/rebuilding controls needs no paired flags.
+pub fn nya_popup_is_active(window: &Window, cx: &mut App) -> bool {
+    nya_popup_menu_is_active(window, cx) || crate::selection::select_popup_is_active(window, cx)
+}
+
 /// Native child surfaces must yield to menus painted by GPUI. Read the menu's
 /// actual focus ownership instead of mirroring open/closed state in desktop.
 pub fn nya_popup_menu_is_active(window: &Window, cx: &mut App) -> bool {
@@ -883,6 +889,40 @@ mod tests {
         NyaContextMenu, NyaMenuItem, NyaMenuItemKind, popup_menu_should_scroll,
         resolved_menu_widths, submenu_direction_probe_width,
     };
+
+    #[gpui::test]
+    fn popup_query_releases_dismissed_and_destroyed_menus(cx: &mut TestAppContext) {
+        use super::{nya_popup_is_active, style_nya_popup_menu};
+        use gpui::Focusable as _;
+        use gpui_kit::component::menu::PopupMenu;
+        cx.update(gpui_kit::init);
+        let cx = cx.add_empty_window();
+        let weak = cx.update(|window, cx| {
+            let menu = PopupMenu::build(window, cx, |menu, window, cx| {
+                style_nya_popup_menu(menu, None, None, window, cx)
+            });
+            let focus = menu.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+            assert!(nya_popup_is_active(window, cx));
+            window.blur(cx);
+            assert!(!nya_popup_is_active(window, cx));
+            window.focus(&focus, cx);
+            assert!(nya_popup_is_active(window, cx));
+            let weak = menu.downgrade();
+            drop(menu);
+            weak
+        });
+        // GPUI releases entities at the end of the update, after callbacks and
+        // subscriptions finish. Query again after that actual destruction.
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(weak.upgrade().is_none());
+            assert!(
+                !nya_popup_is_active(window, cx),
+                "dead menu must not retain occlusion"
+            );
+        });
+    }
 
     struct DynamicContextMenuFixture {
         target: Rc<Cell<u8>>,
