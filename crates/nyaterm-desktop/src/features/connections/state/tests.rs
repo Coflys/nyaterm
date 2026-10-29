@@ -2237,7 +2237,12 @@ fn rdp_backend_dropdown_selection_reaches_the_connection_editor() {
         app.connection_state.begin_editor(draft);
         app.on_select_changed("connection-editor-rdp-backend", Some("windows"), cx);
         let draft = app.connection_state.active_editor_draft().unwrap();
-        assert_eq!(draft.rdp_backend, "windows");
+        // The Windows backend is disabled outside Windows; selecting it must not
+        // store a backend the platform cannot launch.
+        assert_eq!(
+            draft.rdp_backend,
+            if cfg!(windows) { "windows" } else { "builtin" }
+        );
         app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
         let draft = app.connection_state.active_editor_draft().unwrap();
         assert_eq!(draft.rdp_backend, "builtin");
