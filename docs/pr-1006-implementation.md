@@ -70,3 +70,36 @@ ActiveX helper 的 7 项 Windows 生命周期测试通过，包含真实跨进�
 - 本轮保留源分支已有的 macOS 测试兼容修复；尚无 macOS 实机验证结果。Windows workspace 和 Linux 受影响包测试未出现此前提及的 `stat -c` 错误。
 
 这些限制意味着本轮完成源码实现及上述自动回归，不能视为 ActiveX 已通过全部平台和真实服务器发布验收。
+
+
+## 后续修复：恢复队列、显示降级与遮挡
+
+本轮以 `bb076d5de` 为起点，先快进集成作者的 `c6d862de1`（后端下拉框跨平台测试修正），随后实施以下修复。保留两个明确后端、独立 ActiveX helper 和设置标签页，不改变认证、剪贴板、配置保存或退出保护契约。
+
+- 原生会话周期维护后统一执行 `settle_remote_desktop_restore()`。真实连接事件和测试使用同一状态应用函数；Connecting/Reconnecting 保持等待，成功、失败、超时和宿主错误解除阻塞并继续恢复队列。重复维护不会重复续接。
+- helper 的 `DisplayUpdates` 分开记录初始/已应用参数与待更新参数，忽略重复参数和仅位置变化，Fixed 连接成功不再无条件调整分辨率。动态调整返回错误时清除待请求、禁用本连接后续调整，保留 SmartSizing 和会话；新宿主重新探测。COM 状态读取、连接错误、崩溃和心跳超时的失败/回收路径保持原样。
+- `NativeRdpSessionDetails.dynamic_resize_available` 是带 `serde(default)` 的可选字段。旧消息可读取，协议版本继续为 12；已打开的会话详情在能力变化时收到重绘通知。六种语言同步说明降级到 SmartSizing。
+- `nyaterm-ui::nya_popup_is_active()` 按窗口统一查询 PopupMenu 和 Select。Select 注册弱实体并读取现有 `is_menu_focused()`，不维护打开标记，不修改依赖分支。关闭、销毁和重建均使旧状态失效。
+- root 自绘层改用一份只读派生快照，渲染和 ActiveX 显隐共用；新增覆盖传输菜单、外部编辑同步提示、粘贴确认、终端操作和模态子窗口。遮挡解除后仍检查窗口、标签和会话状态，不恢复焦点。跨窗口隔离有回归测试。
+- 保留作者对 Windows/非 Windows 新选择的不同预期；补充已有 Windows 值在所有平台保留并主动切回 Builtin 的测试，不跳过平台测试。
+
+本轮测试还覆盖初始尺寸不重复调整、Fixed/DPI、拒绝调整后不再调用和新宿主恢复探测、旧/新详情消息、恢复队列续接与重连等待、Select 关闭/重建/销毁、PopupMenu 关闭/销毁、自绘多层遮挡和隐藏标签。恢复续接测试使用后续 SSH/RDP 恢复描述验证队列继续处理（缺失连接按原逻辑跳过），不模拟真实 SSH/RDP 登录。
+
+### 本轮验证
+
+| 检查 | 最终结果 |
+| --- | --- |
+| Windows `cargo check --workspace --locked` | 通过 |
+| Windows `cargo test --workspace -j 2 --locked` | 4,636 项通过、0 失败、32 项沿用既有忽略标记；desktop 2,367 项通过 |
+| Windows `cargo fmt --all -- --check` | 通过 |
+| Windows `cargo clippy --workspace --all-targets --locked -- -D warnings` | 通过 |
+| Linux `cargo test -p nyaterm-desktop -p nyaterm-ui -p nyaterm-remote-desktop -p nyaterm-activex-helper --locked -j 2` 及 UI 复验 | desktop 2,335 项通过、9 项既有忽略；UI 141 项、remote-desktop 79 项、ActiveX helper 单元与生命周期各 4 项通过 |
+| Linux `cargo clippy --workspace --all-targets --locked -j 2 -- -D warnings` | 通过 |
+| `python scripts/ci/check_architecture.py` | 通过 |
+| `git diff --check` | 通过 |
+
+Windows 的三个 helper 生命周期套件均随 workspace 测试通过；ActiveX 套件为 7 项，包含真实 HWND 创建/显隐和挂起 STA 回收。Linux 确实执行了 desktop 测试，未以 Lint 代替。首次并行跨平台编译触发本机内存不足，改为串行后完成上述验证。新增用例的独立存储目录及 GPUI 延后销毁时序问题已修正并复验。日志保存在未跟踪的 `target/pr1006-followup-*.log`；PR 三平台测试与 Rust gate 以推送后的运行结果为准。
+
+### 本轮实机限制
+
+没有可用 RDP 测试服务器，尚未实测服务器拒绝动态显示调整后仍保持连接。Windows 的真实应用分屏、菜单/Select、遮挡恢复及 DPI/跨显示器移动仍未完成人工验收；现有真实 HWND 生命周期测试与纯状态测试不能替代这些项目。macOS 的自动验证以推送后的 PR CI 状态为准，未在本地 macOS 实机验收。此前提及的未修改测试 `stat -c` 问题不混入本轮修复。
