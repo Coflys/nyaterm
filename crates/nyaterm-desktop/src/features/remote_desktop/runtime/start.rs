@@ -2,6 +2,7 @@
 
 use crate::features::NyaTermApp;
 use gpui::Context;
+#[cfg(windows)]
 use nyaterm_remote_desktop::RdpBackend;
 use nyaterm_remote_desktop::RdpDisplayConfig;
 use nyaterm_remote_desktop::RdpDisplayMetrics;
