@@ -1265,12 +1265,24 @@ fn classify_vnc_error(error: vnc::VncError) -> VncError {
         | vnc::VncError::Ra2ServerKeyVerifierRequired
         | vnc::VncError::Ra2ServerHashMismatch
         | vnc::VncError::Ra2Crypto(_)
-        | vnc::VncError::CredentialTooLong { .. }
         | vnc::VncError::NoPassword
         | vnc::VncError::WrongPassword => (
             VncErrorKind::Authentication,
             "VNC authentication failed".to_string(),
         ),
+        vnc::VncError::CredentialTooLong {
+            field: "classic VNC password",
+            actual,
+            limit,
+        } => (
+            VncErrorKind::Authentication,
+            format!(
+                "The VNC server only offers classic VNC Authentication, which accepts at most {limit} password characters, but the saved password has {actual}. Use only the first {limit} characters."
+            ),
+        ),
+        vnc::VncError::CredentialTooLong { .. } => {
+            (VncErrorKind::Authentication, error.to_string())
+        }
         vnc::VncError::UnsupportedSecurityType
         | vnc::VncError::RequiredSecurityTypeUnavailable(_)
         | vnc::VncError::InvalidSecurityType(_) => (
@@ -1493,6 +1505,26 @@ mod tests {
             classify_vnc_error(vnc::VncError::IoError(std::io::Error::other("reset"))).kind,
             VncErrorKind::Transport
         );
+    }
+
+    #[test]
+    fn overlong_classic_password_explains_the_eight_character_limit() {
+        let error = classify_vnc_error(vnc::VncError::CredentialTooLong {
+            field: "classic VNC password",
+            actual: 10,
+            limit: 8,
+        });
+        assert_eq!(error.kind, VncErrorKind::Authentication);
+        assert!(error.message.contains("at most 8"));
+        assert!(error.message.contains("has 10"));
+
+        let error = classify_vnc_error(vnc::VncError::CredentialTooLong {
+            field: "RA2 username",
+            actual: 256,
+            limit: 255,
+        });
+        assert_eq!(error.kind, VncErrorKind::Authentication);
+        assert!(error.message.contains("RA2 username"));
     }
 
     #[test]
