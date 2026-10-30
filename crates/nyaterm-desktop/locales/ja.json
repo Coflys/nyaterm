@@ -53,6 +53,7 @@
     "operatingSystem": "OS",
     "architecture": "アプリのアーキテクチャ",
     "runtime": "実行環境",
+    "packageManager": "パッケージマネージャー",
     "portable": "ポータブル版",
     "installed": "インストール版",
     "supportInfoCopied": "サポート情報をコピーしました",

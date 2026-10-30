@@ -53,6 +53,7 @@
     "operatingSystem": "Système d'exploitation",
     "architecture": "Architecture de l'application",
     "runtime": "Environnement",
+    "packageManager": "Gestionnaire de paquets",
     "portable": "Portable",
     "installed": "Installé",
     "supportInfoCopied": "Informations de support copiées",

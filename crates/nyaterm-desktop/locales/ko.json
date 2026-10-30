@@ -53,6 +53,7 @@
     "operatingSystem": "운영 체제",
     "architecture": "앱 아키텍처",
     "runtime": "실행 환경",
+    "packageManager": "패키지 관리자",
     "portable": "포터블 버전",
     "installed": "설치 버전",
     "supportInfoCopied": "지원 정보를 복사했습니다",
