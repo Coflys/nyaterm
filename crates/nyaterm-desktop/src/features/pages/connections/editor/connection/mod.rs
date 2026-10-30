@@ -124,7 +124,8 @@ impl NyaTermApp {
                         .clone()
                         .unwrap_or_else(|| NO_SELECTION_VALUE.to_string()),
                     choice.label.clone(),
-                );
+                )
+                .disabled(choice.disabled);
                 if let Some(search_text) = choice.search_text.as_ref() {
                     option = option.search_text(search_text.clone());
                 }
@@ -751,7 +752,29 @@ impl NyaTermApp {
                 })
                 .collect::<Vec<_>>(),
         );
-        let rdp_certificate_options = [
+        let mut rdp_backend_options = vec![ConnectionEditorChoice::new(
+            Some("builtin".into()),
+            t!("dialog.rdpBackendBuiltin"),
+            matches!(editor.rdp_backend.as_str(), "builtin" | "internal" | "auto"),
+        )];
+        let mut windows_backend = ConnectionEditorChoice::new(
+            Some("windows".into()),
+            t!("dialog.rdpBackendWindows"),
+            matches!(editor.rdp_backend.as_str(), "windows" | "active-x"),
+        );
+        windows_backend.disabled = !cfg!(windows);
+        rdp_backend_options.push(windows_backend);
+        if !matches!(
+            editor.rdp_backend.as_str(),
+            "auto" | "builtin" | "internal" | "windows" | "active-x"
+        ) {
+            rdp_backend_options.push(ConnectionEditorChoice::new(
+                Some(editor.rdp_backend.clone()),
+                t!("dialog.rdpBackendUnsupported"),
+                true,
+            ));
+        }
+        let mut rdp_certificate_options = [
             ("prompt", t!("dialog.rdpCertificatePrompt")),
             ("strict", t!("dialog.rdpCertificateStrict")),
             ("accept-temporarily", t!("dialog.rdpCertificateTemporary")),
@@ -766,6 +789,20 @@ impl NyaTermApp {
             ConnectionEditorChoice::new(Some(value.to_string()), label, selected)
         })
         .collect::<Vec<_>>();
+        if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+            rdp_certificate_options = vec![
+                ConnectionEditorChoice::new(
+                    None,
+                    t!("dialog.rdpWindowsAuthenticationRequired"),
+                    editor.rdp_security.windows_authentication.is_none(),
+                ),
+                ConnectionEditorChoice::new(
+                    Some("system".into()),
+                    t!("dialog.rdpWindowsAuthentication"),
+                    editor.rdp_security.windows_authentication.as_deref() == Some("system"),
+                ),
+            ];
+        }
         let rdp_display_options = [
             ("fit-window", t!("dialog.rdpDisplayFitWindow")),
             ("fixed", t!("dialog.rdpDisplayFixed")),
@@ -1111,6 +1148,11 @@ impl NyaTermApp {
             (
                 ConnectionEditorSelect::SshTerminalType,
                 ssh_terminal_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::RdpBackend,
+                rdp_backend_options.as_slice(),
                 String::new(),
             ),
             (
@@ -2275,7 +2317,7 @@ fn connection_editor_agent_identity_picker(
     .into_any_element()
 }
 
-fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
+fn connection_editor_select_keys() -> [ConnectionEditorSelect; 32] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -2294,6 +2336,7 @@ fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
         ConnectionEditorSelect::SshAgentForwardingPolicy,
         ConnectionEditorSelect::SshProfile,
         ConnectionEditorSelect::SshTerminalType,
+        ConnectionEditorSelect::RdpBackend,
         ConnectionEditorSelect::RdpCertificatePolicy,
         ConnectionEditorSelect::RdpDisplayMode,
         ConnectionEditorSelect::RdpClipboardMode,
@@ -2333,6 +2376,7 @@ fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'static str {
         ConnectionEditorSelect::SshAlgorithmMode => "connection-editor-ssh-algorithm-mode",
         ConnectionEditorSelect::SshProfile => "connection-editor-ssh-profile",
         ConnectionEditorSelect::SshTerminalType => "connection-editor-ssh-terminal-type",
+        ConnectionEditorSelect::RdpBackend => "connection-editor-rdp-backend",
         ConnectionEditorSelect::RdpCertificatePolicy => "connection-editor-rdp-certificate-policy",
         ConnectionEditorSelect::RdpDisplayMode => "connection-editor-rdp-display-mode",
         ConnectionEditorSelect::RdpClipboardMode => "connection-editor-rdp-clipboard-mode",
@@ -3199,6 +3243,7 @@ mod tests {
             username: String::new(),
             domain: String::new(),
             auth_mode: "password".to_string(),
+            rdp_backend: "builtin".to_string(),
             rdp_security: Default::default(),
             rdp_display: Default::default(),
             rdp_clipboard: Default::default(),

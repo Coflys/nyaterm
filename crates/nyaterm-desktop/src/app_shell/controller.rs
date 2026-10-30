@@ -96,7 +96,9 @@ pub struct DesktopController {
     windows: HashMap<WorkspaceId, WorkspaceWindow>,
     pending_tab_moves: HashMap<WorkspaceId, MoveTabTreeRequest>,
     tab_drag: TabDragCoordinator,
-    settings_owner_workspace_id: Option<WorkspaceId>,
+    /// Workspaces whose settings tab is open, oldest first. The last entry owns
+    /// the process-wide settings preview.
+    settings_owners: Vec<WorkspaceId>,
     tray: Option<SystemTray>,
     screen_locked: bool,
     most_recent_workspace_id: Option<WorkspaceId>,
@@ -136,7 +138,7 @@ impl DesktopController {
             windows: HashMap::new(),
             pending_tab_moves: HashMap::new(),
             tab_drag: TabDragCoordinator::default(),
-            settings_owner_workspace_id: None,
+            settings_owners: Vec::new(),
             tray: None,
             screen_locked: false,
             recent_activations: RecentActivationCache::default(),

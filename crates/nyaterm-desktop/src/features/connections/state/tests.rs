@@ -1944,6 +1944,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: "password".to_string(),
+        rdp_backend: "builtin".to_string(),
         rdp_security: Default::default(),
         rdp_display: Default::default(),
         rdp_clipboard: Default::default(),
@@ -2222,6 +2223,66 @@ fn account_dropdown_selection_reaches_the_connection_editor() {
         );
         let draft = app.connection_state.active_editor_draft().unwrap();
         assert!(draft.account_id.is_none());
+    });
+}
+
+#[test]
+fn rdp_backend_dropdown_selection_reaches_the_connection_editor() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.kind = ConnectionKindTab::Rdp;
+        app.connection_state.begin_editor(draft);
+        app.on_select_changed("connection-editor-rdp-backend", Some("windows"), cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        // The Windows backend is disabled outside Windows; selecting it must not
+        // store a backend the platform cannot launch.
+        assert_eq!(
+            draft.rdp_backend,
+            if cfg!(windows) { "windows" } else { "builtin" }
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
+        let draft = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(draft.rdp_backend, "builtin");
+    });
+}
+
+#[test]
+fn existing_windows_backend_is_retained_until_user_explicitly_changes_it() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.kind = ConnectionKindTab::Rdp;
+        draft.rdp_backend = "windows".into();
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "windows"
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("windows"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "windows"
+        );
+        app.on_select_changed("connection-editor-rdp-backend", Some("builtin"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .rdp_backend,
+            "builtin"
+        );
     });
 }
 

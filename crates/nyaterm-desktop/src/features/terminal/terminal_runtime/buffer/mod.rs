@@ -15,7 +15,7 @@ use crate::features::terminal::terminal_surface_entity::{
     terminal_snapshot_covers_display_offset, terminal_surface_paint_count,
 };
 use crate::models::{
-    MainMode, TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalFrameActionLinks, TerminalFrameEvent,
+    TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalFrameActionLinks, TerminalFrameEvent,
     TerminalFrameOutputEvent, TerminalFrameOutputSubmission, TerminalFrameParts,
     TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
     TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose, TerminalPresentation,
@@ -1140,16 +1140,13 @@ impl NyaTermApp {
         &self,
         session_id: &str,
     ) -> bool {
-        if session_id.is_empty() || self.shell.main_mode() != MainMode::Workspace {
+        if session_id.is_empty() {
             return false;
         }
         self.visible_terminal_session_ids().contains(&session_id)
     }
 
     pub(in crate::features) fn visible_terminal_session_ids(&self) -> Vec<&str> {
-        if self.shell.main_mode() != MainMode::Workspace {
-            return Vec::new();
-        }
         if self.shell.pane_focus_mode() {
             if self.session.start_has_active_pending() || self.session.start_has_active_failed() {
                 return Vec::new();

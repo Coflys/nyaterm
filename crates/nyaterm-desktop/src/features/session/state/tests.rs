@@ -869,6 +869,37 @@ fn session_metadata(name: &str, multiplex_key: Option<&str>) -> SessionRuntimeMe
     }
 }
 
+fn rdp_session_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
+    nyaterm_remote_desktop::RdpSessionConfig {
+        relay: None,
+        backend: Default::default(),
+        windows_authentication: None,
+        name: name.into(),
+        host: "127.0.0.1".into(),
+        port: 3389,
+        username: String::new(),
+        domain: String::new(),
+        password: None,
+        use_nla: false,
+        certificate_policy: Default::default(),
+        administrative_session: false,
+        display: Default::default(),
+        clipboard: Default::default(),
+        reconnect: Default::default(),
+    }
+}
+
+fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
+    SessionRuntimeMetadata {
+        ssh_config: None,
+        ssh_multiplex_key: None,
+        source_connection_id: Some(connection_id.to_string()),
+        ai_execution_profile: AiExecutionProfile::Posix,
+        launch_config: SessionLaunchConfig::Rdp(rdp_session_config("rdp")),
+        disconnected: false,
+    }
+}
+
 struct EmptyRemoteFilePreferenceStore;
 
 impl RemoteFileBackendPreferenceStore for EmptyRemoteFilePreferenceStore {
@@ -2533,3 +2564,28 @@ fn zmodem_handoff_preserves_ui_then_bridge_order_and_other_sessions() {
 }
 
 mod tab_actions;
+
+#[test]
+fn independent_rdp_instances_can_reference_the_same_saved_connection() {
+    let root = TestConfigDir::new("nyaterm-rdp-multiple-instances");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let first = app_with_visible_local_session(&mut cx, root.path(), "local");
+    let other_root = TestConfigDir::new("nyaterm-rdp-other-window");
+    let second = app_with_visible_local_session(&mut cx, other_root.path(), "other");
+    first.update(&mut cx, |app, _| {
+        app.session
+            .register_session_metadata("rdp-one", remote_desktop_metadata("saved-rdp"));
+        app.session
+            .register_session_metadata("rdp-two", remote_desktop_metadata("saved-rdp"));
+        assert!(app.session.has_session("rdp-one"));
+        assert!(app.session.has_session("rdp-two"));
+        app.session.remove_session_catalog("rdp-one");
+        assert!(app.session.has_session("rdp-two"));
+    });
+    second.update(&mut cx, |app, _| {
+        app.session
+            .register_session_metadata("rdp-three", remote_desktop_metadata("saved-rdp"));
+        assert!(app.session.has_session("rdp-three"));
+    });
+}

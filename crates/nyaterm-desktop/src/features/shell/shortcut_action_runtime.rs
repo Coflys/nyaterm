@@ -174,7 +174,7 @@ impl NyaTermApp {
                 self.execute_title_menu_command(&TitleMenuCommand::QuickSwitch, window, cx)
             }
             ShortcutId::NewLocalTerminal => self.start_local_session(window, cx),
-            ShortcutId::CloseTab => self.close_active_session(cx),
+            ShortcutId::CloseTab => self.close_active_session(window, cx),
             ShortcutId::NextTab | ShortcutId::PreviousTab => {
                 self.select_relative_session(
                     if invocation.id == ShortcutId::NextTab {

@@ -7,7 +7,7 @@ use super::pane::{PaneEndpoint, PaneId};
 use super::state::FileManagerSidebarRestore;
 use super::workspace::{FileManagerSeed, FileManagerWorkspace};
 use crate::features::NyaTermApp;
-use crate::models::{MainMode, NavItem, PanelSide, WorkspaceTabId};
+use crate::models::{NavItem, PanelSide, WorkspaceTabId};
 
 impl NyaTermApp {
     pub(in crate::features) fn open_file_manager_tab(
@@ -156,7 +156,6 @@ impl NyaTermApp {
         self.shell.workspace.focused_group = self.shell.sync_terminal_windows_active_tab(&key);
         self.shell.set_pane_focus_mode(false);
         self.shell.navigation.selected_nav = NavItem::Workspace;
-        self.shell.navigation.main_mode = MainMode::Workspace;
         self.shell.request_session_tab_scroll_into_view();
         self.close_action_link_menu(cx);
         self.collapse_sidebars_for_file_manager(cx);

@@ -289,7 +289,6 @@ impl NyaTermApp {
             start_workspace,
             connection_panel,
             settings_panel,
-            native_settings_panel: None,
             transfer_panel,
             notes: NotesFeatureState::new(),
             notes_panel,

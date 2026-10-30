@@ -73,6 +73,7 @@ struct SettingsPromptState {
     diagnostics_path: Option<DiagnosticsPathPromptKind>,
     keyword_highlight_path: Option<KeywordHighlightPathPromptKind>,
     snapshot_password: Option<SnapshotPasswordPromptState>,
+    quit_session_count: Option<usize>,
 }
 
 pub(in crate::features) struct SettingsFeatureFocus {
@@ -249,6 +250,18 @@ impl SettingsFeatureState {
             draft_dirty_domains: HashSet::new(),
             panel_refresh_requested: false,
         }
+    }
+
+    pub(in crate::features) fn begin_quit_confirmation(&mut self, count: usize) -> bool {
+        if self.prompts.quit_session_count.is_some() {
+            return false;
+        }
+        self.prompts.quit_session_count = Some(count);
+        true
+    }
+
+    pub(in crate::features) fn take_quit_confirmation(&mut self) -> Option<usize> {
+        self.prompts.quit_session_count.take()
     }
 
     pub(in crate::features) fn request_panel_refresh(&mut self) -> bool {
@@ -2300,5 +2313,15 @@ mod tests {
                 SettingsPersistenceDomain::Transfer,
             ]
         );
+    }
+    #[test]
+    fn quit_prompt_retains_one_request_and_can_be_retried_after_cancel() {
+        let mut state = settings_state();
+        assert!(state.begin_quit_confirmation(3));
+        assert!(!state.begin_quit_confirmation(9));
+        assert_eq!(state.take_quit_confirmation(), Some(3));
+        assert_eq!(state.take_quit_confirmation(), None);
+        assert!(state.begin_quit_confirmation(0));
+        assert_eq!(state.take_quit_confirmation(), Some(0));
     }
 }

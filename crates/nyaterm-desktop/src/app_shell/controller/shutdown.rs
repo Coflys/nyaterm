@@ -363,11 +363,15 @@ impl DesktopController {
                 })
             })
             .collect::<Vec<_>>();
-        // Settings has one owner. Route process quit through it so its theme draft
-        // cannot be lost just because another workspace has the most recent session.
+        // Route process quit through the settings owner so its theme draft is
+        // handled first; the dirty-draft gate then visits any other window that
+        // holds its own settings tab draft.
         let workspace_id = self
-            .settings_owner_workspace_id
-            .filter(|id| ready.contains(id))
+            .settings_owners
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| ready.contains(id))
             .or_else(|| {
                 ready.iter().copied().find(|id| {
                     self.windows.get(id).is_some_and(|entry| {
@@ -475,7 +479,8 @@ impl DesktopController {
         }
     }
 
-    /// Run each workspace's editor gate before releasing any process resources.
+    /// Run each workspace's unsaved-draft gate before releasing any process
+    /// resources. Covers editor documents and all per-window settings drafts.
     pub fn defer_quit_for_dirty_editors(
         &mut self,
         current: WorkspaceId,
@@ -488,10 +493,11 @@ impl DesktopController {
             let dirty = entry
                 .shell
                 .update(cx, |shell, cx| {
-                    shell
-                        .app
-                        .as_ref()
-                        .is_some_and(|app| app.read(cx).has_unconfirmed_editor_changes())
+                    shell.app.as_ref().is_some_and(|app| {
+                        let app = app.read(cx);
+                        app.has_unconfirmed_editor_changes()
+                            || app.has_unconfirmed_settings_changes()
+                    })
                 })
                 .unwrap_or(false);
             dirty.then(|| (entry.shell.clone(), entry.handle))

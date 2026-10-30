@@ -529,7 +529,7 @@ mod tests {
         TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
     };
     use crate::features::test_support::{app_with_visible_local_session, editor_document};
-    use crate::models::{NavItem, SmartSplitMode, TerminalWindowNode, WorkspaceTabId};
+    use crate::models::{SmartSplitMode, TerminalWindowNode, WorkspaceTabId};
     use crate::test_support::TestAppCleanup;
 
     use super::{
@@ -669,8 +669,11 @@ mod tests {
                         .is_none()
                 );
             }
-            app.shell.restore_terminal_window_tree(None);
-            app.shell.show_page(NavItem::Settings);
+            app.shell
+                .restore_terminal_window_tree(Some(TerminalWindowNode::leaf(
+                    vec!["local".into(), WorkspaceTabId::Settings.layout_key()],
+                    Some(WorkspaceTabId::Settings.layout_key()),
+                )));
             assert!(app.terminal_session_at_point(position).is_none());
             assert!(
                 app.suggestion_overlay_position_for_session(Some("local"), 0, 0, 340., 100.)
