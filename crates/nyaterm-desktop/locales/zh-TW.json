@@ -2146,6 +2146,13 @@
     "terminalPath": "終端路徑",
     "ungroupedConnections": "未分組",
     "user": "使用者",
+    "windtermMasterPasswordTitle": "WindTerm 主密碼",
+    "windtermMasterPasswordDesc": "此 WindTerm profile 已啟用主密碼。請輸入主密碼以解密儲存的自動登入資訊。",
+    "windtermMasterPasswordConfirm": "匯入",
+    "windtermMasterPasswordRequired": "請輸入 WindTerm 主密碼",
+    "importInProgress": "正在匯入工作階段…",
+    "importCancelled": "已取消匯入",
+    "importPartialCredentials": "已匯入 %{count} 個工作階段，其中 %{incomplete} 個工作階段的認證資料未完整匯入。",
     "windtermHint": ".wind/profiles/default.v10/terminal/user.sessions",
     "workingDir": "工作目錄"
   },
