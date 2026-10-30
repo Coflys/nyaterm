@@ -536,6 +536,8 @@ pub(crate) struct CommandSuggestionItem {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CommandSuggestionState {
     pub(crate) session_id: String,
+    pub(crate) input_version: u64,
+    pub(crate) sync_revision: u64,
     pub(crate) draft: String,
     pub(crate) items: Vec<CommandSuggestionItem>,
     pub(crate) selected_index: Option<usize>,
