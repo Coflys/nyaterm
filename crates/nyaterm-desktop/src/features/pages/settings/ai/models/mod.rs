@@ -16,6 +16,23 @@ use nyaterm_core::ai::{AiModelSource, AiProviderKind};
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaSelectOption};
 use rust_i18n::t;
 
+fn model_match_rank(name: &str, query: &str) -> u8 {
+    let name = name.trim().to_lowercase();
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return 0;
+    }
+    if name == query {
+        0
+    } else if name.starts_with(&query) {
+        1
+    } else if name.contains(&query) {
+        2
+    } else {
+        3
+    }
+}
+
 impl SettingsPanel {
     pub(in crate::features) fn ai_models_settings_section(
         &mut self,
@@ -547,7 +564,18 @@ impl SettingsPanel {
                         })),
                 ),
         );
-        for model_id in &view.model_order {
+        let mut model_order = view.model_order.clone();
+        if !draft.trim().is_empty() {
+            model_order.sort_by_cached_key(|model_id| {
+                config
+                    .models
+                    .iter()
+                    .find(|model| &model.id == model_id)
+                    .map(|model| model_match_rank(&model.name, &draft))
+                    .unwrap_or(3)
+            });
+        }
+        for model_id in &model_order {
             let Some(model) = config.models.iter().find(|model| &model.id == model_id) else {
                 continue;
             };
@@ -792,4 +820,17 @@ fn model_badge(palette: ThemePalette, text: impl Into<SharedString>) -> impl Int
         .text_size(px(10.))
         .text_color(rgb(palette.text_muted))
         .child(text.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_match_rank;
+
+    #[test]
+    fn model_name_matching_prioritizes_exact_prefix_and_contains() {
+        assert_eq!(model_match_rank("gpt-4o", "GPT-4O"), 0);
+        assert_eq!(model_match_rank("gpt-4o-mini", "gpt"), 1);
+        assert_eq!(model_match_rank("my-gpt-4o", "gpt"), 2);
+        assert_eq!(model_match_rank("claude-3", "gpt"), 3);
+    }
 }
