@@ -154,6 +154,7 @@ pub(crate) enum ConnectionEditorSelect {
     SshAlgorithmMode,
     SshProfile,
     SshTerminalType,
+    RdpBackend,
     RdpCertificatePolicy,
     RdpDisplayMode,
     RdpClipboardMode,
@@ -310,6 +311,7 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) username: String,
     pub(crate) domain: String,
     pub(crate) auth_mode: String,
+    pub(crate) rdp_backend: String,
     pub(crate) rdp_security: nyaterm_core::RdpSecuritySettings,
     pub(crate) rdp_display: nyaterm_core::RdpDisplaySettings,
     pub(crate) rdp_clipboard: nyaterm_core::RdpClipboardSettings,
@@ -534,6 +536,8 @@ pub(crate) struct CommandSuggestionItem {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CommandSuggestionState {
     pub(crate) session_id: String,
+    pub(crate) input_version: u64,
+    pub(crate) sync_revision: u64,
     pub(crate) draft: String,
     pub(crate) items: Vec<CommandSuggestionItem>,
     pub(crate) selected_index: Option<usize>,

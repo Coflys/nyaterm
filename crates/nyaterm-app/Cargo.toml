@@ -38,6 +38,11 @@ path = "src/lib.rs"
 name = "nyaterm"
 path = "src/main.rs"
 
+[[test]]
+name = "panic_report"
+path = "tests/panic_report.rs"
+harness = false
+
 
 [features]
 default = ["font-kit"]

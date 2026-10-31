@@ -214,8 +214,20 @@ pub(super) fn set_connection_editor_select_value(
                 _ => None,
             };
         }
+        ConnectionEditorSelect::RdpBackend => {
+            let value = value.unwrap_or_else(|| "builtin".to_string());
+            if !cfg!(windows) && value == "windows" {
+                return false;
+            }
+            editor.rdp_backend = value;
+        }
         ConnectionEditorSelect::RdpCertificatePolicy => {
-            editor.rdp_security.certificate_policy = value.unwrap_or_else(|| "prompt".to_string());
+            if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
+                editor.rdp_security.windows_authentication = value;
+            } else {
+                editor.rdp_security.certificate_policy =
+                    value.unwrap_or_else(|| "prompt".to_string());
+            }
         }
         ConnectionEditorSelect::RdpDisplayMode => {
             editor.rdp_display.mode = value.unwrap_or_else(|| "fit-window".to_string());

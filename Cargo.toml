@@ -1,10 +1,11 @@
 [workspace]
-# The application spawns three helpers at runtime and looks for them beside its own
-# executable, so a bare `cargo build` must produce all four binaries.
+# The application resolves its helpers beside its executable. Include the Windows
+# ActiveX host in development builds; release packaging filters it by platform.
 default-members = [
     "crates/nyaterm-app",
     "crates/nyaterm-mcp",
     "crates/nyaterm-rdp-helper",
+    "crates/nyaterm-activex-helper",
     "crates/nyaterm-vnc-helper",
 ]
 members = [
@@ -17,8 +18,10 @@ members = [
     "crates/nyaterm-plugin-api",
     "crates/nyaterm-plugin-host",
     "crates/nyaterm-rdp-helper",
+    "crates/nyaterm-activex-helper",
     "crates/nyaterm-remote-desktop",
     "crates/nyaterm-store",
+    "crates/nyaterm-sync",
     "crates/nyaterm-terminal",
     "crates/nyaterm-terminal-gpui",
     "crates/nyaterm-transport",
@@ -42,8 +45,13 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+automerge = "=0.12.0"
 httpdate = "1.0"
 aes-gcm = "0.11"
+aes = { version = "0.8", features = ["zeroize"] }
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha3 = "0.10"
 argon2 = { version = "0.5.3", features = ["zeroize"] }
 alacritty_terminal = "0.26.1-dev"
 anyhow = "1"
@@ -88,6 +96,7 @@ nyaterm-plugin-api = { path = "crates/nyaterm-plugin-api" }
 nyaterm-plugin-host = { path = "crates/nyaterm-plugin-host" }
 nyaterm-remote-desktop = { path = "crates/nyaterm-remote-desktop" }
 nyaterm-store = { path = "crates/nyaterm-store" }
+nyaterm-sync = { path = "crates/nyaterm-sync" }
 nyaterm-terminal = { path = "crates/nyaterm-terminal" }
 nyaterm-terminal-gpui = { path = "crates/nyaterm-terminal-gpui" }
 nyaterm-transport = { path = "crates/nyaterm-transport" }

@@ -31,9 +31,18 @@ APP_NAME = "NyaTerm"
 APP_BIN = "nyaterm"
 # Helper processes the application spawns at runtime. `resolve_helper_path()`
 # in nyaterm-remote-desktop only looks beside the running executable, so each
-# of these must be packaged next to the application binary in every format.
-HELPER_BINS = ("nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-mcp")
+# supported helper must be packaged next to the application binary.
+HELPER_BINS = (
+    "nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-mcp", "nyaterm-activex-helper"
+)
 CONPTY_LICENSE = Path(__file__).with_name("conpty-license.txt")
+
+
+def helper_bins(target: str) -> tuple[str, ...]:
+    return tuple(
+        name for name in HELPER_BINS
+        if name != "nyaterm-activex-helper" or "windows" in target
+    )
 
 
 def conpty_files(target: str) -> tuple[Path, ...]:
@@ -248,7 +257,7 @@ def release_binary_path(target: str, name: str = APP_BIN) -> Path:
 
 
 def helper_binary_paths(target: str) -> list[Path]:
-    return [release_binary_path(target, name) for name in HELPER_BINS]
+    return [release_binary_path(target, name) for name in helper_bins(target)]
 
 
 def build_binary(package: str, name: str, target: str) -> Path:
@@ -274,7 +283,7 @@ def build_binary(package: str, name: str, target: str) -> Path:
 
 def build_application(target: str) -> Path:
     binary = build_binary("nyaterm-app", APP_BIN, target)
-    for name in HELPER_BINS:
+    for name in helper_bins(target):
         build_binary(name, name, target)
     return binary
 

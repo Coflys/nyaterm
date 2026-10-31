@@ -416,6 +416,7 @@ pub(super) struct ConnectionEditorChoice {
     pub search_text: Option<String>,
     pub subtitle: Option<String>,
     pub selected: bool,
+    pub disabled: bool,
 }
 
 impl ConnectionEditorChoice {
@@ -426,6 +427,7 @@ impl ConnectionEditorChoice {
             search_text: None,
             subtitle: None,
             selected,
+            disabled: false,
         }
     }
 

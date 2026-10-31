@@ -29,6 +29,8 @@ mod bootstrap;
 pub(crate) mod native_menu;
 mod shutdown;
 #[cfg(test)]
+mod shutdown_tests;
+#[cfg(test)]
 mod tab_drag_tests;
 mod tab_moves;
 #[cfg(test)]
@@ -96,7 +98,9 @@ pub struct DesktopController {
     windows: HashMap<WorkspaceId, WorkspaceWindow>,
     pending_tab_moves: HashMap<WorkspaceId, MoveTabTreeRequest>,
     tab_drag: TabDragCoordinator,
-    settings_owner_workspace_id: Option<WorkspaceId>,
+    /// Workspaces whose settings tab is open, oldest first. The last entry owns
+    /// the process-wide settings preview.
+    settings_owners: Vec<WorkspaceId>,
     tray: Option<SystemTray>,
     screen_locked: bool,
     most_recent_workspace_id: Option<WorkspaceId>,
@@ -136,7 +140,7 @@ impl DesktopController {
             windows: HashMap::new(),
             pending_tab_moves: HashMap::new(),
             tab_drag: TabDragCoordinator::default(),
-            settings_owner_workspace_id: None,
+            settings_owners: Vec::new(),
             tray: None,
             screen_locked: false,
             recent_activations: RecentActivationCache::default(),
@@ -198,6 +202,12 @@ impl DesktopController {
         Ok(())
     }
 
+    pub(crate) fn sync_operations(
+        &self,
+    ) -> crate::features::sync::operation::CloudSyncOperationRegistry {
+        self.auto_sync.operations.clone()
+    }
+
     pub(crate) fn update_store(&self) -> gpui::Entity<UpdateStore> {
         self.update_store.clone()
     }
@@ -214,6 +224,7 @@ impl DesktopController {
             }
         })
     }
+    #[cfg(test)]
     pub(crate) fn restart_plugins(&mut self, cx: &mut gpui::App) {
         let runtime = self.runtime.clone();
         self.plugin_process

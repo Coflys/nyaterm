@@ -24,6 +24,26 @@ impl ConnectionEditorValidationError {
             algorithm_tab: None,
         };
         match self {
+            Self::RdpRelayUnsupported => {
+                return location(
+                    ConnectionEditorSection::Network,
+                    ConnectionEditorFocusTarget::Heading,
+                );
+            }
+            Self::RdpWindowsAuthenticationRequired => {
+                return location(
+                    ConnectionEditorSection::Security,
+                    ConnectionEditorFocusTarget::Select(
+                        ConnectionEditorSelect::RdpCertificatePolicy,
+                    ),
+                );
+            }
+            Self::RdpClipboardUnsupported => {
+                return location(
+                    ConnectionEditorSection::Session,
+                    ConnectionEditorFocusTarget::Select(ConnectionEditorSelect::RdpClipboardMode),
+                );
+            }
             Self::SshAgentEndpoint(_) => {
                 let target = match editor.agent_endpoint {
                     nyaterm_core::SshAgentEndpoint::Environment { .. } => {
@@ -129,7 +149,10 @@ impl ConnectionEditorValidationError {
             ConnectionEditorValidationError::SftpShellDetectionTimeoutInvalid => {
                 ConnectionEditorField::SftpShellDetectionTimeout
             }
-            ConnectionEditorValidationError::SshAgentEndpoint(_)
+            ConnectionEditorValidationError::RdpWindowsAuthenticationRequired
+            | ConnectionEditorValidationError::RdpRelayUnsupported
+            | ConnectionEditorValidationError::RdpClipboardUnsupported
+            | ConnectionEditorValidationError::SshAgentEndpoint(_)
             | ConnectionEditorValidationError::SshAgentForwarding { .. }
             | ConnectionEditorValidationError::SshAlgorithms(_) => {
                 unreachable!("specialized validation locations handled above")

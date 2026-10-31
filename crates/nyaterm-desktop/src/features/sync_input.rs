@@ -32,6 +32,8 @@ pub(in crate::features) struct SyncInputFeatureState {
     selected_id: Option<String>,
     delete_pending: Option<String>,
     broadcast_to_all: bool,
+    // Runtime-only: even toggling routing on and back off invalidates old fills.
+    revision: u64,
 }
 
 pub(in crate::features) enum SyncSessionPauseResult {
@@ -47,10 +49,19 @@ pub(in crate::features) struct SyncInputTransferBundle {
 }
 
 impl SyncInputFeatureState {
+    pub(in crate::features) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn note_routing_change(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub(in crate::features) fn detach_sessions_for_transfer(
         &mut self,
         session_ids: &[String],
     ) -> SyncInputTransferBundle {
+        self.note_routing_change();
         let original_groups = self.groups.clone();
         let mut moved_groups = Vec::new();
         for group in &mut self.groups {
@@ -79,6 +90,7 @@ impl SyncInputFeatureState {
         &mut self,
         bundle: SyncInputTransferBundle,
     ) {
+        self.note_routing_change();
         for mut group in bundle.moved_groups {
             if self.groups.iter().any(|existing| existing.id == group.id) {
                 group.id = format!("sync-group-{}", uuid());
@@ -92,6 +104,7 @@ impl SyncInputFeatureState {
         &mut self,
         bundle: SyncInputTransferBundle,
     ) {
+        self.note_routing_change();
         self.groups = bundle.original_groups;
         self.repair_selection();
     }
@@ -113,6 +126,7 @@ impl SyncInputFeatureState {
             selected_id: None,
             delete_pending: None,
             broadcast_to_all: false,
+            revision: 0,
         }
     }
 
@@ -171,6 +185,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn create_group(&mut self) {
+        self.note_routing_change();
         let index = self.groups.len();
         let group = SyncInputGroup {
             id: format!("sync-group-{}", uuid()),
@@ -222,6 +237,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn delete_selected(&mut self) -> bool {
+        self.note_routing_change();
         let Some(group_id) = self.selected_id.clone() else {
             return false;
         };
@@ -285,6 +301,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_ids: Vec<String>,
     ) -> bool {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return false;
         };
@@ -300,6 +317,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn add_selected_sessions(&mut self, session_ids: Vec<String>) -> bool {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return false;
         };
@@ -315,6 +333,7 @@ impl SyncInputFeatureState {
         &mut self,
         remove_ids: &HashSet<String>,
     ) -> bool {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return false;
         };
@@ -326,6 +345,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn toggle_selected_enabled(&mut self) -> Option<bool> {
+        self.note_routing_change();
         let group = self.selected_group_mut()?;
         group.enabled = !group.enabled;
         Some(group.enabled)
@@ -336,6 +356,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_id: String,
     ) -> Option<bool> {
+        self.note_routing_change();
         let group = self.selected_group_mut()?;
         if group.session_ids.iter().any(|id| id == &session_id) {
             group.session_ids.retain(|id| id != &session_id);
@@ -351,6 +372,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_id: String,
     ) -> SyncSessionPauseResult {
+        self.note_routing_change();
         let Some(group) = self.selected_group_mut() else {
             return SyncSessionPauseResult::NoGroup;
         };
@@ -424,6 +446,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn toggle_broadcast_to_all(&mut self) -> bool {
+        self.note_routing_change();
         self.broadcast_to_all = !self.broadcast_to_all;
         self.broadcast_to_all
     }
@@ -432,6 +455,7 @@ impl SyncInputFeatureState {
         &mut self,
         session_id: String,
     ) -> SyncSessionPauseResult {
+        self.note_routing_change();
         let Some(group_id) = self
             .active_group_for_session(&session_id)
             .map(|group| group.id.clone())
@@ -451,6 +475,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn leave_active_group(&mut self, session_id: &str) -> bool {
+        self.note_routing_change();
         let Some(group_id) = self
             .active_group_for_session(session_id)
             .map(|group| group.id.clone())
@@ -467,6 +492,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn close_active_group(&mut self, session_id: &str) -> bool {
+        self.note_routing_change();
         let Some(group_id) = self
             .active_group_for_session(session_id)
             .map(|group| group.id.clone())
@@ -481,6 +507,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn purge_session(&mut self, session_id: &str) {
+        self.note_routing_change();
         for group in &mut self.groups {
             group.session_ids.retain(|id| id != session_id);
             group.paused_session_ids.retain(|id| id != session_id);
@@ -490,6 +517,7 @@ impl SyncInputFeatureState {
     }
 
     pub(in crate::features) fn replace_session_id(&mut self, old_id: &str, new_id: &str) {
+        self.note_routing_change();
         for group in &mut self.groups {
             for session_id in &mut group.session_ids {
                 if session_id == old_id {

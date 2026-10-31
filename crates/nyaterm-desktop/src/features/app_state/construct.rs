@@ -67,6 +67,7 @@ impl NyaTermApp {
             process_state,
             update,
             plugins,
+            sync_operations,
         } = process_entities;
         let session_manager = session_hub.manager();
         let ssh_connections = session_hub.ssh_connections();
@@ -289,7 +290,6 @@ impl NyaTermApp {
             start_workspace,
             connection_panel,
             settings_panel,
-            native_settings_panel: None,
             transfer_panel,
             notes: NotesFeatureState::new(),
             notes_panel,
@@ -375,11 +375,12 @@ impl NyaTermApp {
             remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
             translation: TranslationFeatureState::new(translation_settings),
             update,
-            cloud_sync: CloudSyncFeatureState::new(
-                cloud_sync_settings,
-                cloud_sync_state,
-                Vec::new(),
-            ),
+            cloud_sync: {
+                let mut state =
+                    CloudSyncFeatureState::new(cloud_sync_settings, cloud_sync_state, Vec::new());
+                state.operations = sync_operations;
+                state
+            },
             session: SessionFeatureState::new(
                 session_manager,
                 ssh_connections,
@@ -501,6 +502,7 @@ impl NyaTermApp {
                 process_state,
                 update,
                 cx.new(|_| crate::features::plugins::PluginProcess::empty()),
+                Default::default(),
             ),
             workspace_init,
             NyaTermStoreClients::new(store_ui, store_blocking),

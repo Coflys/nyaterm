@@ -354,7 +354,15 @@ impl NyaTermApp {
         }
         let input_wake_duration = input_wake_started_at.elapsed();
 
-        self.note_shell_editing_input(&primary_bytes, cx);
+        // Kitty can encode Enter as CSI-u. Tracking/history still consume its
+        // logical submission, while each session keeps its own wire encoding.
+        let logical_bytes: &[u8] =
+            if event.keystroke.key == "enter" && !event.keystroke.modifiers.modified() {
+                b"\r"
+            } else {
+                &primary_bytes
+            };
+        self.note_shell_editing_input(logical_bytes, cx);
         let suggestion_started_at = Instant::now();
         if terminal_should_track_command_suggestion_input(
             track_suggestions,
@@ -362,13 +370,13 @@ impl NyaTermApp {
                 .summary()
                 .interaction_command_suggestions_enabled,
         ) {
-            self.note_command_suggestion_input(&primary_bytes, cx);
+            self.note_command_suggestion_input(logical_bytes, cx);
         }
         let suggestion_duration = suggestion_started_at.elapsed();
 
         let session_refs: Vec<&str> = ok_sessions.iter().map(String::as_str).collect();
         let history_started_at = Instant::now();
-        self.record_command_history_for_sessions(&session_refs, &primary_bytes);
+        self.record_command_history_for_sessions(&session_refs, logical_bytes);
         let history_duration = history_started_at.elapsed();
 
         let should_notify = synced > 0 || failed > 0;
@@ -882,6 +890,9 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.suggestion_fill = None;
+        }
         self.commands.cancel_staged_quick_command(session_id);
         self.write_guarded_terminal_input(session_id, bytes)
     }
@@ -1144,6 +1155,9 @@ impl NyaTermApp {
         wire_bytes: &[u8],
         recording_bytes: &[u8],
     ) -> Result<(), String> {
+        if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.suggestion_fill = None;
+        }
         self.commands.cancel_staged_quick_command(session_id);
         if self.security.screen_locked() {
             return Err("screen locked".to_string());

@@ -22,6 +22,7 @@ pub mod models;
 pub mod natural_order;
 pub mod network_cli_prompt;
 pub mod note_export;
+pub mod packaging;
 pub mod plugins;
 pub mod portable_snapshot;
 pub mod raw_cli_capture;
@@ -30,6 +31,7 @@ pub mod runtime;
 pub mod secret;
 pub mod session_import;
 pub mod ssh_keys;
+pub mod sync_schema;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

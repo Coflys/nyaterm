@@ -1,4 +1,3 @@
-use super::events::set_rdp_view_error;
 use super::events::set_remote_view_error;
 use crate::features::NyaTermApp;
 use gpui::AppContext as _;
@@ -6,7 +5,6 @@ use gpui::Context;
 use gpui::IntoElement as _;
 use nyaterm_remote_desktop::RdpError;
 use nyaterm_remote_desktop::RdpErrorKind;
-use nyaterm_remote_desktop::RdpSessionConfig;
 use nyaterm_remote_desktop::RemoteDesktopViewState;
 use nyaterm_remote_desktop::VncError;
 use nyaterm_remote_desktop::VncSessionConfig;
@@ -138,20 +136,6 @@ impl NyaTermApp {
         });
     }
 
-    pub(in crate::features) fn create_rdp_runtime(
-        &mut self,
-        config: RdpSessionConfig,
-    ) -> Result<String, RdpError> {
-        self.remote_desktop.create_rdp_session(config)
-    }
-
-    pub(in crate::features) fn create_failed_rdp_runtime(&mut self, error: RdpError) -> String {
-        let session_id = nyaterm_core::uuid();
-        self.remote_desktop
-            .insert_failed_session(session_id.clone(), error.kind, error.message);
-        session_id
-    }
-
     pub(in crate::features) fn create_vnc_runtime(
         &mut self,
         config: VncSessionConfig,
@@ -173,6 +157,21 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if let Some(crate::models::SessionLaunchConfig::Rdp(config)) = self
+            .session
+            .metadata(session_id)
+            .map(|metadata| &metadata.launch_config)
+            && let Err(error) = config.backend.validate_config(config)
+        {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                error.kind,
+                error.message,
+            );
+            self.settle_remote_desktop_restore(cx);
+            cx.notify();
+            return;
+        }
         let route_missing = !self.remote_desktop.routes.contains_key(session_id);
         if route_missing {
             let connection = self
@@ -192,6 +191,21 @@ impl NyaTermApp {
                     })
                 });
             if let Some(connection) = connection {
+                if let Some(crate::models::SessionLaunchConfig::Rdp(config)) = self
+                    .session
+                    .metadata(session_id)
+                    .map(|metadata| &metadata.launch_config)
+                    && let Err(error) = config.backend.validate_route(true)
+                {
+                    self.remote_desktop.insert_failed_session(
+                        session_id.to_string(),
+                        error.kind,
+                        error.message,
+                    );
+                    self.settle_remote_desktop_restore(cx);
+                    cx.notify();
+                    return;
+                }
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     session.state = RemoteDesktopViewState::Connecting;
                 }
@@ -266,6 +280,16 @@ impl NyaTermApp {
             crate::models::SessionLaunchConfig::Rdp(config) => config,
             _ => return,
         };
+        if let Err(error) = config.backend.validate_config(&config) {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                error.kind,
+                error.message,
+            );
+            self.settle_remote_desktop_restore(cx);
+            cx.notify();
+            return;
+        }
         let mut authentication_disabled = false;
         if config.password.is_none()
             && let Some(connection_id) = metadata.source_connection_id.as_deref()
@@ -310,6 +334,11 @@ impl NyaTermApp {
             .sessions
             .get(session_id)
             .is_some_and(|session| session.dynamic_resize_disabled);
+        let measured = self
+            .remote_desktop
+            .sessions
+            .get(session_id)
+            .map(|session| (session.viewport, session.viewport_scale_factor));
         let route = self.remote_desktop.routes.remove(session_id);
         let _ = self.close_rdp_runtime(session_id);
         if let Some(route) = route {
@@ -317,31 +346,20 @@ impl NyaTermApp {
                 .routes
                 .insert(session_id.to_string(), route);
         }
-        match self
-            .remote_desktop
-            .manager
-            .create_session_with_id(session_id.to_string(), config)
-        {
-            Ok(_) => {
-                self.remote_desktop
-                    .insert_connecting(session_id.to_string());
-                if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
-                    session.reconnect_attempts = reconnect_attempts;
-                    session.dynamic_resize_disabled = dynamic_resize_disabled;
-                }
-                if let Some(metadata) = self.session.metadata_mut(session_id) {
-                    metadata.disconnected = false;
-                }
-                self.shell.set_status("RDP reconnecting".to_string());
-            }
-            Err(error) => {
-                self.remote_desktop
-                    .insert_connecting(session_id.to_string());
-                if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
-                    set_rdp_view_error(session, error.kind, error.message);
-                }
+        self.remote_desktop
+            .insert_connecting(session_id.to_string());
+        if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+            session.reconnect_attempts = reconnect_attempts;
+            session.dynamic_resize_disabled = dynamic_resize_disabled;
+            // The panel this tab draws into has not changed shape, and the next
+            // connect should not have to rediscover it.
+            if let Some((viewport, viewport_scale_factor)) = measured {
+                session.viewport = viewport;
+                session.viewport_scale_factor = viewport_scale_factor;
             }
         }
+        self.shell.set_status("RDP reconnecting".to_string());
+        self.begin_rdp_runtime(session_id, config, cx);
     }
 
     pub(super) fn restart_vnc_runtime(
@@ -519,7 +537,21 @@ impl NyaTermApp {
             );
             self.release_remote_keys(session_id);
         }
+        // ActiveX sessions use their own isolated host, not the IronRDP manager;
+        // asking the manager to close one would fail and leave the tab behind.
+        #[cfg(windows)]
+        let native = self
+            .remote_desktop
+            .sessions
+            .get(session_id)
+            .is_some_and(|session| {
+                session.native_rdp.is_some() || session.native_rdp_config.is_some()
+            });
         self.remote_desktop.remove_session(session_id);
+        #[cfg(windows)]
+        if native {
+            return Ok(());
+        }
         self.remote_desktop.manager.close_detached(session_id)
     }
 
@@ -631,6 +663,12 @@ impl NyaTermApp {
     }
 }
 
+/// Only a connection that was lost may be retried automatically.
+///
+/// A session the server ended -- most often because another connection took it over --
+/// ends its replacement for the same reason, so two NyaTerm clients chasing each other
+/// never settles and neither side gets a usable desktop. Those arrive as
+/// [`RdpErrorKind::Session`] and wait for the view's manual retry instead.
 pub(super) fn rdp_error_is_retryable(kind: RdpErrorKind) -> bool {
     matches!(
         kind,
@@ -638,7 +676,6 @@ pub(super) fn rdp_error_is_retryable(kind: RdpErrorKind) -> bool {
             | RdpErrorKind::ConnectionRefused
             | RdpErrorKind::Tls
             | RdpErrorKind::Transport
-            | RdpErrorKind::Session
     )
 }
 
@@ -672,11 +709,17 @@ pub(super) fn rdp_reconnect_delay(attempt: u32, jitter_ms: u64) -> Duration {
         + Duration::from_millis(jitter_ms.min(249))
 }
 
-pub(super) fn clear_rdp_reconnect_after_frame(
+pub(super) fn cancel_rdp_reconnect_schedule(
     session: &mut crate::features::remote_desktop::state::RemoteDesktopSessionState,
 ) {
     session.reconnect_attempts = 0;
     session.reconnect_at = None;
+}
+
+pub(super) fn clear_rdp_reconnect_after_frame(
+    session: &mut crate::features::remote_desktop::state::RemoteDesktopSessionState,
+) {
+    cancel_rdp_reconnect_schedule(session);
     session.error = None;
 }
 

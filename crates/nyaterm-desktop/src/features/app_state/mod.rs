@@ -44,6 +44,7 @@ pub(crate) struct NyaTermProcessEntities {
     pub(crate) process_state: gpui::Entity<crate::app_shell::ProcessStateStore>,
     pub(crate) update: gpui::Entity<super::update::UpdateStore>,
     pub(crate) plugins: gpui::Entity<super::plugins::PluginProcess>,
+    pub(crate) sync_operations: super::sync::operation::CloudSyncOperationRegistry,
 }
 
 impl NyaTermProcessEntities {
@@ -51,11 +52,13 @@ impl NyaTermProcessEntities {
         process_state: gpui::Entity<crate::app_shell::ProcessStateStore>,
         update: gpui::Entity<super::update::UpdateStore>,
         plugins: gpui::Entity<super::plugins::PluginProcess>,
+        sync_operations: super::sync::operation::CloudSyncOperationRegistry,
     ) -> Self {
         Self {
             process_state,
             update,
             plugins,
+            sync_operations,
         }
     }
 }
@@ -81,7 +84,6 @@ pub struct NyaTermApp {
     pub(in crate::features) start_workspace: StartWorkspaceFeatureState,
     pub(in crate::features) connection_panel: gpui::Entity<ConnectionPanel>,
     pub(in crate::features) settings_panel: gpui::Entity<SettingsPanel>,
-    pub(in crate::features) native_settings_panel: Option<gpui::WeakEntity<SettingsPanel>>,
     pub(in crate::features) transfer_panel: gpui::Entity<TransferPanel>,
     pub(in crate::features) notes: NotesFeatureState,
     pub(in crate::features) notes_panel: gpui::Entity<NotesPanel>,

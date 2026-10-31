@@ -29,7 +29,7 @@ def staged_package(target: str):
         binary.parent.mkdir()
         binary.write_bytes(b"application")
         suffix = ".exe" if "windows" in target else ""
-        helpers = [binary.parent / f"{name}{suffix}" for name in package_native.HELPER_BINS]
+        helpers = [binary.parent / f"{name}{suffix}" for name in package_native.helper_bins(target)]
         for helper in helpers:
             helper.write_bytes(b"helper")
         if "windows" in target:
@@ -163,7 +163,7 @@ class PackageNativeTests(unittest.TestCase):
                     verify_native_package.verify_linux_desktop(desktop.read_text(), executable, str(desktop), identity)
                     self.assertTrue((payload / "usr" / "share" / "icons" / "hicolor" / "128x128" / "apps" / f"{identity.desktop_id}.png").is_file())
                     app_root = payload / "usr" / "bin" if payload.name == "NyaTerm.AppDir" else payload / "opt" / identity.desktop_id
-                    for name in ("nyaterm", *package_native.HELPER_BINS):
+                    for name in ("nyaterm", *package_native.helper_bins("x86_64-unknown-linux-gnu")):
                         self.assertTrue((app_root / name).is_file())
 
     def test_release_tag_is_normalized(self) -> None:
@@ -253,11 +253,11 @@ class PackageNativeTests(unittest.TestCase):
             linux = package_native.helper_binary_paths("x86_64-unknown-linux-gnu")
             windows = package_native.helper_binary_paths("aarch64-pc-windows-msvc")
         self.assertEqual(
-            [path.name for path in linux], list(package_native.HELPER_BINS)
+            [path.name for path in linux], list(package_native.helper_bins("x86_64-unknown-linux-gnu"))
         )
         self.assertEqual(
             [path.name for path in windows],
-            [f"{name}.exe" for name in package_native.HELPER_BINS],
+            [f"{name}.exe" for name in package_native.helper_bins("aarch64-pc-windows-msvc")],
         )
         application = package_native.release_binary_path("x86_64-unknown-linux-gnu")
         for path in linux:
@@ -282,7 +282,7 @@ class PackageNativeTests(unittest.TestCase):
                 copied = package_native.copy_helpers(destination, target)
             self.assertEqual(
                 sorted(path.name for path in copied),
-                sorted(package_native.HELPER_BINS),
+                sorted(package_native.helper_bins(target)),
             )
             for path in copied:
                 self.assertTrue(path.is_file())
@@ -298,7 +298,7 @@ class PackageNativeTests(unittest.TestCase):
                 mock.patch.object(package_native, "DIST_DIR", root / "dist"),
                 mock.patch.object(package_native.prepare_conpty, "STAGING", root / "staging"),
                 mock.patch.object(package_native, "run"),
-                mock.patch.object(package_native, "helper_binary_paths", return_value=[root / "build" / f"{name}.exe" for name in package_native.HELPER_BINS]),
+                mock.patch.object(package_native, "helper_binary_paths", return_value=[root / "build" / f"{name}.exe" for name in package_native.helper_bins(target)]),
                 mock.patch.object(
                     package_native, "find_makensis", return_value="makensis"
                 ),
