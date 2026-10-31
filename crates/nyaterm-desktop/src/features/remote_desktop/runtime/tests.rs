@@ -485,7 +485,10 @@ fn vnc_authentication_failure_prompts_for_a_missing_password() {
                 "vnc-auth",
                 VncRuntimeEvent::Error {
                     session_id: "vnc-auth".into(),
-                    error: VncError::new(VncErrorKind::Authentication, "VNC authentication failed"),
+                    error: VncError {
+                        password_required: true,
+                        ..VncError::new(VncErrorKind::Authentication, "VNC password required")
+                    },
                     fatal: true,
                 },
                 window,
@@ -516,6 +519,20 @@ fn vnc_authentication_failure_prompts_for_a_missing_password() {
 /// same credential would loop.
 #[test]
 fn vnc_authentication_failure_with_a_stored_password_reports_the_error() {
+    assert_vnc_authentication_failure_reports_the_error(Some("wrong"), false);
+}
+
+#[test]
+fn vnc_security_failure_without_a_password_does_not_prompt() {
+    assert_vnc_authentication_failure_reports_the_error(None, false);
+}
+
+#[test]
+fn vnc_rejected_source_connection_password_does_not_prompt() {
+    assert_vnc_authentication_failure_reports_the_error(None, true);
+}
+
+fn assert_vnc_authentication_failure_reports_the_error(password: Option<&str>, source: bool) {
     use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window};
     use nyaterm_core::test_support::TestTempDir;
     use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
@@ -552,7 +569,7 @@ fn vnc_authentication_failure_with_a_stored_password_reports_the_error() {
                 name: "VNC rejected".into(),
                 host: "127.0.0.1".into(),
                 port: 5900,
-                password: Some("wrong".to_string().into()),
+                password: password.map(|value| value.to_string().into()),
                 security: VncSecurityConfig {
                     mode: VncSecurityMode::Auto,
                 },
@@ -562,6 +579,37 @@ fn vnc_authentication_failure_with_a_stored_password_reports_the_error() {
                 shared: true,
                 view_only: false,
             });
+            if source {
+                let connection: nyaterm_core::SavedConnection =
+                    serde_json::from_value(serde_json::json!({
+                        "id": "vnc-source", "name": "Source", "type": "vnc", "host": "127.0.0.1",
+                        "auth": { "mode": "password", "password": "wrong", "has_password": false }
+                    }))
+                    .unwrap();
+                assert!(inline_remote_desktop_password(connection.auth.as_ref()).is_some());
+                app.connection_state
+                    .replace_loaded(vec![connection], vec![]);
+                app.session
+                    .metadata_mut("vnc-rejected")
+                    .unwrap()
+                    .source_connection_id = Some("vnc-source".into());
+                let (effective, password_id) =
+                    app.resolve_vnc_restart_config("vnc-rejected").unwrap();
+                assert_eq!(
+                    effective.password.as_ref().unwrap().expose_secret(),
+                    "wrong"
+                );
+                assert!(password_id.is_none());
+                let SessionLaunchConfig::Vnc(original) =
+                    &app.session.metadata("vnc-rejected").unwrap().launch_config
+                else {
+                    panic!("VNC launch");
+                };
+                assert!(
+                    original.password.is_none(),
+                    "inherited secrets stay out of metadata"
+                );
+            }
             app.remote_desktop.insert_connecting("vnc-rejected".into());
             app.apply_vnc_control_event(
                 "vnc-rejected",

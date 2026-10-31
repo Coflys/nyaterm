@@ -617,6 +617,7 @@ struct SessionOutput {
     epoch: u64,
     generation: u64,
     cursor_shape_id: u64,
+    last_state: Option<VncSessionState>,
 }
 
 impl SessionOutput {
@@ -627,6 +628,7 @@ impl SessionOutput {
             generation: 0,
             epoch: 0,
             cursor_shape_id: 0,
+            last_state: None,
         }
     }
 
@@ -640,12 +642,17 @@ impl SessionOutput {
         self.send(Outbound::Control(message))
     }
 
-    fn state(&self, state: VncSessionState, message: Option<String>) -> Result<(), VncError> {
+    fn state(&mut self, state: VncSessionState, message: Option<String>) -> Result<(), VncError> {
+        if self.last_state == Some(state) && message.is_none() {
+            return Ok(());
+        }
         self.control(VncControlMessage::State {
             session_id: self.session_id.clone(),
             state,
             message,
-        })
+        })?;
+        self.last_state = Some(state);
+        Ok(())
     }
 
     fn error(&self, error: VncError, fatal: bool) {
@@ -1260,12 +1267,20 @@ async fn release_pressed_keys(client: &VncClient, pressed_keys: &mut Vec<u32>) {
 }
 
 fn classify_vnc_error(error: vnc::VncError) -> VncError {
+    if matches!(error, vnc::VncError::NoPassword) {
+        return VncError {
+            password_required: true,
+            ..VncError::new(
+                VncErrorKind::Authentication,
+                "The VNC server requires a password",
+            )
+        };
+    }
     let (kind, message) = match error {
         vnc::VncError::Ra2ServerKeyRejected(_)
         | vnc::VncError::Ra2ServerKeyVerifierRequired
         | vnc::VncError::Ra2ServerHashMismatch
         | vnc::VncError::Ra2Crypto(_)
-        | vnc::VncError::NoPassword
         | vnc::VncError::WrongPassword => (
             VncErrorKind::Authentication,
             "VNC authentication failed".to_string(),
@@ -1331,11 +1346,11 @@ fn vnc_limits() -> VncLimits {
         .unwrap_or(usize::MAX),
         max_clipboard_bytes: MAX_VNC_CLIPBOARD_TEXT_BYTES,
         // The count field is a u16, so this is the protocol's own ceiling. It is not
-        // a resource bound: each rectangle's payload is limited by the byte and
-        // framebuffer limits above and by `limits::rectangle`, one rectangle is in
-        // flight at a time, and the output channel applies backpressure. A tighter
-        // count only rejects real servers, which split a busy update into thousands
-        // of small rectangles (NyaTerm issue #1045).
+        // a memory bound: each rectangle's payload is limited by the byte and
+        // framebuffer limits and by `limits::rectangle`, while the bounded decoder
+        // and IPC queues apply backpressure. Rectangle handling still costs CPU;
+        // state notifications are emitted only on transitions. A tighter count
+        // rejects real servers splitting busy updates into small rectangles (#1045).
         max_rectangles_per_update: u16::MAX,
         max_encoded_payload_bytes: 64 * 1024 * 1024,
         max_decoded_payload_bytes: usize::try_from(
@@ -1511,6 +1526,70 @@ mod tests {
             classify_vnc_error(vnc::VncError::IoError(std::io::Error::other("reset"))).kind,
             VncErrorKind::Transport
         );
+    }
+
+    #[test]
+    fn only_missing_credentials_request_a_password() {
+        let missing = classify_vnc_error(vnc::VncError::NoPassword);
+        assert_eq!(missing.kind, VncErrorKind::Authentication);
+        assert!(missing.password_required);
+        for error in [
+            vnc::VncError::WrongPassword,
+            vnc::VncError::UnsupportedSecurityType,
+            vnc::VncError::RequiredSecurityTypeUnavailable("RA2_256"),
+            vnc::VncError::Ra2ServerKeyRejected("rejected".into()),
+            vnc::VncError::Ra2ServerKeyVerifierRequired,
+            vnc::VncError::Ra2ServerHashMismatch,
+            vnc::VncError::Ra2Crypto("failed"),
+        ] {
+            let classified = classify_vnc_error(error);
+            assert_eq!(classified.kind, VncErrorKind::Authentication);
+            assert!(!classified.password_required);
+        }
+    }
+
+    #[test]
+    fn connected_is_emitted_once_per_generation_and_survives_desktop_resets() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut output = SessionOutput::new("session".into(), tx);
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        for _ in 0..2 {
+            output
+                .state(nyaterm_remote_desktop::VncSessionState::Negotiating, None)
+                .unwrap();
+            for _ in 0..3 {
+                // A resize must not re-announce a connection either.
+                handle_vnc_event(
+                    &mut output,
+                    VncEvent::SetResolution(vnc::Screen {
+                        width: 1,
+                        height: 1,
+                    }),
+                )
+                .unwrap();
+                handle_vnc_event(&mut output, VncEvent::RawImage(rect, vec![0; 4])).unwrap();
+            }
+            let messages = rx.try_iter().collect::<Vec<_>>();
+            assert_eq!(messages.len(), 8);
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| matches!(
+                        message,
+                        Outbound::Control(VncControlMessage::State {
+                            state: nyaterm_remote_desktop::VncSessionState::Connected,
+                            ..
+                        })
+                    ))
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]

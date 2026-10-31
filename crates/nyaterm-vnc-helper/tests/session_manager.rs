@@ -276,13 +276,13 @@ fn auto_security_without_password_connects_to_a_no_auth_server() {
 }
 
 /// A busy server splits one update into far more rectangles than the old 1024
-/// ceiling allowed. The count field is a u16, so 1176 rectangles is legal RFB and
+/// ceiling allowed. Even the maximum u16 rectangle count is legal RFB and
 /// must produce every frame instead of failing the session with a protocol error
 /// (NyaTerm issue #1045).
 #[test]
-fn busy_update_with_more_than_a_thousand_rectangles_keeps_the_session_alive() {
-    const RECTANGLES: u16 = 1176;
-    const FRAMEBUFFER: u16 = 128;
+fn busy_update_with_maximum_rectangle_count_keeps_the_session_alive() {
+    const RECTANGLES: u16 = u16::MAX;
+    const FRAMEBUFFER: u16 = 256;
 
     use_built_helper();
     let (port, server) = spawn_no_auth_server((FRAMEBUFFER, FRAMEBUFFER), |stream| {
@@ -299,9 +299,19 @@ fn busy_update_with_more_than_a_thousand_rectangles_keeps_the_session_alive() {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut frames = 0;
     let mut failure = None;
+    let mut connected = 0;
     while Instant::now() < deadline && frames < expected && failure.is_none() {
         let drain = manager.drain(&session_id);
         for event in drain.control {
+            if matches!(
+                &event,
+                VncRuntimeEvent::State {
+                    state: VncSessionState::Connected,
+                    ..
+                }
+            ) {
+                connected += 1;
+            }
             if let VncRuntimeEvent::Error {
                 error, fatal: true, ..
             } = event
@@ -310,7 +320,7 @@ fn busy_update_with_more_than_a_thousand_rectangles_keeps_the_session_alive() {
             }
         }
         frames += drain.frames.len();
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(1));
     }
     let state = manager.state(&session_id);
     manager.close(&session_id).unwrap();
@@ -321,6 +331,66 @@ fn busy_update_with_more_than_a_thousand_rectangles_keeps_the_session_alive() {
         "a busy update must not fail the session: {failure:?}"
     );
     assert_eq!(frames, expected, "every rectangle should reach the app");
+    assert_eq!(
+        connected, 1,
+        "rectangles must not duplicate state notifications"
+    );
     assert_eq!(state, Some(VncSessionState::Connected));
     server_result.unwrap();
+}
+
+/// Exercise the real negotiation and IPC path: the UI hint must describe the
+/// credentials sent to this attempt, not the session's original launch config.
+#[test]
+fn password_prompt_hint_distinguishes_missing_rejected_and_unsupported_auth() {
+    use std::io::{Read as _, Write as _};
+
+    use_built_helper();
+    for (security_type, password, password_required) in [
+        (2, None, true),
+        (129, None, true),
+        (16, None, false),
+        (2, Some("wrong"), false),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            stream.write_all(b"RFB 003.007\n").unwrap();
+            stream.read_exact(&mut [0; 12]).unwrap();
+            stream.write_all(&[1, security_type]).unwrap();
+            if password.is_some() {
+                let mut selected = [0];
+                stream.read_exact(&mut selected).unwrap();
+                assert_eq!(selected, [2]);
+                stream.write_all(&[0; 16]).unwrap();
+                stream.read_exact(&mut [0; 16]).unwrap();
+                stream.write_all(&1_u32.to_be_bytes()).unwrap();
+            }
+            // Keep the peer alive until the helper finishes classifying the error.
+            assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+        });
+        let manager = VncSessionManager::new();
+        let mut attempt = config(port);
+        attempt.password = password.map(|value| value.to_string().into());
+        let session_id = manager.create_session(attempt).unwrap();
+        let event = wait_for_event(&manager, &session_id, |event| {
+            matches!(event, VncRuntimeEvent::Error { fatal: true, .. })
+        });
+        manager.close(&session_id).unwrap();
+        server.join().unwrap();
+        let VncRuntimeEvent::Error { error, .. } = event else {
+            unreachable!()
+        };
+        assert_eq!(error.kind, VncErrorKind::Authentication);
+        assert_eq!(
+            error.password_required,
+            password_required,
+            "security type {security_type}, supplied credentials: {}",
+            password.is_some()
+        );
+    }
 }

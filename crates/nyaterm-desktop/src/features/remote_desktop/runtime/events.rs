@@ -417,11 +417,13 @@ impl NyaTermApp {
                 // A server that asks for credentials the session does not hold is not a
                 // dead end: ask for a password instead of parking a failed session. This
                 // is what keeps an `auto` connection working when the server actually
-                // demands VNC authentication, now that a passwordless retry no longer
-                // prompts up front (NyaTerm issue #1046).
+                // demands VNC authentication. The helper checks the effective credentials,
+                // including inherited passwords; generic authentication errors never
+                // prompt (NyaTerm issue #1046).
                 let prompt = fatal
                     && !retry
                     && error.kind == nyaterm_remote_desktop::VncErrorKind::Authentication
+                    && error.password_required
                     && self.vnc_auth_failure_accepts_password_prompt(session_id);
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                     session.keys = Default::default();
