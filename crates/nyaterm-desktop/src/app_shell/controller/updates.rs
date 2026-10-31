@@ -10,8 +10,12 @@ impl DesktopController {
     pub(super) fn start_update_runtime(&mut self, cx: &mut Context<Self>) {
         if let Some(path) = crate::features::update::install::take_update_cleanup_path() {
             let blocking_jobs = self.update_store.read(cx).blocking_jobs();
+            let operations = self.sync_operations();
             cx.spawn(async move |_, cx| {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
+                if !operations.accepting() {
+                    return;
+                }
                 let _ = blocking_jobs.submit_detached("update-cleanup", move |_| {
                     crate::features::update::install::cleanup_update_work_dir(path);
                 });
@@ -60,6 +64,9 @@ impl DesktopController {
     }
 
     pub(crate) fn start_update_check(&mut self, kind: UpdateCheckKind, cx: &mut Context<Self>) {
+        if self.process_quitting || !self.auto_sync.operations.accepting() {
+            return;
+        }
         let Some((tx, generation)) = self.update_store.update(cx, |store, cx| {
             let request = store.begin_check(kind);
             if request.is_some() {
