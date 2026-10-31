@@ -11720,7 +11720,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.6.0"
-source = "git+https://github.com/nyakang/vnc-rs?rev=ff1f60518247362dd763bfc84e60f8478d9cc18e#ff1f60518247362dd763bfc84e60f8478d9cc18e"
+source = "git+https://github.com/nyakang/vnc-rs?rev=336ed94c9cce7cba93fa8cba33b5a5d01ef2c227#336ed94c9cce7cba93fa8cba33b5a5d01ef2c227"
 dependencies = [
  "aes 0.8.4",
  "async_io_stream",
